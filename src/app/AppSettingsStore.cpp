@@ -33,7 +33,7 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     for (const ShortcutBinding &binding : settings.shortcuts()) {
         const QString value = shortcuts.value(keyFor(binding.action)).toString();
         if (!value.isEmpty()) {
-            settings.setShortcut(binding.action, QKeySequence(value));
+            settings.setShortcut(binding.action, QKeySequence::fromString(value, QKeySequence::PortableText));
         }
     }
     return settings;
