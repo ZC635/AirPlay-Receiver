@@ -283,6 +283,13 @@ void UxPlayReceiver::setVolume(double volume) {
 #endif
 }
 
+void UxPlayReceiver::setVideoSurface(WId id) {
+    m_videoSurfaceId = id;
+#if AIRPLAY_WITH_UXPLAY
+    Q_UNUSED(m_videoSurfaceId);
+#endif
+}
+
 ReceiverState UxPlayReceiver::state() const {
     return m_state;
 }

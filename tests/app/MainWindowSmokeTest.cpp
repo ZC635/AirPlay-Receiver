@@ -2,6 +2,7 @@
 #include "app/AppSettings.h"
 #include "app/MainWindow.h"
 #include "app/ShortcutAction.h"
+#include "app/VideoSurfaceWidget.h"
 #include "backend/FakeAirPlayReceiver.h"
 #include "backend/ReceiverState.h"
 #include "platform/FakeHotkeyService.h"
@@ -120,6 +121,19 @@ private slots:
         emit receiver.stateChanged(ReceiverState::Error);
 
         QCOMPARE(label->text(), QString("Ready for AirPlay"));
+    }
+
+    void passesVideoSurfaceToReceiver() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        QVERIFY(receiver.videoSurfaceId() != 0);
+    }
+
+    void videoSurfaceWidgetExists() {
+        MainWindow window;
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        QVERIFY(surface != nullptr);
+        QCOMPARE(surface->objectName(), QString("videoSurface"));
     }
 };
 

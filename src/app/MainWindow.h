@@ -11,6 +11,7 @@ class AirPlayReceiver;
 class ToolbarWidget;
 class HotkeyService;
 class QLabel;
+class VideoSurfaceWidget;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -33,6 +34,7 @@ private:
 
     ToolbarWidget *toolbar_;
     QLabel *statusLabel_;
+    VideoSurfaceWidget *videoSurface_;
     AppSettings settings_;
     QPointer<AirPlayReceiver> receiver_;
     QString currentError_;

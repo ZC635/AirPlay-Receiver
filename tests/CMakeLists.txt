@@ -33,3 +33,7 @@ add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)
 add_executable(UxPlayReceiverConfigTest backend/UxPlayReceiverConfigTest.cpp)
 target_link_libraries(UxPlayReceiverConfigTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME UxPlayReceiverConfigTest COMMAND UxPlayReceiverConfigTest)
+
+add_executable(VideoSurfaceWidgetTest app/VideoSurfaceWidgetTest.cpp)
+target_link_libraries(VideoSurfaceWidgetTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME VideoSurfaceWidgetTest COMMAND VideoSurfaceWidgetTest)

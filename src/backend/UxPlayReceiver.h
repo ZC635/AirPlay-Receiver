@@ -23,6 +23,7 @@ public:
     void start() override;
     void stop() override;
     void setVolume(double volume) override;
+    void setVideoSurface(WId id) override;
     ReceiverState state() const override;
 #if AIRPLAY_WITH_UXPLAY
     void setStateFromUxPlayCallback(ReceiverState state);
@@ -42,6 +43,7 @@ private:
     UxPlayReceiverConfig m_config;
     ReceiverState m_state = ReceiverState::Idle;
     QString m_error;
+    WId m_videoSurfaceId = 0;
     std::atomic<double> m_volume = 1.0;
 #if AIRPLAY_WITH_UXPLAY
     void *m_raop = nullptr;

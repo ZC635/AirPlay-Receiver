@@ -24,6 +24,8 @@ add_library(airplay_app_lib
     src/app/ShortcutBinding.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
+    src/app/VideoSurfaceWidget.cpp
+    src/app/VideoSurfaceWidget.h
     src/backend/AirPlayReceiver.h
     src/backend/FakeAirPlayReceiver.h
     src/backend/ReceiverState.h

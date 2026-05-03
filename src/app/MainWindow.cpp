@@ -2,6 +2,7 @@
 
 #include "app/SettingsDialog.h"
 #include "app/ToolbarWidget.h"
+#include "app/VideoSurfaceWidget.h"
 #include "backend/AirPlayReceiver.h"
 #include "platform/HotkeyService.h"
 
@@ -20,19 +21,18 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     : QMainWindow(parent),
       toolbar_(new ToolbarWidget(this)),
       statusLabel_(new QLabel("Ready for AirPlay", this)),
+      videoSurface_(new VideoSurfaceWidget(this)),
       settings_(std::move(settings)),
       receiver_(receiver) {
     setWindowTitle("AirPlay Receiver");
     resize(960, 540);
 
-    auto *placeholder = new QWidget(this);
-    placeholder->setStyleSheet("background-color: black;");
-
     statusLabel_->setObjectName("receiverStatusLabel");
     statusLabel_->setAlignment(Qt::AlignCenter);
     statusLabel_->setStyleSheet("color: white; background: transparent;");
 
-    auto *layout = new QVBoxLayout(placeholder);
+    auto *layout = new QVBoxLayout(videoSurface_);
+    layout->setContentsMargins(0, 0, 0, 0);
     layout->setAlignment(Qt::AlignTop);
     layout->addWidget(toolbar_);
     layout->setAlignment(toolbar_, Qt::AlignTop | Qt::AlignRight);
@@ -41,13 +41,14 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     layout->setAlignment(statusLabel_, Qt::AlignCenter);
     layout->addStretch();
 
-    setCentralWidget(placeholder);
+    setCentralWidget(videoSurface_);
 
     connect(toolbar_, &ToolbarWidget::volumeChanged, this, &MainWindow::setReceiverVolume);
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
     connect(toolbar_, &ToolbarWidget::settingsRequested, this, &MainWindow::showSettingsDialog);
 
     if (receiver_ != nullptr) {
+        receiver_->setVideoSurface(videoSurface_->winId());
         updateReceiverState(receiver_->state());
         connect(receiver_, &AirPlayReceiver::stateChanged, this, &MainWindow::updateReceiverState);
         connect(receiver_, &AirPlayReceiver::errorChanged, this, [this](const QString &error) {
