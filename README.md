@@ -28,6 +28,12 @@ The planned MVP receives native iPhone Screen Mirroring over AirPlay, displays t
 - Design: `docs/plans/2026-05-03-airplay-receiver-design.md`
 - Third-party dependencies: `third_party/README.md`
 
+## Optional UxPlay Dependency
+
+UxPlay is pinned as a third-party submodule, but default builds keep it disabled so normal development and tests do not require UxPlay's GStreamer or Bonjour dependencies.
+
+Configure with `-DAIRPLAY_WITH_UXPLAY=ON` to enable the vendored UxPlay build gate when those dependencies are installed.
+
 ## License
 
 Planned license: GPL-3.0-only, subject to the final integration model and third-party dependency notices.

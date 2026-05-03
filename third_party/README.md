@@ -9,4 +9,4 @@ UxPlay provides the AirPlay mirror/audio receiver implementation.
 - License: GPLv3 or later
 - Windows requirements: MSYS2/MinGW, GStreamer, Bonjour SDK/runtime
 
-The dependency must be pinned to a commit before release.
+The submodule is pinned to the commit above for reproducible builds.
