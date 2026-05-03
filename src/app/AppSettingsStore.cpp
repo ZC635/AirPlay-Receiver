@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
 
 #include <utility>
 
@@ -48,10 +49,13 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
     QJsonObject root;
     root.insert("shortcuts", shortcuts);
 
-    QFile file(path_);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QSaveFile file(path_);
+    if (!file.open(QIODevice::WriteOnly)) {
         return false;
     }
-    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    return true;
+    const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    if (file.write(data) != data.size()) {
+        return false;
+    }
+    return file.commit();
 }

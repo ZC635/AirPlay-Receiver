@@ -42,6 +42,15 @@ private slots:
 
         QCOMPARE(shortcuts.value("toggleToolbar").toString(), QKeySequence("Ctrl+Shift+H").toString(QKeySequence::PortableText));
     }
+
+    void saveReturnsFalseForDirectoryPath() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        AppSettingsStore store(dir.path());
+
+        QVERIFY(!store.save(AppSettings::defaults()));
+    }
 };
 
 QTEST_MAIN(AppSettingsStoreTest)
