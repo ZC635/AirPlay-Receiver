@@ -2,8 +2,11 @@
 #include "app/AppSettings.h"
 #include "app/MainWindow.h"
 #include "app/ShortcutAction.h"
+#include "backend/FakeAirPlayReceiver.h"
+#include "backend/ReceiverState.h"
 #include "platform/FakeHotkeyService.h"
 
+#include <QLabel>
 #include <QToolButton>
 
 class MainWindowSmokeTest : public QObject {
@@ -61,6 +64,32 @@ private slots:
 
         QVERIFY(window.isAlwaysOnTopEnabled());
         QVERIFY(button->isChecked());
+    }
+
+    void volumeSliderUpdatesReceiver() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        window.setVolume(40);
+
+        QCOMPARE(receiver.volume(), 0.40);
+    }
+
+    void receiverStateUpdatesStatusLabel() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QCOMPARE(label->text(), QString("Ready for AirPlay"));
+
+        emit receiver.stateChanged(ReceiverState::Connecting);
+        QCOMPARE(label->text(), QString("Connecting"));
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+        QCOMPARE(label->text(), QString("Connected"));
+
+        emit receiver.errorChanged("Pairing failed");
+        QCOMPARE(label->text(), QString("Pairing failed"));
     }
 };
 
