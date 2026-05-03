@@ -1,5 +1,8 @@
 #include <QtTest/QtTest>
+#include "app/AppSettings.h"
 #include "app/MainWindow.h"
+#include "app/ShortcutAction.h"
+#include "platform/FakeHotkeyService.h"
 
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
@@ -22,6 +25,14 @@ private slots:
         QVERIFY(!window.isAlwaysOnTopEnabled());
         window.setAlwaysOnTopEnabled(true);
         QVERIFY(window.isAlwaysOnTopEnabled());
+    }
+
+    void shortcutTogglesToolbar() {
+        auto *hotkeys = new FakeHotkeyService;
+        MainWindow window(AppSettings::defaults(), hotkeys);
+        QVERIFY(window.isToolbarVisible());
+        emit hotkeys->activated(ShortcutAction::ToggleToolbar);
+        QVERIFY(!window.isToolbarVisible());
     }
 };
 

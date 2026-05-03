@@ -22,6 +22,7 @@ add_library(airplay_app_lib
     src/app/ShortcutBinding.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
+    src/platform/FakeHotkeyService.h
     src/platform/HotkeyService.h
     src/platform/WindowsHotkeyService.cpp
     src/platform/WindowsHotkeyService.h
