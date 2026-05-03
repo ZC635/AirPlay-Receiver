@@ -17,3 +17,7 @@ add_test(NAME ToolbarWidgetTest COMMAND ToolbarWidgetTest)
 add_executable(SettingsDialogTest app/SettingsDialogTest.cpp)
 target_link_libraries(SettingsDialogTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsDialogTest COMMAND SettingsDialogTest)
+
+add_executable(HotkeyServiceTest platform/HotkeyServiceTest.cpp)
+target_link_libraries(HotkeyServiceTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME HotkeyServiceTest COMMAND HotkeyServiceTest)

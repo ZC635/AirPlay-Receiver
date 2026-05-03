@@ -22,9 +22,15 @@ add_library(airplay_app_lib
     src/app/ShortcutBinding.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
+    src/platform/HotkeyService.h
+    src/platform/WindowsHotkeyService.cpp
+    src/platform/WindowsHotkeyService.h
 )
 target_include_directories(airplay_app_lib PUBLIC src)
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
+if(WIN32)
+    target_link_libraries(airplay_app_lib PUBLIC user32)
+endif()
 
 add_executable(airplay_receiver src/app/main.cpp)
 target_link_libraries(airplay_receiver PRIVATE airplay_app_lib)
