@@ -9,6 +9,8 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 
+include(cmake/UxPlayDependency.cmake)
+
 add_library(airplay_app_lib
     src/app/AppSettings.cpp
     src/app/AppSettings.h

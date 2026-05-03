@@ -26,6 +26,7 @@ The planned MVP receives native iPhone Screen Mirroring over AirPlay, displays t
 ## Documentation
 
 - Design: `docs/plans/2026-05-03-airplay-receiver-design.md`
+- Third-party dependencies: `third_party/README.md`
 
 ## License
 
