@@ -18,6 +18,8 @@ add_library(airplay_app_lib
     src/app/MainWindow.h
     src/app/ShortcutAction.h
     src/app/ShortcutBinding.h
+    src/app/ToolbarWidget.cpp
+    src/app/ToolbarWidget.h
 )
 target_include_directories(airplay_app_lib PUBLIC src)
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
