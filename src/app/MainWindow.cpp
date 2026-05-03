@@ -53,6 +53,7 @@ bool MainWindow::isAlwaysOnTopEnabled() const {
 void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
     const bool wasVisible = isVisible();
     setWindowFlag(Qt::WindowStaysOnTopHint, enabled);
+    toolbar_->setAlwaysOnTopChecked(enabled);
     if (wasVisible) {
         show();
     }

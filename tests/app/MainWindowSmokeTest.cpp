@@ -4,6 +4,8 @@
 #include "app/ShortcutAction.h"
 #include "platform/FakeHotkeyService.h"
 
+#include <QToolButton>
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -28,11 +30,37 @@ private slots:
     }
 
     void shortcutTogglesToolbar() {
-        auto *hotkeys = new FakeHotkeyService;
-        MainWindow window(AppSettings::defaults(), hotkeys);
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys);
         QVERIFY(window.isToolbarVisible());
-        emit hotkeys->activated(ShortcutAction::ToggleToolbar);
+        emit hotkeys.activated(ShortcutAction::ToggleToolbar);
         QVERIFY(!window.isToolbarVisible());
+    }
+
+    void registersDefaultShortcuts() {
+        FakeHotkeyService hotkeys;
+        const AppSettings settings = AppSettings::defaults();
+        MainWindow window(settings, &hotkeys);
+
+        QCOMPARE(hotkeys.registrations.size(), settings.shortcuts().size());
+        const auto shortcuts = settings.shortcuts();
+        for (qsizetype i = 0; i < shortcuts.size(); ++i) {
+            QCOMPARE(hotkeys.registrations[i].action, shortcuts[i].action);
+            QCOMPARE(hotkeys.registrations[i].sequence, shortcuts[i].sequence);
+        }
+    }
+
+    void shortcutAlwaysOnTopSyncsToolbarButton() {
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys);
+        auto *button = window.findChild<QToolButton *>("alwaysOnTopButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(!button->isChecked());
+
+        emit hotkeys.activated(ShortcutAction::ToggleAlwaysOnTop);
+
+        QVERIFY(window.isAlwaysOnTopEnabled());
+        QVERIFY(button->isChecked());
     }
 };
 
