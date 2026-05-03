@@ -131,7 +131,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
         statusLabel_->setText("Connected");
         break;
     case ReceiverState::Error:
-        statusLabel_->setText(currentError_.isEmpty() ? QString("Error") : currentError_);
+        statusLabel_->setText(currentError_.isEmpty() ? QString("Ready for AirPlay") : currentError_);
         break;
     case ReceiverState::Idle:
     case ReceiverState::Starting:

@@ -97,6 +97,17 @@ private slots:
         emit receiver.stateChanged(ReceiverState::Error);
         QCOMPARE(label->text(), QString("Pairing failed"));
     }
+
+    void errorStateWithoutMessageShowsReadyStatus() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+
+        emit receiver.stateChanged(ReceiverState::Error);
+
+        QCOMPARE(label->text(), QString("Ready for AirPlay"));
+    }
 };
 
 QTEST_MAIN(MainWindowSmokeTest)
