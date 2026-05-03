@@ -13,3 +13,7 @@ add_test(NAME AppSettingsStoreTest COMMAND AppSettingsStoreTest)
 add_executable(ToolbarWidgetTest app/ToolbarWidgetTest.cpp)
 target_link_libraries(ToolbarWidgetTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME ToolbarWidgetTest COMMAND ToolbarWidgetTest)
+
+add_executable(SettingsDialogTest app/SettingsDialogTest.cpp)
+target_link_libraries(SettingsDialogTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME SettingsDialogTest COMMAND SettingsDialogTest)

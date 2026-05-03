@@ -1,5 +1,6 @@
 #include "app/MainWindow.h"
 
+#include "app/SettingsDialog.h"
 #include "app/ToolbarWidget.h"
 
 #include <QVBoxLayout>
@@ -7,7 +8,8 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
-      toolbar_(new ToolbarWidget(this)) {
+      toolbar_(new ToolbarWidget(this)),
+      settings_(AppSettings::defaults()) {
     setWindowTitle("AirPlay Receiver");
     resize(960, 540);
 
@@ -21,6 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
     setCentralWidget(placeholder);
 
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
+    connect(toolbar_, &ToolbarWidget::settingsRequested, this, &MainWindow::showSettingsDialog);
 }
 
 bool MainWindow::isToolbarVisible() const {
@@ -41,4 +44,9 @@ void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
     if (wasVisible) {
         show();
     }
+}
+
+void MainWindow::showSettingsDialog() {
+    SettingsDialog dialog(settings_, this);
+    dialog.exec();
 }

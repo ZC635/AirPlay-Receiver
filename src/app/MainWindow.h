@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/AppSettings.h"
+
 #include <QMainWindow>
 
 class ToolbarWidget;
@@ -15,5 +17,8 @@ public:
     void setAlwaysOnTopEnabled(bool enabled);
 
 private:
+    void showSettingsDialog();
+
     ToolbarWidget *toolbar_;
+    AppSettings settings_;
 };

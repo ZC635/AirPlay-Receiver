@@ -16,6 +16,8 @@ add_library(airplay_app_lib
     src/app/AppSettingsStore.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
+    src/app/SettingsDialog.cpp
+    src/app/SettingsDialog.h
     src/app/ShortcutAction.h
     src/app/ShortcutBinding.h
     src/app/ToolbarWidget.cpp
