@@ -1,18 +1,264 @@
 #include "backend/UxPlayReceiver.h"
 
+#include <QByteArray>
+#include <QMetaObject>
+#include <QPointer>
+
+#include <cmath>
+#include <cstring>
 #include <utility>
 
 #if AIRPLAY_WITH_UXPLAY
-// UxPlay integration is added in a later task.
+#include "lib/dnssd.h"
+#include "lib/logger.h"
+#include "lib/raop.h"
+#include <glib.h>
+#include "renderers/audio_renderer.h"
+#include "renderers/video_renderer.h"
+
+namespace {
+constexpr unsigned short kDynamicPort = 0;
+constexpr bool kAudioSync = false;
+constexpr bool kVideoSync = true;
+constexpr unsigned int kPlaybinVersion = 3;
+
+QByteArray defaultDeviceId() {
+    return QByteArrayLiteral("02:00:00:00:00:01");
+}
+
+QByteArray defaultHardwareAddress() {
+    return QByteArray::fromHex("020000000001");
+}
+
+double volumeFromAirPlayDb(float volume) {
+    if (volume == -144.0F || volume <= -30.0F) {
+        return 0.0;
+    }
+    if (volume >= 0.0F) {
+        return 1.0;
+    }
+    return std::pow(10.0, 0.05 * volume);
+}
+
+void logCallback(void *, int, const char *) {}
+
+void audioProcess(void *, raop_ntp_t *, audio_decode_struct *data) {
+    audio_renderer_render_buffer(data->data, &data->data_len, &data->seqnum, &data->ntp_time_remote);
+}
+
+void videoProcess(void *, raop_ntp_t *, video_decode_struct *data) {
+    video_renderer_render_buffer(data->data, &data->data_len, &data->nal_count, &data->ntp_time_remote);
+}
+
+void audioFlush(void *) {
+    audio_renderer_flush();
+}
+
+void videoFlush(void *) {
+    video_renderer_flush();
+}
+
+void videoPause(void *) {
+    video_renderer_pause();
+}
+
+void videoResume(void *) {
+    video_renderer_resume();
+}
+
+double audioSetClientVolume(void *cls) {
+    const auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    Q_UNUSED(receiver);
+    return 0.0;
+}
+
+void audioSetVolume(void *cls, float volume) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    receiver->setVolumeFromUxPlayCallback(volumeFromAirPlayDb(volume));
+}
+
+void audioGetFormat(void *cls, unsigned char *ct, unsigned short *spf, bool *usingScreen, bool *isMedia, uint64_t *audioFormat) {
+    Q_UNUSED(spf);
+    Q_UNUSED(usingScreen);
+    Q_UNUSED(isMedia);
+    Q_UNUSED(audioFormat);
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    receiver->startAudioRendererFromUxPlayCallback(ct);
+}
+
+void videoReportSize(void *, float *widthSource, float *heightSource, float *width, float *height) {
+    *widthSource = 1920.0F;
+    *heightSource = 1080.0F;
+    *width = 1920.0F;
+    *height = 1080.0F;
+}
+
+void connInit(void *cls) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    const auto generation = receiver->callbackGenerationForUxPlayCallback();
+    QPointer<UxPlayReceiver> guardedReceiver(receiver);
+    QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
+        if (guardedReceiver) {
+            guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Connecting, generation);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void connDestroy(void *cls) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    const auto generation = receiver->callbackGenerationForUxPlayCallback();
+    QPointer<UxPlayReceiver> guardedReceiver(receiver);
+    QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
+        if (guardedReceiver) {
+            guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Discoverable, generation);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void connReset(void *, int) {}
+void connFeedback(void *) {}
+void videoReset(void *, reset_type_t) {}
+void audioSetMetadata(void *, const void *, int) {}
+void audioSetCoverart(void *, const void *, int) {}
+void audioStopCoverartRendering(void *) {}
+void audioSetProgress(void *, uint32_t *, uint32_t *, uint32_t *) {}
+
+void reportClientRequest(void *, char *, char *, char *, bool *admit) {
+    *admit = true;
+}
+
+int videoSetCodec(void *, video_codec_t) {
+    return 0;
+}
+} // namespace
 #endif
 
 UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
     : AirPlayReceiver(parent), m_config(std::move(config)) {}
 
+UxPlayReceiver::~UxPlayReceiver() {
+#if AIRPLAY_WITH_UXPLAY
+    cleanupUxPlay();
+#endif
+}
+
 void UxPlayReceiver::start() {
 #if AIRPLAY_WITH_UXPLAY
-    setError("UxPlay receiver lifecycle is not implemented in this build");
-    setState(ReceiverState::Error);
+    if (m_state != ReceiverState::Idle) {
+        return;
+    }
+
+    setState(ReceiverState::Starting);
+    m_callbackGeneration.fetch_add(1);
+    m_acceptingCallbacks.store(true);
+
+    if (!gstreamer_init()) {
+        m_acceptingCallbacks.store(false);
+        setError("Failed to initialize GStreamer");
+        setState(ReceiverState::Error);
+        return;
+    }
+
+    m_logger = logger_init();
+    if (!m_logger) {
+        m_acceptingCallbacks.store(false);
+        setError("Failed to initialize UxPlay logger");
+        setState(ReceiverState::Error);
+        return;
+    }
+    auto *logger = static_cast<logger_t *>(m_logger);
+    logger_set_callback(logger, logCallback, this);
+    logger_set_level(logger, LOGGER_INFO);
+
+    const QByteArray serverName = m_config.serverName.toUtf8();
+    const QByteArray videoSink = m_config.videoSink.toUtf8();
+    const QByteArray audioSink = m_config.audioSink.toUtf8();
+    videoflip_t videoFlip[2] = {NONE, NONE};
+    video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
+                        "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
+                        kPlaybinVersion, nullptr);
+    video_renderer_start();
+    audio_renderer_init(logger, audioSink.constData(), &kAudioSync, &kVideoSync, "");
+    m_renderersStarted = true;
+
+    raop_callbacks_t callbacks;
+    std::memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.cls = this;
+    callbacks.audio_process = audioProcess;
+    callbacks.video_process = videoProcess;
+    callbacks.video_pause = videoPause;
+    callbacks.video_resume = videoResume;
+    callbacks.conn_feedback = connFeedback;
+    callbacks.conn_reset = connReset;
+    callbacks.video_reset = videoReset;
+    callbacks.conn_init = connInit;
+    callbacks.conn_destroy = connDestroy;
+    callbacks.audio_flush = audioFlush;
+    callbacks.video_flush = videoFlush;
+    callbacks.audio_set_client_volume = audioSetClientVolume;
+    callbacks.audio_set_volume = audioSetVolume;
+    callbacks.audio_set_metadata = audioSetMetadata;
+    callbacks.audio_set_coverart = audioSetCoverart;
+    callbacks.audio_stop_coverart_rendering = audioStopCoverartRendering;
+    callbacks.audio_set_progress = audioSetProgress;
+    callbacks.audio_get_format = audioGetFormat;
+    callbacks.video_report_size = videoReportSize;
+    callbacks.report_client_request = reportClientRequest;
+    callbacks.video_set_codec = videoSetCodec;
+
+    auto *raop = raop_init(&callbacks);
+    if (!raop) {
+        setError("Failed to initialize RAOP");
+        cleanupUxPlay();
+        setState(ReceiverState::Error);
+        return;
+    }
+    m_raop = raop;
+
+    const QByteArray deviceId = defaultDeviceId();
+    if (raop_init2(raop, 0, deviceId.constData(), "") != 0) {
+        setError("Failed to initialize RAOP pairing");
+        cleanupUxPlay();
+        setState(ReceiverState::Error);
+        return;
+    }
+    m_raopHttpdInitialized = true;
+
+    int dnssdError = 0;
+    const QByteArray hwAddress = defaultHardwareAddress();
+    auto *dnssd = dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(), &dnssdError, 0);
+    if (dnssdError || !dnssd) {
+        setError(QString("Failed to initialize DNS-SD: %1").arg(dnssdError));
+        cleanupUxPlay();
+        setState(ReceiverState::Error);
+        return;
+    }
+    m_dnssd = dnssd;
+    raop_set_dnssd(raop, dnssd);
+
+    unsigned short port = static_cast<unsigned short>(m_config.basePort > 0 ? m_config.basePort : kDynamicPort);
+    raop_set_port(raop, port);
+    if (raop_start_httpd(raop, &port) < 0) {
+        setError("Failed to start RAOP HTTP server");
+        cleanupUxPlay();
+        setState(ReceiverState::Error);
+        return;
+    }
+    m_raopHttpdStarted = true;
+    raop_set_port(raop, port);
+
+    int registerError = dnssd_register_raop(dnssd, port);
+    if (registerError == 0) {
+        registerError = dnssd_register_airplay(dnssd, port);
+    }
+    if (registerError != 0) {
+        setError(QString("Failed to register DNS-SD services: %1").arg(registerError));
+        cleanupUxPlay();
+        setState(ReceiverState::Error);
+        return;
+    }
+
+    setState(ReceiverState::Discoverable);
 #else
     setError("UxPlay support is not enabled in this build");
     setState(ReceiverState::Error);
@@ -20,18 +266,62 @@ void UxPlayReceiver::start() {
 }
 
 void UxPlayReceiver::stop() {
+#if AIRPLAY_WITH_UXPLAY
+    cleanupUxPlay();
+#endif
     if (m_state != ReceiverState::Idle) {
         setState(ReceiverState::Idle);
     }
 }
 
 void UxPlayReceiver::setVolume(double volume) {
-    m_volume = volume;
+    m_volume.store(volume);
+#if AIRPLAY_WITH_UXPLAY
+    if (m_audioRendererStarted.load()) {
+        audio_renderer_set_volume(m_volume.load());
+    }
+#endif
 }
 
 ReceiverState UxPlayReceiver::state() const {
     return m_state;
 }
+
+#if AIRPLAY_WITH_UXPLAY
+void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state) {
+    setStateFromUxPlayCallback(state, m_callbackGeneration.load());
+}
+
+void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state, quint64 generation) {
+    if (!m_acceptingCallbacks.load() || generation != m_callbackGeneration.load()) {
+        return;
+    }
+    setState(state);
+}
+
+quint64 UxPlayReceiver::callbackGenerationForUxPlayCallback() const {
+    return m_callbackGeneration.load();
+}
+
+void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compressionType) {
+    if (!m_acceptingCallbacks.load()) {
+        return;
+    }
+    audio_renderer_start(compressionType);
+    m_audioRendererStarted.store(true);
+    audio_renderer_set_volume(m_volume.load());
+}
+
+void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
+    if (!m_acceptingCallbacks.load()) {
+        return;
+    }
+    m_volume.store(volume);
+    if (m_audioRendererStarted.load()) {
+        audio_renderer_set_volume(m_volume.load());
+    }
+}
+#endif
 
 void UxPlayReceiver::setState(ReceiverState state) {
     if (m_state == state) {
@@ -50,3 +340,37 @@ void UxPlayReceiver::setError(QString error) {
     m_error = std::move(error);
     emit errorChanged(m_error);
 }
+
+#if AIRPLAY_WITH_UXPLAY
+void UxPlayReceiver::cleanupUxPlay() {
+    m_acceptingCallbacks.store(false);
+    m_callbackGeneration.fetch_add(1);
+
+    if (m_raop && m_raopHttpdStarted) {
+        raop_stop_httpd(static_cast<raop_t *>(m_raop));
+        m_raopHttpdStarted = false;
+    }
+    if (m_dnssd) {
+        dnssd_unregister_raop(static_cast<dnssd_t *>(m_dnssd));
+        dnssd_unregister_airplay(static_cast<dnssd_t *>(m_dnssd));
+        dnssd_destroy(static_cast<dnssd_t *>(m_dnssd));
+        m_dnssd = nullptr;
+    }
+    if (m_raop) {
+        raop_destroy(static_cast<raop_t *>(m_raop));
+        m_raop = nullptr;
+        m_raopHttpdInitialized = false;
+    }
+    if (m_renderersStarted) {
+        video_renderer_stop();
+        video_renderer_destroy();
+        audio_renderer_destroy();
+        m_renderersStarted = false;
+        m_audioRendererStarted.store(false);
+    }
+    if (m_logger) {
+        logger_destroy(static_cast<logger_t *>(m_logger));
+        m_logger = nullptr;
+    }
+}
+#endif

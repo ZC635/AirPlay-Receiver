@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include <QString>
 
 #include "backend/AirPlayReceiver.h"
@@ -16,18 +18,40 @@ class UxPlayReceiver : public AirPlayReceiver {
 
 public:
     explicit UxPlayReceiver(UxPlayReceiverConfig config = {}, QObject *parent = nullptr);
+    ~UxPlayReceiver() override;
 
     void start() override;
     void stop() override;
     void setVolume(double volume) override;
     ReceiverState state() const override;
+#if AIRPLAY_WITH_UXPLAY
+    void setStateFromUxPlayCallback(ReceiverState state);
+    void setStateFromUxPlayCallback(ReceiverState state, quint64 generation);
+    quint64 callbackGenerationForUxPlayCallback() const;
+    void startAudioRendererFromUxPlayCallback(unsigned char *compressionType);
+    void setVolumeFromUxPlayCallback(double volume);
+#endif
 
 private:
     void setState(ReceiverState state);
     void setError(QString error);
+#if AIRPLAY_WITH_UXPLAY
+    void cleanupUxPlay();
+#endif
 
     UxPlayReceiverConfig m_config;
     ReceiverState m_state = ReceiverState::Idle;
     QString m_error;
-    double m_volume = 1.0;
+    std::atomic<double> m_volume = 1.0;
+#if AIRPLAY_WITH_UXPLAY
+    void *m_raop = nullptr;
+    void *m_dnssd = nullptr;
+    void *m_logger = nullptr;
+    bool m_raopHttpdInitialized = false;
+    bool m_raopHttpdStarted = false;
+    bool m_renderersStarted = false;
+    std::atomic_bool m_audioRendererStarted = false;
+    std::atomic_bool m_acceptingCallbacks = false;
+    std::atomic<quint64> m_callbackGeneration = 0;
+#endif
 };
