@@ -22,6 +22,12 @@ unsigned int toVirtualKey(int key) {
     if (key >= Qt::Key_F1 && key <= Qt::Key_F24) {
         return static_cast<unsigned int>(0x70 + key - Qt::Key_F1);
     }
+    if (key == Qt::Key_Up) {
+        return 0x26;
+    }
+    if (key == Qt::Key_Down) {
+        return 0x28;
+    }
     return 0;
 }
 }
