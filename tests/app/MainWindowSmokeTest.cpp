@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QSlider>
 #include <QToolButton>
+#include <memory>
 
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
@@ -76,6 +77,18 @@ private slots:
         slider->setValue(40);
 
         QCOMPARE(receiver.volume(), 0.40);
+    }
+
+    void volumeChangeAfterReceiverDeletedDoesNotCrash() {
+        auto receiver = std::make_unique<FakeAirPlayReceiver>();
+        MainWindow window(AppSettings::defaults(), nullptr, receiver.get());
+        auto *slider = window.findChild<QSlider *>("volumeSlider");
+        QVERIFY(slider != nullptr);
+
+        receiver.reset();
+        slider->setValue(40);
+
+        QVERIFY(true);
     }
 
     void receiverStateUpdatesStatusLabel() {

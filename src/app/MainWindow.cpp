@@ -52,8 +52,10 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
         connect(receiver_, &AirPlayReceiver::stateChanged, this, &MainWindow::updateReceiverState);
         connect(receiver_, &AirPlayReceiver::errorChanged, this, [this](const QString &error) {
             currentError_ = error;
-            if (currentError_.isEmpty()) {
+            if (currentError_.isEmpty() && receiver_ != nullptr) {
                 updateReceiverState(receiver_->state());
+            } else if (currentError_.isEmpty()) {
+                statusLabel_->setText("Ready for AirPlay");
             } else {
                 statusLabel_->setText(currentError_);
             }
