@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.24)
+project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+
+add_library(airplay_app_lib
+    src/app/MainWindow.cpp
+    src/app/MainWindow.h
+)
+target_include_directories(airplay_app_lib PUBLIC src)
+target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
+
+add_executable(airplay_receiver src/app/main.cpp)
+target_link_libraries(airplay_receiver PRIVATE airplay_app_lib)
+
+enable_testing()
+add_subdirectory(tests)
