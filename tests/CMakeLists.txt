@@ -22,6 +22,10 @@ add_executable(HotkeyServiceTest platform/HotkeyServiceTest.cpp)
 target_link_libraries(HotkeyServiceTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME HotkeyServiceTest COMMAND HotkeyServiceTest)
 
+add_executable(DependencyDiagnosticsTest platform/DependencyDiagnosticsTest.cpp)
+target_link_libraries(DependencyDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME DependencyDiagnosticsTest COMMAND DependencyDiagnosticsTest)
+
 add_executable(AirPlayReceiverTest backend/AirPlayReceiverTest.cpp)
 target_link_libraries(AirPlayReceiverTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)

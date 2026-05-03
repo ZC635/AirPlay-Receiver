@@ -25,6 +25,8 @@ add_library(airplay_app_lib
     src/backend/AirPlayReceiver.h
     src/backend/FakeAirPlayReceiver.h
     src/backend/ReceiverState.h
+    src/platform/DependencyDiagnostics.cpp
+    src/platform/DependencyDiagnostics.h
     src/platform/FakeHotkeyService.h
     src/platform/HotkeyService.h
     src/platform/WindowsHotkeyService.cpp
