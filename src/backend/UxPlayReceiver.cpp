@@ -11,7 +11,8 @@ UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
 
 void UxPlayReceiver::start() {
 #if AIRPLAY_WITH_UXPLAY
-    setState(ReceiverState::Discoverable);
+    setError("UxPlay receiver lifecycle is not implemented in this build");
+    setState(ReceiverState::Error);
 #else
     setError("UxPlay support is not enabled in this build");
     setState(ReceiverState::Error);
