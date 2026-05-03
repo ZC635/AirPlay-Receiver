@@ -1,0 +1,40 @@
+# Build outputs
+build/
+out/
+dist/
+release/
+debug/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Qt
+*.user
+*.user.*
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# MSYS2/MinGW artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+*.pdb
+
+# Logs and local config
+*.log
+*.tmp
+.env
+local.settings.json
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
