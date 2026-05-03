@@ -4,6 +4,7 @@ out/
 dist/
 release/
 debug/
+.worktrees/
 
 # CMake
 CMakeFiles/
