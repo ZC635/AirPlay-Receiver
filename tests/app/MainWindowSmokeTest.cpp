@@ -7,6 +7,7 @@
 #include "platform/FakeHotkeyService.h"
 
 #include <QLabel>
+#include <QSlider>
 #include <QToolButton>
 
 class MainWindowSmokeTest : public QObject {
@@ -69,8 +70,10 @@ private slots:
     void volumeSliderUpdatesReceiver() {
         FakeAirPlayReceiver receiver;
         MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *slider = window.findChild<QSlider *>("volumeSlider");
+        QVERIFY(slider != nullptr);
 
-        window.setVolume(40);
+        slider->setValue(40);
 
         QCOMPARE(receiver.volume(), 0.40);
     }
@@ -89,6 +92,9 @@ private slots:
         QCOMPARE(label->text(), QString("Connected"));
 
         emit receiver.errorChanged("Pairing failed");
+        QCOMPARE(label->text(), QString("Pairing failed"));
+
+        emit receiver.stateChanged(ReceiverState::Error);
         QCOMPARE(label->text(), QString("Pairing failed"));
     }
 };

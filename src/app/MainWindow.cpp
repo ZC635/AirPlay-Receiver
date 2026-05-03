@@ -51,10 +51,11 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
         updateReceiverState(receiver_->state());
         connect(receiver_, &AirPlayReceiver::stateChanged, this, &MainWindow::updateReceiverState);
         connect(receiver_, &AirPlayReceiver::errorChanged, this, [this](const QString &error) {
-            if (error.isEmpty()) {
+            currentError_ = error;
+            if (currentError_.isEmpty()) {
                 updateReceiverState(receiver_->state());
             } else {
-                statusLabel_->setText(error);
+                statusLabel_->setText(currentError_);
             }
         });
     }
@@ -130,7 +131,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
         statusLabel_->setText("Connected");
         break;
     case ReceiverState::Error:
-        statusLabel_->setText("Error");
+        statusLabel_->setText(currentError_.isEmpty() ? QString("Error") : currentError_);
         break;
     case ReceiverState::Idle:
     case ReceiverState::Starting:

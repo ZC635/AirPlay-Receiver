@@ -3,6 +3,7 @@
 #include "app/AppSettings.h"
 
 #include <QMainWindow>
+#include <QString>
 
 enum class ReceiverState;
 class AirPlayReceiver;
@@ -33,4 +34,5 @@ private:
     QLabel *statusLabel_;
     AppSettings settings_;
     AirPlayReceiver *receiver_;
+    QString currentError_;
 };
