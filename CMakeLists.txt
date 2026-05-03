@@ -27,6 +27,8 @@ add_library(airplay_app_lib
     src/backend/AirPlayReceiver.h
     src/backend/FakeAirPlayReceiver.h
     src/backend/ReceiverState.h
+    src/backend/UxPlayReceiver.cpp
+    src/backend/UxPlayReceiver.h
     src/platform/DependencyDiagnostics.cpp
     src/platform/DependencyDiagnostics.h
     src/platform/FakeHotkeyService.h
@@ -35,6 +37,7 @@ add_library(airplay_app_lib
     src/platform/WindowsHotkeyService.h
 )
 target_include_directories(airplay_app_lib PUBLIC src)
+target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>)
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
 if(WIN32)
     target_link_libraries(airplay_app_lib PUBLIC user32)
