@@ -10,8 +10,12 @@ set(CMAKE_AUTORCC ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 
 add_library(airplay_app_lib
+    src/app/AppSettings.cpp
+    src/app/AppSettings.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
+    src/app/ShortcutAction.h
+    src/app/ShortcutBinding.h
 )
 target_include_directories(airplay_app_lib PUBLIC src)
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
