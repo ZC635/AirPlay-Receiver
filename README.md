@@ -9,8 +9,7 @@ This project was developed with assistance from OpenCode, Codex, and DeepSeek. I
 ### Prerequisites
 
 - Windows 10 or 11
-- MSYS2 UCRT64 toolchain with GCC, CMake, Ninja, and Qt6
-- GStreamer runtime with base, good, bad, and libav plugins
+- MSYS2 installed; the build script detects the UCRT64 prefix and can install missing MSYS2 packages after confirmation
 - Bonjour SDK 3.0 and Bonjour runtime service
 
 See `docs/uxplay-windows-build.md` for exact package versions and setup notes.
@@ -28,15 +27,55 @@ If you cloned without submodules, initialize them manually:
 git submodule update --init --recursive
 ```
 
+### Install Dependencies
+
+Install MSYS2 first. The default location `C:\msys64` works out of the box; if you install it elsewhere, pass `-MSys2Root` or set `AIRPLAY_MSYS2_ROOT` to the UCRT64 prefix.
+
+```powershell
+winget install MSYS2.MSYS2
+```
+
+Install Bonjour runtime support so iPhones can discover the receiver. Use Bonjour Print Services for Windows from Apple, or install iTunes if that is your preferred Apple runtime package:
+
+```powershell
+# Install Bonjour Print Services for Windows or iTunes, then verify the service.
+Get-Service "Bonjour Service"
+Start-Service "Bonjour Service"   # if installed but stopped
+```
+
+Install Bonjour SDK 3.0 so UxPlay can link against DNS-SD during the build. Download `Bonjour SDK for Windows 3.0` from Apple Developer Downloads at `https://developer.apple.com/download/all/?q=Bonjour%20SDK%20for%20Windows`. Apple Developer sign-in may be required. The default SDK install should provide these files:
+
+```text
+C:\Program Files\Bonjour SDK\Include\dns_sd.h
+C:\Program Files\Bonjour SDK\Lib\x64\dnssd.lib
+```
+
+If the SDK is installed elsewhere, set `BONJOUR_SDK_HOME` before building:
+
+```powershell
+$env:BONJOUR_SDK_HOME = "D:\Tools\Bonjour SDK"
+```
+
 ### Build And Test
 
-Quick build with UxPlay enabled:
+Quick build with UxPlay enabled and dependency bootstrap:
 
 ```powershell
 .\scripts\build.ps1           # Configure + build
 .\scripts\build.ps1 -Test     # Build + run tests
 .\scripts\build.ps1 -Clean    # Wipe build dir first
+.\scripts\build.ps1 -Deploy   # Build + bundle local runtime files
 ```
+
+Bootstrap options:
+
+```powershell
+.\scripts\build.ps1 -SkipInstall                       # Detect only; do not run pacman
+.\scripts\build.ps1 -AssumeYes                         # Install missing MSYS2 packages without prompting
+.\scripts\build.ps1 -MSys2Root C:\msys64\ucrt64        # Use a specific MSYS2 prefix
+```
+
+When MSYS2 packages are missing, the script prints the exact `pacman -S --needed ...` command and asks before installing anything.
 
 Manual UxPlay-enabled build:
 
@@ -62,7 +101,10 @@ Launch through the helper script:
 
 ```powershell
 .\scripts\run.ps1
+.\scripts\run.ps1 -Deploy   # Refresh bundled runtime before launching
 ```
+
+When `build-uxplay` contains deployed runtime files, `run.ps1` launches in standalone mode. Otherwise it falls back to the discovered MSYS2 prefix for local development.
 
 Or launch the built receiver directly:
 
@@ -94,6 +136,8 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 - Implementation plan: `docs/plans/2026-05-03-airplay-receiver-mvp.md`
 - Repository publication design: `docs/plans/2026-05-04-repository-publication-design.md`
 - Repository publication plan: `docs/plans/2026-05-04-repository-publication.md`
+- Build bootstrap design: `docs/plans/2026-05-04-build-bootstrap-design.md`
+- Build bootstrap plan: `docs/plans/2026-05-04-build-bootstrap.md`
 - Windows build notes: `docs/uxplay-windows-build.md`
 - Manual acceptance: `docs/manual-acceptance.md`
 - Third-party dependencies: `third_party/README.md`
