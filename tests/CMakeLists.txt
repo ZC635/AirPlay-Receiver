@@ -32,6 +32,9 @@ add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)
 
 add_executable(UxPlayReceiverConfigTest backend/UxPlayReceiverConfigTest.cpp)
 target_link_libraries(UxPlayReceiverConfigTest PRIVATE airplay_app_lib Qt6::Test)
+if(AIRPLAY_WITH_UXPLAY)
+    target_include_directories(UxPlayReceiverConfigTest PRIVATE "${CMAKE_SOURCE_DIR}/third_party/uxplay")
+endif()
 add_test(NAME UxPlayReceiverConfigTest COMMAND UxPlayReceiverConfigTest)
 
 add_executable(VideoRendererLifecycleTest backend/VideoRendererLifecycleTest.cpp)

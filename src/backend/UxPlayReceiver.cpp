@@ -2,11 +2,13 @@
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QMetaObject>
 #include <QPointer>
 #include <QTimer>
 
+#include <cstdarg>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -25,6 +27,32 @@ constexpr unsigned short kDynamicPort = 0;
 constexpr bool kAudioSync = false;
 constexpr bool kVideoSync = false;
 constexpr unsigned int kPlaybinVersion = 3;
+
+bool debugLogEnabled() {
+    return !qgetenv("AIRPLAY_DEBUG_LOG").isEmpty();
+}
+
+void debugLog(const char *format, ...) {
+    if (!debugLogEnabled()) {
+        return;
+    }
+
+    const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/airplay_receiver_debug.log");
+    FILE *file = std::fopen(path.toLocal8Bit().constData(), "ab");
+    if (!file) {
+        return;
+    }
+
+    char message[2048];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+
+    const QByteArray timestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toUtf8();
+    std::fprintf(file, "%sZ %s\n", timestamp.constData(), message);
+    std::fclose(file);
+}
 
 QByteArray defaultDeviceId() {
     return QByteArrayLiteral("02:00:00:00:00:01");
@@ -45,6 +73,7 @@ double volumeFromAirPlayDb(float volume) {
 }
 
 void logCallback(void *, int level, const char *msg) {
+    debugLog("uxplay[%d] %s", level, msg ? msg : "");
 }
 
 void audioProcess(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
@@ -52,6 +81,8 @@ void audioProcess(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
 }
 
 void videoProcess(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
+    Q_UNUSED(cls);
+    Q_UNUSED(ntp);
     video_renderer_render_buffer(data->data, &data->data_len, &data->nal_count, &data->ntp_time_remote);
 }
 
@@ -309,7 +340,7 @@ void UxPlayReceiver::start() {
     }
     auto *logger = static_cast<logger_t *>(m_logger);
     logger_set_callback(logger, logCallback, this);
-    logger_set_level(logger, LOGGER_INFO);
+    logger_set_level(logger, debugLogEnabled() ? LOGGER_DEBUG : LOGGER_INFO);
 
     const QByteArray serverName = m_config.serverName.toUtf8();
     const QByteArray videoSink = m_config.videoSink.toUtf8();
@@ -477,28 +508,30 @@ void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
 }
 
 void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
+    const auto restartVideoRenderer = [this] {
+        video_renderer_stop();
+        video_renderer_destroy();
+
+        auto *logger = static_cast<logger_t *>(m_logger);
+        const QByteArray serverName = m_config.serverName.toUtf8();
+        const QByteArray videoSink = m_config.videoSink.toUtf8();
+        videoflip_t videoFlip[2] = {NONE, NONE};
+        video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
+                            "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
+                            kPlaybinVersion, nullptr);
+        video_renderer_start();
+        video_renderer_choose_codec(false, false);
+    };
+
     switch (static_cast<reset_type_t>(resetType)) {
+    case RESET_TYPE_NOHOLD:
     case RESET_TYPE_RTP_SHUTDOWN:
     case RESET_TYPE_HLS_SHUTDOWN:
     case RESET_TYPE_HLS_EOS:
-        video_renderer_stop();
-        break;
-    case RESET_TYPE_NOHOLD:
-        video_renderer_stop();
-        video_renderer_destroy();
-        {
-            auto *logger = static_cast<logger_t *>(m_logger);
-            const QByteArray serverName = m_config.serverName.toUtf8();
-            const QByteArray videoSink = m_config.videoSink.toUtf8();
-            videoflip_t videoFlip[2] = {NONE, NONE};
-            video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
-                                "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
-                                kPlaybinVersion, nullptr);
-            video_renderer_start();
-        }
+    case RESET_TYPE_RTP_TO_HLS_TEARDOWN:
+        restartVideoRenderer();
         break;
     case RESET_TYPE_ON_VIDEO_PLAY:
-    case RESET_TYPE_RTP_TO_HLS_TEARDOWN:
         break;
     }
 }

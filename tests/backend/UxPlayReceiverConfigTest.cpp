@@ -1,5 +1,12 @@
 #include <QtTest/QtTest>
+#include <QFile>
 #include "backend/UxPlayReceiver.h"
+
+#if AIRPLAY_WITH_UXPLAY
+#include "lib/raop.h"
+
+extern "C" int video_renderer_choose_codec(bool video_is_jpeg, bool video_is_h265);
+#endif
 
 class UxPlayReceiverConfigTest : public QObject {
     Q_OBJECT
@@ -65,6 +72,35 @@ private slots:
         receiver.setStateFromUxPlayCallback(ReceiverState::Discoverable);
 
         QCOMPARE(receiver.state(), ReceiverState::Idle);
+#endif
+    }
+
+    void rtpShutdownRecreatesVideoRenderer() {
+#if AIRPLAY_WITH_UXPLAY
+        qputenv("AIRPLAY_DEBUG_LOG", "1");
+        const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/airplay_receiver_debug.log");
+        QFile::remove(logPath);
+
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver RTP Reset Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        QCOMPARE(video_renderer_choose_codec(false, false), 0);
+
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+        receiver.stop();
+
+        QFile logFile(logPath);
+        QVERIFY(logFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString log = QString::fromUtf8(logFile.readAll());
+        qunsetenv("AIRPLAY_DEBUG_LOG");
+        QCOMPARE(log.count(QStringLiteral("GStreamer video pipeline")), 2);
+        QCOMPARE(log.count(QStringLiteral("video_pipeline state change")), 2);
 #endif
     }
 };
