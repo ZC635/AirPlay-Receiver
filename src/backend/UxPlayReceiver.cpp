@@ -404,6 +404,14 @@ void UxPlayReceiver::start() {
 
     unsigned short port = static_cast<unsigned short>(m_config.basePort > 0 ? m_config.basePort : kDynamicPort);
     raop_set_port(raop, port);
+    m_raopPort = port;
+
+    if (!createDiscoveryBroadcast()) {
+        cleanupUxPlay();
+        setState(ReceiverState::Error);
+        return;
+    }
+
     if (raop_start_httpd(raop, &port) < 0) {
         setError("Failed to start RAOP HTTP server");
         cleanupUxPlay();
@@ -414,7 +422,7 @@ void UxPlayReceiver::start() {
     raop_set_port(raop, port);
     m_raopPort = port;
 
-    if (!startDiscoveryBroadcast(m_raopPort)) {
+    if (!registerDiscoveryBroadcast(m_raopPort)) {
         cleanupUxPlay();
         setState(ReceiverState::Error);
         return;
@@ -582,9 +590,9 @@ void UxPlayReceiver::setError(QString error) {
 }
 
 #if AIRPLAY_WITH_UXPLAY
-bool UxPlayReceiver::startDiscoveryBroadcast(unsigned short port) {
+bool UxPlayReceiver::createDiscoveryBroadcast() {
     if (!m_raop) {
-        setError("Cannot register DNS-SD services before RAOP initialization");
+        setError("Cannot initialize DNS-SD before RAOP initialization");
         return false;
     }
     if (m_dnssd) {
@@ -602,7 +610,16 @@ bool UxPlayReceiver::startDiscoveryBroadcast(unsigned short port) {
 
     m_dnssd = dnssd;
     raop_set_dnssd(static_cast<raop_t *>(m_raop), dnssd);
+    return true;
+}
 
+bool UxPlayReceiver::registerDiscoveryBroadcast(unsigned short port) {
+    if (!m_dnssd) {
+        setError("Cannot register DNS-SD services before DNS-SD initialization");
+        return false;
+    }
+
+    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
     int registerError = dnssd_register_raop(dnssd, port);
     if (registerError == 0) {
         registerError = dnssd_register_airplay(dnssd, port);
@@ -639,7 +656,11 @@ bool UxPlayReceiver::restartDiscoveryBroadcast() {
     }
 
     stopDiscoveryBroadcast();
-    if (!startDiscoveryBroadcast(m_raopPort)) {
+    if (!createDiscoveryBroadcast()) {
+        return false;
+    }
+
+    if (!registerDiscoveryBroadcast(m_raopPort)) {
         return false;
     }
 

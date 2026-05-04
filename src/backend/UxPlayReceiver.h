@@ -46,7 +46,8 @@ private:
     void setError(QString error);
 #if AIRPLAY_WITH_UXPLAY
     void cleanupUxPlay();
-    bool startDiscoveryBroadcast(unsigned short port);
+    bool createDiscoveryBroadcast();
+    bool registerDiscoveryBroadcast(unsigned short port);
     void stopDiscoveryBroadcast();
     bool restartDiscoveryBroadcast();
 #endif
