@@ -1,6 +1,7 @@
 #include "app/AppSettings.h"
 
 #include <algorithm>
+#include <utility>
 #include <QSet>
 
 bool AppKeySequence::isValid() const {
@@ -38,6 +39,22 @@ int AppSettings::volume() const {
 
 void AppSettings::setVolume(int value) {
     volume_ = std::clamp(value, 0, 100);
+}
+
+QString AppSettings::receiverName() const {
+    return receiverName_;
+}
+
+void AppSettings::setReceiverName(QString name) {
+    receiverName_ = std::move(name).trimmed();
+}
+
+QStringList AppSettings::validateGeneral() const {
+    QStringList errors;
+    if (receiverName_.trimmed().isEmpty()) {
+        errors.push_back("Receiver name cannot be empty");
+    }
+    return errors;
 }
 
 QStringList AppSettings::validateShortcuts() const {

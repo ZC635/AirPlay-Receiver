@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QKeySequence>
+#include <QString>
 #include <QStringList>
 #include <QVector>
 #include "app/ShortcutAction.h"
@@ -24,9 +25,13 @@ public:
     void setShortcut(ShortcutAction action, const QKeySequence &sequence);
     int volume() const;
     void setVolume(int value);
+    QString receiverName() const;
+    void setReceiverName(QString name);
+    QStringList validateGeneral() const;
     QStringList validateShortcuts() const;
 
 private:
     QHash<int, QKeySequence> shortcuts_;
     int volume_ = 100;
+    QString receiverName_ = "AirPlay Receiver";
 };

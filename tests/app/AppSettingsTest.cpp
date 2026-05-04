@@ -35,6 +35,23 @@ private slots:
         settings.setVolume(125);
         QCOMPARE(settings.volume(), 100);
     }
+
+    void defaultReceiverNameIsAirPlayReceiver() {
+        const AppSettings settings = AppSettings::defaults();
+        QCOMPARE(settings.receiverName(), QString("AirPlay Receiver"));
+    }
+
+    void storesTrimmedReceiverName() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setReceiverName("  Living Room PC  ");
+        QCOMPARE(settings.receiverName(), QString("Living Room PC"));
+    }
+
+    void rejectsEmptyReceiverName() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setReceiverName("   ");
+        QVERIFY(settings.validateGeneral().join('\n').contains("Receiver name"));
+    }
 };
 
 QTEST_MAIN(AppSettingsTest)

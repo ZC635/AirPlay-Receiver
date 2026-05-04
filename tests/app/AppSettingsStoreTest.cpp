@@ -73,6 +73,36 @@ private slots:
         QCOMPARE(loaded.volume(), AppSettings::defaults().volume());
     }
 
+    void savesAndLoadsReceiverName() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setReceiverName("Desk Receiver");
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.receiverName(), QString("Desk Receiver"));
+    }
+
+    void malformedReceiverNameFallsBackToDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"receiverName":"   "})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.receiverName(), AppSettings::defaults().receiverName());
+    }
+
     void saveReturnsFalseForDirectoryPath() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
