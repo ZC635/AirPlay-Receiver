@@ -136,5 +136,5 @@ private slots:
     }
 };
 
-QTEST_MAIN(UxPlayReceiverConfigTest)
+QTEST_GUILESS_MAIN(UxPlayReceiverConfigTest)
 #include "UxPlayReceiverConfigTest.moc"
