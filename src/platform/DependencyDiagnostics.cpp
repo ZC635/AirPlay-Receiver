@@ -1,5 +1,7 @@
 #include "platform/DependencyDiagnostics.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 DiagnosticResult DependencyDiagnostics::checkExecutable(const QString &name) {
@@ -23,4 +25,34 @@ QStringList DependencyDiagnostics::checkRuntimeBasics() {
         "Bonjour: install Apple Bonjour or compatible mDNS service for discovery.",
         "UxPlay: build/runtime dependencies must be available for AirPlay receiver support."
     };
+}
+
+QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directory) {
+    const QStringList requiredPaths = {
+        "airplay_receiver.exe",
+        "Qt6Core.dll",
+        "Qt6Gui.dll",
+        "Qt6Widgets.dll",
+        "platforms/qwindows.dll",
+        "libgcc_s_seh-1.dll",
+        "libstdc++-6.dll",
+        "libwinpthread-1.dll",
+        "libgstreamer-1.0-0.dll",
+        "gstreamer-plugins/libgstapp.dll",
+        "gstreamer-plugins/libgstplayback.dll",
+        "gstreamer-plugins/libgstautodetect.dll",
+        "gstreamer-plugins/libgstvideoparsersbad.dll",
+        "gstreamer-plugins/libgstlibav.dll",
+        "gstreamer-plugins/libgstd3d11.dll",
+        "gstreamer-plugins/libgstwasapi.dll"
+    };
+
+    QStringList missing;
+    const QDir baseDir(directory);
+    for (const QString &relativePath : requiredPaths) {
+        if (!QFileInfo::exists(baseDir.filePath(relativePath))) {
+            missing.append(relativePath);
+        }
+    }
+    return missing;
 }

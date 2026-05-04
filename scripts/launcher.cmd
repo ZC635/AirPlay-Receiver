@@ -13,4 +13,5 @@ if not exist "%~dp0Qt6Core.dll" (
     exit /b 1
 )
 
-start "" "%~dp0airplay_receiver.exe"
+"%~dp0airplay_receiver.exe"
+exit /b %errorlevel%

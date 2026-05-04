@@ -1,5 +1,9 @@
 #include <QtTest/QtTest>
 
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
+
 #include "platform/DependencyDiagnostics.h"
 
 class DependencyDiagnosticsTest : public QObject {
@@ -28,6 +32,50 @@ private slots:
         QVERIFY(messages.join('\n').contains("GStreamer"));
         QVERIFY(messages.join('\n').contains("Bonjour"));
         QVERIFY(messages.join('\n').contains("UxPlay"));
+    }
+
+    void reportsMissingStandaloneRuntimeFiles() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const auto missing = DependencyDiagnostics::checkStandaloneRuntime(dir.path());
+
+        QVERIFY(missing.contains("airplay_receiver.exe"));
+        QVERIFY(missing.contains("Qt6Core.dll"));
+        QVERIFY(missing.contains("gstreamer-plugins/libgstapp.dll"));
+    }
+
+    void acceptsCompleteStandaloneRuntimeFiles() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QStringList requiredPaths = {
+            "airplay_receiver.exe",
+            "Qt6Core.dll",
+            "Qt6Gui.dll",
+            "Qt6Widgets.dll",
+            "platforms/qwindows.dll",
+            "libgcc_s_seh-1.dll",
+            "libstdc++-6.dll",
+            "libwinpthread-1.dll",
+            "libgstreamer-1.0-0.dll",
+            "gstreamer-plugins/libgstapp.dll",
+            "gstreamer-plugins/libgstplayback.dll",
+            "gstreamer-plugins/libgstautodetect.dll",
+            "gstreamer-plugins/libgstvideoparsersbad.dll",
+            "gstreamer-plugins/libgstlibav.dll",
+            "gstreamer-plugins/libgstd3d11.dll",
+            "gstreamer-plugins/libgstwasapi.dll"
+        };
+
+        for (const QString &relativePath : requiredPaths) {
+            const QString fullPath = QDir(dir.path()).filePath(relativePath);
+            QVERIFY(QDir().mkpath(QFileInfo(fullPath).absolutePath()));
+            QFile file(fullPath);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+        }
+
+        QVERIFY(DependencyDiagnostics::checkStandaloneRuntime(dir.path()).isEmpty());
     }
 };
 
