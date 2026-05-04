@@ -31,7 +31,13 @@ public:
     quint64 callbackGenerationForUxPlayCallback() const;
     void startAudioRendererFromUxPlayCallback(unsigned char *compressionType);
     void setVolumeFromUxPlayCallback(double volume);
+    void handleVideoResetFromUxPlayCallback(int resetType);
 #endif
+
+signals:
+    void trackMetadataChanged(const QString &title, const QString &artist, const QString &album);
+    void coverArtReceived(const QByteArray &data);
+    void progressUpdated(int positionSec, int durationSec);
 
 private:
     void setState(ReceiverState state);

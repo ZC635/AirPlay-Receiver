@@ -118,13 +118,143 @@ void connDestroy(void *cls) {
     }, Qt::QueuedConnection);
 }
 
-void connReset(void *, int) {}
-void connFeedback(void *) {}
-void videoReset(void *, reset_type_t) {}
-void audioSetMetadata(void *, const void *, int) {}
-void audioSetCoverart(void *, const void *, int) {}
-void audioStopCoverartRendering(void *) {}
-void audioSetProgress(void *, uint32_t *, uint32_t *, uint32_t *) {}
+void connReset(void *, int reason) {
+    switch (reason) {
+    case 1:
+        printf("*** ERROR lost connection with client (network problem?)\n");
+        break;
+    case 2:
+        printf("*** ERROR Unsupported HLS streaming source\n");
+        break;
+    default:
+        break;
+    }
+}
+
+void connFeedback(void *) {
+    static int missed_feedback = 0;
+    missed_feedback = 0;
+}
+
+void videoReset(void *cls, reset_type_t type) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    receiver->handleVideoResetFromUxPlayCallback(static_cast<int>(type));
+}
+
+void audioSetMetadata(void *cls, const void *buffer, int buflen) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+
+    if (buflen < 8) {
+        return;
+    }
+
+    const unsigned char *metadata = static_cast<const unsigned char *>(buffer);
+    char dmap_tag[5] = {0};
+    int datalen = 0;
+
+    for (int i = 0; i < 4; i++) {
+        dmap_tag[i] = static_cast<char>(metadata[i]);
+    }
+    for (int i = 0; i < 4; i++) {
+        datalen <<= 8;
+        datalen += static_cast<int>(metadata[4 + i]);
+    }
+
+    if (std::strcmp(dmap_tag, "mlit") != 0 || datalen != buflen - 8) {
+        return;
+    }
+
+    metadata += 8;
+    buflen -= 8;
+
+    QString title, artist, album;
+
+    while (buflen >= 8) {
+        char item_tag[5] = {0};
+        int item_len = 0;
+
+        for (int i = 0; i < 4; i++) {
+            item_tag[i] = static_cast<char>(metadata[i]);
+        }
+        for (int i = 0; i < 4; i++) {
+            item_len <<= 8;
+            item_len += static_cast<int>(metadata[4 + i]);
+        }
+
+        metadata += 8;
+        buflen -= 8;
+
+        if (item_len <= 0 || item_len > buflen) {
+            break;
+        }
+
+        QString value = QString::fromUtf8(reinterpret_cast<const char *>(metadata), item_len);
+
+        if (std::strcmp(item_tag, "minm") == 0 || std::strcmp(item_tag, "\xC2\xA9nam") == 0) {
+            title = value;
+        } else if (std::strcmp(item_tag, "asar") == 0 || std::strcmp(item_tag, "\xC2\xA9ART") == 0) {
+            artist = value;
+        } else if (std::strcmp(item_tag, "asal") == 0 || std::strcmp(item_tag, "\xC2\xA9alb") == 0) {
+            album = value;
+        }
+
+        metadata += item_len;
+        buflen -= item_len;
+    }
+
+    QPointer<UxPlayReceiver> guardedReceiver(receiver);
+    QMetaObject::invokeMethod(receiver, [guardedReceiver, title, artist, album] {
+        if (guardedReceiver) {
+            emit guardedReceiver->trackMetadataChanged(title, artist, album);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void audioSetCoverart(void *cls, const void *buffer, int buflen) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+
+    if (!buffer || buflen <= 0) {
+        return;
+    }
+
+    video_renderer_choose_codec(true, false);
+    int buflen_mut = buflen;
+    video_renderer_display_jpeg(buffer, &buflen_mut);
+
+    QByteArray data(static_cast<const char *>(buffer), buflen_mut);
+    QPointer<UxPlayReceiver> guardedReceiver(receiver);
+    QMetaObject::invokeMethod(receiver, [guardedReceiver, data] {
+        if (guardedReceiver) {
+            emit guardedReceiver->coverArtReceived(data);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void audioStopCoverartRendering(void *cls) {
+    videoReset(cls, RESET_TYPE_RTP_SHUTDOWN);
+}
+
+void audioSetProgress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+
+    uint32_t s = *start;
+    uint32_t c = *curr;
+    uint32_t e = *end;
+
+    if (c < s || c > e) {
+        return;
+    }
+
+    int positionSec = static_cast<int>((c - s) / 44100);
+    int durationSec = static_cast<int>((e - s) / 44100);
+
+    QPointer<UxPlayReceiver> guardedReceiver(receiver);
+    QMetaObject::invokeMethod(receiver, [guardedReceiver, positionSec, durationSec] {
+        if (guardedReceiver) {
+            emit guardedReceiver->progressUpdated(positionSec, durationSec);
+        }
+    }, Qt::QueuedConnection);
+}
 
 void reportClientRequest(void *, char *, char *, char *, bool *admit) {
     *admit = true;
@@ -296,7 +426,7 @@ void UxPlayReceiver::setVolume(double volume) {
 void UxPlayReceiver::setVideoSurface(WId id) {
     m_videoSurfaceId = id;
 #if AIRPLAY_WITH_UXPLAY
-    Q_UNUSED(m_videoSurfaceId);
+    video_renderer_set_window_handle(reinterpret_cast<void *>(static_cast<uintptr_t>(id)));
 #endif
 }
 
@@ -336,6 +466,33 @@ void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
     m_volume.store(volume);
     if (m_audioRendererStarted.load()) {
         audio_renderer_set_volume(m_volume.load());
+    }
+}
+
+void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
+    switch (static_cast<reset_type_t>(resetType)) {
+    case RESET_TYPE_RTP_SHUTDOWN:
+    case RESET_TYPE_HLS_SHUTDOWN:
+    case RESET_TYPE_HLS_EOS:
+        video_renderer_stop();
+        break;
+    case RESET_TYPE_NOHOLD:
+        video_renderer_stop();
+        video_renderer_destroy();
+        {
+            auto *logger = static_cast<logger_t *>(m_logger);
+            const QByteArray serverName = m_config.serverName.toUtf8();
+            const QByteArray videoSink = m_config.videoSink.toUtf8();
+            videoflip_t videoFlip[2] = {NONE, NONE};
+            video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
+                                "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
+                                kPlaybinVersion, nullptr);
+            video_renderer_start();
+        }
+        break;
+    case RESET_TYPE_ON_VIDEO_PLAY:
+    case RESET_TYPE_RTP_TO_HLS_TEARDOWN:
+        break;
     }
 }
 #endif
