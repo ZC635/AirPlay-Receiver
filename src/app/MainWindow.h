@@ -33,6 +33,10 @@ private:
     bool registerHotkeys();
     bool saveSettings() const;
     void setReceiverVolume(int value);
+    void handleReceiverNameChange(const QString &receiverName);
+    bool applyReceiverNameNow(const QString &receiverName);
+    void revertReceiverNameToDefaultAfterApplyFailure();
+    void applyPendingReceiverNameIfNeeded(bool wasConnected);
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
 

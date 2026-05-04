@@ -11,6 +11,7 @@
 #include <QGridLayout>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMessageBox>
 #include <QWidget>
 #include <utility>
 
@@ -182,7 +183,78 @@ void MainWindow::setReceiverVolume(int value) {
     }
 }
 
+void MainWindow::handleReceiverNameChange(const QString &receiverName) {
+    if (receiverName == activeReceiverName_) {
+        pendingReceiverName_.clear();
+        return;
+    }
+
+    if (receiver_ == nullptr) {
+        activeReceiverName_ = receiverName;
+        pendingReceiverName_.clear();
+        return;
+    }
+
+    if (receiverConnected_) {
+        const auto answer = QMessageBox::question(
+            this,
+            "Apply receiver name",
+            "Applying the new receiver name now will disconnect the current iPhone. Apply now?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            pendingReceiverName_ = receiverName;
+            return;
+        }
+    }
+
+    pendingReceiverName_.clear();
+    applyReceiverNameNow(receiverName);
+}
+
+bool MainWindow::applyReceiverNameNow(const QString &receiverName) {
+    if (receiver_ == nullptr) {
+        activeReceiverName_ = receiverName;
+        return true;
+    }
+
+    if (receiver_->applyReceiverName(receiverName)) {
+        activeReceiverName_ = receiverName;
+        return true;
+    }
+
+    revertReceiverNameToDefaultAfterApplyFailure();
+    return false;
+}
+
+void MainWindow::revertReceiverNameToDefaultAfterApplyFailure() {
+    const QString defaultName = AppSettings::defaults().receiverName();
+    settings_.setReceiverName(defaultName);
+    pendingReceiverName_.clear();
+    if (receiver_ != nullptr && receiver_->receiverName() != defaultName) {
+        receiver_->applyReceiverName(defaultName);
+    }
+    activeReceiverName_ = defaultName;
+
+    if (!saveSettings()) {
+        statusLabel_->setText("Could not save settings");
+        return;
+    }
+    statusLabel_->setText("Could not apply receiver name; reverted to default");
+}
+
+void MainWindow::applyPendingReceiverNameIfNeeded(bool wasConnected) {
+    if (!wasConnected || receiverConnected_ || pendingReceiverName_.isEmpty()) {
+        return;
+    }
+
+    const QString receiverName = pendingReceiverName_;
+    pendingReceiverName_.clear();
+    applyReceiverNameNow(receiverName);
+}
+
 void MainWindow::updateReceiverState(ReceiverState state) {
+    const bool wasConnected = receiverConnected_;
     receiverConnected_ = state == ReceiverState::Connected;
     const bool showToolbar = !receiverConnected_;
     toolbar_->setVisible(showToolbar);
@@ -208,6 +280,8 @@ void MainWindow::updateReceiverState(ReceiverState state) {
         statusLabel_->setText("Ready for AirPlay");
         break;
     }
+
+    applyPendingReceiverNameIfNeeded(wasConnected);
 }
 
 void MainWindow::showSettingsDialog() {
@@ -229,5 +303,9 @@ void MainWindow::showSettingsDialog() {
     setVolume(settings_.volume());
     if (!saveSettings()) {
         statusLabel_->setText("Could not save settings");
+    }
+    const bool receiverNameChanged = settings_.receiverName() != activeReceiverName_;
+    if (receiverNameChanged) {
+        handleReceiverNameChange(settings_.receiverName());
     }
 }

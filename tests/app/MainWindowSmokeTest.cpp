@@ -10,7 +10,10 @@
 #include "platform/FakeHotkeyService.h"
 
 #include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
 #include <QKeySequenceEdit>
+#include <QPushButton>
 #include <QSlider>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -215,6 +218,134 @@ private slots:
         MainWindow window(settings, nullptr, &receiver);
 
         QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+    }
+
+    void changedReceiverNameAppliesImmediatelyWhenNotConnected() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("Desk Receiver");
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("Desk Receiver"));
+    }
+
+    void connectedReceiverNameChangeCanDisconnectAndApply() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        receiver.forceState(ReceiverState::Connected);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("Desk Receiver");
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                auto *yes = box->button(QMessageBox::Yes);
+                QVERIFY(yes != nullptr);
+                yes->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+        QVERIFY(receiver.stopCount > 0);
+        QVERIFY(receiver.startCount > 0);
+    }
+
+    void connectedReceiverNameChangeCanBeDeferredUntilDisconnect() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        receiver.forceState(ReceiverState::Connected);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("Desk Receiver");
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                auto *no = box->button(QMessageBox::No);
+                QVERIFY(no != nullptr);
+                no->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("Desk Receiver"));
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+    }
+
+    void receiverNameApplyFailureRevertsSavedNameToDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        receiver.rejectedReceiverNames.append("Desk Receiver");
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("Desk Receiver");
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("AirPlay Receiver"));
+
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QVERIFY(label->text().contains("receiver name"));
     }
 
     void savesVolumeChanges() {
