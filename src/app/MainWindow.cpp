@@ -304,8 +304,5 @@ void MainWindow::showSettingsDialog() {
     if (!saveSettings()) {
         statusLabel_->setText("Could not save settings");
     }
-    const bool receiverNameChanged = settings_.receiverName() != activeReceiverName_;
-    if (receiverNameChanged) {
-        handleReceiverNameChange(settings_.receiverName());
-    }
+    handleReceiverNameChange(settings_.receiverName());
 }

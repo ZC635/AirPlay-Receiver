@@ -318,6 +318,58 @@ private slots:
         QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
     }
 
+    void deferredReceiverNameIsClearedWhenChangedBackToActiveName() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        receiver.forceState(ReceiverState::Connected);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("Desk Receiver");
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                auto *no = box->button(QMessageBox::No);
+                QVERIFY(no != nullptr);
+                no->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("Desk Receiver"));
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("AirPlay Receiver");
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("AirPlay Receiver"));
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+    }
+
     void receiverNameApplyFailureRevertsSavedNameToDefault() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
