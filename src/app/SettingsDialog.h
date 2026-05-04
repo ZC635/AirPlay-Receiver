@@ -7,6 +7,7 @@
 
 class QLabel;
 class QKeySequenceEdit;
+class QLineEdit;
 class QTableWidget;
 
 class SettingsDialog final : public QDialog {
@@ -21,6 +22,7 @@ public slots:
 
 private:
     AppSettings settings_;
+    QLineEdit *receiverNameEdit_;
     QTableWidget *table_;
     QLabel *errorLabel_;
     QHash<int, QKeySequenceEdit *> shortcutEdits_;

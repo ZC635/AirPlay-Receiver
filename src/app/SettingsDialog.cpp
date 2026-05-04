@@ -3,9 +3,14 @@
 #include "platform/WindowsHotkeyService.h"
 
 #include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QKeySequenceEdit>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -36,9 +41,20 @@ QString keyFor(ShortcutAction action) {
 SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
     : QDialog(parent),
       settings_(settings),
+      receiverNameEdit_(new QLineEdit(settings.receiverName(), this)),
       table_(new QTableWidget(this)),
       errorLabel_(new QLabel(this)) {
     setWindowTitle("Settings");
+
+    auto *generalGroup = new QGroupBox("General", this);
+    generalGroup->setObjectName("generalSettingsGroup");
+    receiverNameEdit_->setObjectName("receiverNameEdit");
+
+    auto *generalLayout = new QFormLayout(generalGroup);
+    generalLayout->addRow("Receiver name", receiverNameEdit_);
+
+    auto *hotkeyGroup = new QGroupBox("Hotkey Binding", this);
+    hotkeyGroup->setObjectName("hotkeyBindingGroup");
 
     table_->setObjectName("shortcutTable");
     table_->setColumnCount(2);
@@ -61,6 +77,26 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
 
     table_->horizontalHeader()->setStretchLastSection(true);
 
+    auto *resetButton = new QPushButton("Reset to Defaults", hotkeyGroup);
+    resetButton->setObjectName("resetHotkeysButton");
+    connect(resetButton, &QPushButton::clicked, this, [this]() {
+        const AppSettings defaults = AppSettings::defaults();
+        for (const ShortcutRow &shortcutRow : kShortcutRows) {
+            auto *edit = shortcutEdits_.value(static_cast<int>(shortcutRow.action), nullptr);
+            if (edit != nullptr) {
+                edit->setKeySequence(defaults.shortcutFor(shortcutRow.action));
+            }
+        }
+    });
+
+    auto *resetLayout = new QHBoxLayout;
+    resetLayout->addStretch();
+    resetLayout->addWidget(resetButton);
+
+    auto *hotkeyLayout = new QVBoxLayout(hotkeyGroup);
+    hotkeyLayout->addWidget(table_);
+    hotkeyLayout->addLayout(resetLayout);
+
     errorLabel_->setObjectName("settingsErrorLabel");
     errorLabel_->setStyleSheet("color: #b00020;");
     errorLabel_->setWordWrap(true);
@@ -71,7 +107,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(table_);
+    layout->addWidget(generalGroup);
+    layout->addWidget(hotkeyGroup);
     layout->addWidget(errorLabel_);
     layout->addWidget(buttons);
 }
@@ -82,6 +119,7 @@ AppSettings SettingsDialog::settings() const {
 
 void SettingsDialog::accept() {
     AppSettings candidate = settings_;
+    candidate.setReceiverName(receiverNameEdit_->text());
     for (const ShortcutRow &shortcutRow : kShortcutRows) {
         auto *edit = shortcutEdits_.value(static_cast<int>(shortcutRow.action), nullptr);
         if (edit != nullptr) {
@@ -89,7 +127,8 @@ void SettingsDialog::accept() {
         }
     }
 
-    QStringList errors = candidate.validateShortcuts();
+    QStringList errors = candidate.validateGeneral();
+    errors.append(candidate.validateShortcuts());
     for (const ShortcutRow &shortcutRow : kShortcutRows) {
         const QKeySequence sequence = candidate.shortcutFor(shortcutRow.action);
         if (sequence.count() > 1) {
