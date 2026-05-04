@@ -122,11 +122,13 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 - Mirrored video display through the UxPlay-managed GStreamer window
 - Synchronized audio playback
 - Overlay toolbar with volume slider, always-on-top toggle, and settings button
-- Settings dialog for configurable shortcuts:
+- Settings dialog for receiver name and configurable shortcuts:
+  - Receiver name shown in the iPhone Screen Mirroring list
   - Toggle always on top (`Ctrl+Alt+T`)
   - Volume up (`Ctrl+Alt+Up`)
   - Volume down (`Ctrl+Alt+Down`)
   - Toggle toolbar visibility (`Ctrl+Alt+B`)
+  - Reset hotkey bindings to defaults
 - Global hotkey registration via the Windows hotkey API
 - Dependency diagnostics for missing runtimes
 
