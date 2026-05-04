@@ -1,28 +1,44 @@
 # AirPlay Receiver
 
-Windows desktop AirPlay receiver inspired by LonelyScreen. Receives native iPhone Screen Mirroring over AirPlay, displays the mirrored video, plays synchronized audio, and provides a compact toolbar for volume, always-on-top, settings, and configurable global shortcuts.
+AirPlay Receiver is a Windows desktop receiver for native iPhone AirPlay Screen Mirroring. It discovers and receives AirPlay mirroring streams, displays the mirrored video, plays synchronized audio, and provides a compact toolbar for volume, always-on-top, settings, and configurable global shortcuts.
 
-## Requirements
+This project was developed with assistance from OpenCode, Codex, and DeepSeek. It builds on UxPlay and GStreamer for AirPlay protocol handling and media playback, with a Qt-based Windows desktop interface around the receiver experience.
+
+## Usage
+
+### Prerequisites
 
 - Windows 10 or 11
-- MSYS2 UCRT64 toolchain (GCC, CMake, Ninja, Qt6)
-- GStreamer runtime with base/good/bad/libav plugins
-- Bonjour SDK 3.0 and runtime service
+- MSYS2 UCRT64 toolchain with GCC, CMake, Ninja, and Qt6
+- GStreamer runtime with base, good, bad, and libav plugins
+- Bonjour SDK 3.0 and Bonjour runtime service
 
-See `docs/uxplay-windows-build.md` for exact package versions.
+See `docs/uxplay-windows-build.md` for exact package versions and setup notes.
 
-## Build
+### Clone
 
-Quick build (all-in-one):
+```powershell
+git clone --recurse-submodules https://github.com/ZC635/AirPlay-Receiver.git
+cd AirPlay-Receiver
+```
+
+If you cloned without submodules, initialize them manually:
+
+```powershell
+git submodule update --init --recursive
+```
+
+### Build And Test
+
+Quick build with UxPlay enabled:
 
 ```powershell
 .\scripts\build.ps1           # Configure + build
 .\scripts\build.ps1 -Test     # Build + run tests
 .\scripts\build.ps1 -Clean    # Wipe build dir first
-.\scripts\run.ps1             # Build (if needed) + launch
 ```
 
-Manual steps:
+Manual UxPlay-enabled build:
 
 ```powershell
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
@@ -31,7 +47,7 @@ cmake --build build-uxplay
 ctest --test-dir build-uxplay --output-on-failure
 ```
 
-Default build (without UxPlay):
+Default build without UxPlay:
 
 ```powershell
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
@@ -40,7 +56,15 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Run the receiver:
+### Run
+
+Launch through the helper script:
+
+```powershell
+.\scripts\run.ps1
+```
+
+Or launch the built receiver directly:
 
 ```powershell
 $env:GST_PLUGIN_PATH = "C:\msys64\ucrt64\lib\gstreamer-1.0"
@@ -48,24 +72,28 @@ $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 .\build-uxplay\airplay_receiver.exe
 ```
 
+After the receiver starts, open Control Center on an iPhone, choose Screen Mirroring, and select the advertised receiver name. Keep the Windows host and iPhone on the same network, and allow Bonjour/mDNS and receiver traffic through the firewall.
+
 ## Features
 
 - Native iPhone AirPlay Screen Mirroring discovery and connection via UxPlay/GStreamer
-- Mirrored video display (UxPlay-managed GStreamer window; Qt embedding planned)
+- Mirrored video display through the UxPlay-managed GStreamer window
 - Synchronized audio playback
 - Overlay toolbar with volume slider, always-on-top toggle, and settings button
 - Settings dialog for configurable shortcuts:
-  - Toggle always on top (Ctrl+Alt+T)
-  - Volume up (Ctrl+Alt+Up)
-  - Volume down (Ctrl+Alt+Down)
-  - Toggle toolbar visibility (Ctrl+Alt+B)
-- Global hotkey registration via Windows hotkey API
+  - Toggle always on top (`Ctrl+Alt+T`)
+  - Volume up (`Ctrl+Alt+Up`)
+  - Volume down (`Ctrl+Alt+Down`)
+  - Toggle toolbar visibility (`Ctrl+Alt+B`)
+- Global hotkey registration via the Windows hotkey API
 - Dependency diagnostics for missing runtimes
 
 ## Documentation
 
 - Design: `docs/plans/2026-05-03-airplay-receiver-design.md`
 - Implementation plan: `docs/plans/2026-05-03-airplay-receiver-mvp.md`
+- Repository publication design: `docs/plans/2026-05-04-repository-publication-design.md`
+- Repository publication plan: `docs/plans/2026-05-04-repository-publication.md`
 - Windows build notes: `docs/uxplay-windows-build.md`
 - Manual acceptance: `docs/manual-acceptance.md`
 - Third-party dependencies: `third_party/README.md`
@@ -89,4 +117,6 @@ tests/
 
 ## License
 
-GPL-3.0-only, aligned with UxPlay's GPLv3 license.
+GPL-3.0-only. See `LICENSE` for the full license text.
+
+Third-party dependencies retain their own licenses. UxPlay is included as a GPLv3 submodule from `https://github.com/ZC635/UxPlay.git`; additional bundled third-party license files are documented under `third_party/README.md` and each dependency directory.
