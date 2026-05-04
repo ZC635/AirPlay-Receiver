@@ -13,28 +13,39 @@ See `docs/uxplay-windows-build.md` for exact package versions.
 
 ## Build
 
-Default build (without UxPlay):
+Quick build (all-in-one):
 
 ```powershell
-$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
-cmake -S . -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
+.\scripts\build.ps1           # Configure + build
+.\scripts\build.ps1 -Test     # Build + run tests
+.\scripts\build.ps1 -Clean    # Wipe build dir first
+.\scripts\run.ps1             # Build (if needed) + launch
 ```
 
-UxPlay-enabled build:
+Manual steps:
 
 ```powershell
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
-cmake -S . -B build-uxplay -G Ninja -DAIRPLAY_WITH_UXPLAY=ON
+cmake -S . -B build-uxplay -G Ninja -DAIRPLAY_WITH_UXPLAY=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build-uxplay
 ctest --test-dir build-uxplay --output-on-failure
 ```
 
+Default build (without UxPlay):
+
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
 Run the receiver:
 
-```bash
-./build-uxplay/airplay_receiver.exe
+```powershell
+$env:GST_PLUGIN_PATH = "C:\msys64\ucrt64\lib\gstreamer-1.0"
+$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+.\build-uxplay\airplay_receiver.exe
 ```
 
 ## Features

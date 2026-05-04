@@ -190,11 +190,11 @@ void audioSetMetadata(void *cls, const void *buffer, int buflen) {
 
         QString value = QString::fromUtf8(reinterpret_cast<const char *>(metadata), item_len);
 
-        if (std::strcmp(item_tag, "minm") == 0 || std::strcmp(item_tag, "\xC2\xA9nam") == 0) {
+        if (std::strcmp(item_tag, "minm") == 0 || std::strcmp(item_tag, "\302\251nam") == 0) {
             title = value;
-        } else if (std::strcmp(item_tag, "asar") == 0 || std::strcmp(item_tag, "\xC2\xA9ART") == 0) {
+        } else if (std::strcmp(item_tag, "asar") == 0 || std::strcmp(item_tag, "\302\251ART") == 0) {
             artist = value;
-        } else if (std::strcmp(item_tag, "asal") == 0 || std::strcmp(item_tag, "\xC2\xA9alb") == 0) {
+        } else if (std::strcmp(item_tag, "asal") == 0 || std::strcmp(item_tag, "\302\251alb") == 0) {
             album = value;
         }
 
