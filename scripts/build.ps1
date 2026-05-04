@@ -56,65 +56,18 @@ if ($Deploy) {
     $ErrorActionPreference = $prevEAP
 
     Write-Host "  Copying runtime DLLs..." -ForegroundColor Gray
-    $patterns = @(
-        "libgst*.dll", "libgstreamer*.dll",
-        "libglib*.dll", "libgio*.dll", "libgobject*.dll", "libgmodule*.dll",
-        "libcrypto*.dll", "libssl*.dll",
-        "avcodec*.dll", "avformat*.dll", "avutil*.dll", "avfilter*.dll",
-        "libswresample*.dll", "libswscale*.dll", "libpostproc*.dll",
-        "libopenh264*.dll", "libfdk*.dll", "libfaad*.dll",
-        "libvorbis*.dll", "libogg*.dll", "libopus*.dll", "libvpx*.dll",
-        "libx264*.dll", "libx265*.dll",
-        "libmp3lame*.dll", "libflac*.dll", "libspeex*.dll",
-        "libwavpack*.dll", "libsndfile*.dll",
-        "libfreetype*.dll", "libharfbuzz*.dll", "libpng*.dll", "libjpeg*.dll",
-        "libwebp*.dll", "libtiff*.dll",
-        "libicuin*.dll", "libicuuc*.dll", "libicudt*.dll",
-        "libpcre2*.dll", "libzstd*.dll", "libdouble-conversion*.dll",
-        "libbrotli*.dll", "libbz2*.dll", "liblzma*.dll", "zlib*.dll",
-        "liborc*.dll", "libffi*.dll", "libintl*.dll", "libiconv*.dll",
-        "libplist*.dll", "libpugixml*.dll", "libxml2*.dll",
-        "libsoup*.dll", "libpsl*.dll", "libsqlite*.dll",
-        "libunistring*.dll", "libidn*.dll", "libtasn*.dll",
-        "libnettle*.dll", "libgmp*.dll", "libhogweed*.dll", "libp11*.dll",
-        "libcairo*.dll", "libpango*.dll", "libgdk_pixbuf*.dll",
-        "librsvg*.dll", "libpixman*.dll",
-        "libfontconfig*.dll", "libfribidi*.dll", "libthai*.dll",
-        "libdatrie*.dll", "libexpat*.dll",
-        "libcurl*.dll", "libnghttp*.dll", "libssh*.dll",
-        "libd3dcompiler*.dll", "libdrm*.dll", "libGLESv2*.dll", "libEGL*.dll",
-        "libgcc_s*.dll", "libstdc++*.dll", "libwinpthread*.dll", "libssp*.dll",
-        "libgomp*.dll", "libatomic*.dll",
-        "libtag*.dll", "libgraphene*.dll", "libepoxy*.dll",
-        "libass*.dll", "libcaca*.dll", "libmodplug*.dll", "libopenmpt*.dll",
-        "libsoundtouch*.dll", "libspandsp*.dll",
-        "libopenal*.dll", "libfluidsynth*.dll",
-        "libdca*.dll", "libfaac*.dll", "libmpcdec*.dll",
-        "libdvdnav*.dll", "libdvdread*.dll", "libbluray*.dll",
-        "libshout*.dll", "liblc3*.dll", "libsrtp*.dll",
-        "libiex*.dll", "libimath*.dll", "libopenexr*.dll",
-        "libzbar*.dll", "libvmaf*.dll", "libchromaprint*.dll",
-        "libaom*.dll", "libdav1d*.dll", "librav1e*.dll",
-        "libsvtav1enc*.dll", "libde265*.dll",
-        "librtmp*.dll", "libsrt*.dll", "libmicrodns*.dll", "libnice*.dll",
-        "libjson-glib*.dll", "libtheora*.dll", "libgsm*.dll", "libsbc*.dll",
-        "libtwolame*.dll", "libmpg123*.dll", "libgme*.dll",
-        "libopencore-amrnb*.dll", "libopencore-amrwb*.dll",
-        "libvo-amrwbenc*.dll", "libopenjp2*.dll", "liblcms2*.dll",
-        "libva*.dll", "libvidstab*.dll", "libvpl*.dll",
-        "libzimg*.dll", "libzvbi*.dll", "libdeflate*.dll",
-        "libplacebo*.dll", "libshaderc*.dll", "libunibreak*.dll",
-        "libsharpyuv*.dll", "liblerc*.dll", "libjxl*.dll", "libjbig*.dll",
-        "libgnutls*.dll", "libngtcp2*.dll",
-        "libreadline*.dll", "libportaudio*.dll",
-        "xvidcore*.dll", "sdl3*.dll", "libdvdcss*.dll",
-        "libmd4c*.dll", "libgraphite2*.dll"
-    )
-    foreach ($patt in $patterns) {
-        Get-ChildItem $MSys2Bin -Filter $patt -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName $BuildDir -Force
-        }
-    }
+    $exclude = @("gcc", "g++", "cpp", "cc1", "cc1plus", "collect2", "ld", "ar", "as", "nm",
+        "objdump", "objcopy", "ranlib", "strip", "readelf", "addr2line", "c++filt",
+        "cmake", "ctest", "cpack", "ninja", "make", "pkg-config", "meson",
+        "python", "perl", "bash", "git", "curl", "wget", "ssh", "scp")
+    $exePatterns = ($exclude | ForEach-Object { "$_.exe" })
+    Get-ChildItem $MSys2Bin -Filter "*.dll" | Where-Object {
+        $n = $_.Name.ToLower()
+        $exePatterns -notcontains $n -and
+        ($n -like "lib*" -or $n -like "av*" -or $n -like "sw*" -or
+         $n -like "zlib*" -or $n -like "xvid*" -or $n -like "sdl*" -or
+         $n -like "D3D*" -or $n -like "Qt*" -or $n -like "dx*")
+    } | Copy-Item -Destination $BuildDir -Force
 
     Write-Host "  Copying GStreamer plugins..." -ForegroundColor Gray
     $PluginOutDir = Join-Path $BuildDir "gstreamer-plugins"
