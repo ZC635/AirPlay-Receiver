@@ -207,6 +207,16 @@ private slots:
         QCOMPARE(receiver.volume(), 0.45);
     }
 
+    void appliesLoadedReceiverNameToReceiver() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setReceiverName("Desk Receiver");
+        FakeAirPlayReceiver receiver;
+
+        MainWindow window(settings, nullptr, &receiver);
+
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+    }
+
     void savesVolumeChanges() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

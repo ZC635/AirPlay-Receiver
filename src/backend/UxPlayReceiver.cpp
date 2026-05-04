@@ -472,6 +472,35 @@ ReceiverState UxPlayReceiver::state() const {
     return m_state;
 }
 
+QString UxPlayReceiver::receiverName() const {
+    return m_config.serverName;
+}
+
+bool UxPlayReceiver::applyReceiverName(const QString &name) {
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        return false;
+    }
+    if (m_config.serverName == trimmed) {
+        return true;
+    }
+
+    const bool wasRunning = m_state != ReceiverState::Idle;
+    if (wasRunning) {
+        stop();
+    }
+
+    m_config.serverName = trimmed;
+
+    if (wasRunning) {
+        start();
+        if (m_state == ReceiverState::Error) {
+            return false;
+        }
+    }
+    return true;
+}
+
 #if AIRPLAY_WITH_UXPLAY
 void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state) {
     setStateFromUxPlayCallback(state, m_callbackGeneration.load());

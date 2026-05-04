@@ -25,6 +25,8 @@ public:
     void setVolume(double volume) override;
     void setVideoSurface(WId id) override;
     ReceiverState state() const override;
+    QString receiverName() const override;
+    bool applyReceiverName(const QString &name) override;
 #if AIRPLAY_WITH_UXPLAY
     void setStateFromUxPlayCallback(ReceiverState state);
     void setStateFromUxPlayCallback(ReceiverState state, quint64 generation);

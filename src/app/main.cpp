@@ -30,6 +30,7 @@ int main(int argc, char *argv[]) {
 
 #if AIRPLAY_WITH_UXPLAY
     UxPlayReceiverConfig config;
+    config.serverName = settings.receiverName();
     config.videoSink = "d3d11videosink";
     config.audioSink = "wasapisink";
     UxPlayReceiver receiver(config);

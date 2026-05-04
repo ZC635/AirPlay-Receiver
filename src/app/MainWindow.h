@@ -40,6 +40,8 @@ private:
     QLabel *statusLabel_;
     VideoSurfaceWidget *videoSurface_;
     AppSettings settings_;
+    QString activeReceiverName_;
+    QString pendingReceiverName_;
     QPointer<HotkeyService> hotkeys_;
     QPointer<AirPlayReceiver> receiver_;
     QString currentError_;

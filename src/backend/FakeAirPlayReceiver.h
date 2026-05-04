@@ -2,15 +2,23 @@
 
 #include "backend/AirPlayReceiver.h"
 
+#include <QStringList>
+
 class FakeAirPlayReceiver : public AirPlayReceiver {
     Q_OBJECT
 
 public:
     using AirPlayReceiver::AirPlayReceiver;
 
-    void start() override { setState(ReceiverState::Discoverable); }
+    void start() override {
+        ++startCount;
+        setState(ReceiverState::Discoverable);
+    }
 
-    void stop() override { setState(ReceiverState::Idle); }
+    void stop() override {
+        ++stopCount;
+        setState(ReceiverState::Idle);
+    }
 
     void setVolume(double volume) override { m_volume = volume; }
 
@@ -23,7 +31,36 @@ public:
 
     ReceiverState state() const override { return m_state; }
 
+    QString receiverName() const override { return m_receiverName; }
+
+    bool applyReceiverName(const QString &name) override {
+        if (rejectedReceiverNames.contains(name)) {
+            return false;
+        }
+        if (m_receiverName == name) {
+            return true;
+        }
+
+        const bool wasRunning = m_state != ReceiverState::Idle;
+        if (wasRunning) {
+            stop();
+        }
+        m_receiverName = name;
+        appliedReceiverNames.append(name);
+        if (wasRunning) {
+            start();
+        }
+        return true;
+    }
+
     double volume() const { return m_volume; }
+
+    void forceState(ReceiverState state) { setState(state); }
+
+    QStringList appliedReceiverNames;
+    QStringList rejectedReceiverNames;
+    int startCount = 0;
+    int stopCount = 0;
 
 private:
     void setState(ReceiverState state) {
@@ -36,6 +73,7 @@ private:
     }
 
     ReceiverState m_state = ReceiverState::Idle;
+    QString m_receiverName = "AirPlay Receiver";
     double m_volume = 1.0;
     WId m_videoSurfaceId = 0;
 };

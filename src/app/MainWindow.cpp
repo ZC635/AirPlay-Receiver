@@ -29,6 +29,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
       statusLabel_(new QLabel("Ready for AirPlay", this)),
       videoSurface_(new VideoSurfaceWidget(this)),
       settings_(std::move(settings)),
+      activeReceiverName_(settings_.receiverName()),
       hotkeys_(hotkeys),
       receiver_(receiver),
       settingsPath_(std::move(settingsPath)) {
@@ -73,6 +74,9 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
                 statusLabel_->setText(currentError_);
             }
         });
+        if (receiver_->receiverName() != settings_.receiverName()) {
+            receiver_->applyReceiverName(settings_.receiverName());
+        }
     }
 
     setVolume(settings_.volume());
