@@ -54,65 +54,77 @@ if ($Deploy) {
     $ErrorActionPreference = "Continue"
     & "$MSys2Bin\windeployqt.exe" $ExePath --no-translations --no-compiler-runtime 2>&1 | Out-Null
     $ErrorActionPreference = $prevEAP
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "windeployqt failed (continuing)"
-    }
 
-    $RuntimeDlls = @(
-        "libgcc_s_seh-1.dll",
-        "libstdc++-6.dll",
-        "libwinpthread-1.dll",
-        "libssp-0.dll"
+    Write-Host "  Copying runtime DLLs..." -ForegroundColor Gray
+    $patterns = @(
+        "libgst*.dll", "libgstreamer*.dll",
+        "libglib*.dll", "libgio*.dll", "libgobject*.dll", "libgmodule*.dll",
+        "libcrypto*.dll", "libssl*.dll",
+        "avcodec*.dll", "avformat*.dll", "avutil*.dll", "avfilter*.dll",
+        "libswresample*.dll", "libswscale*.dll", "libpostproc*.dll",
+        "libopenh264*.dll", "libfdk*.dll", "libfaad*.dll",
+        "libvorbis*.dll", "libogg*.dll", "libopus*.dll", "libvpx*.dll",
+        "libx264*.dll", "libx265*.dll",
+        "libmp3lame*.dll", "libflac*.dll", "libspeex*.dll",
+        "libwavpack*.dll", "libsndfile*.dll",
+        "libfreetype*.dll", "libharfbuzz*.dll", "libpng*.dll", "libjpeg*.dll",
+        "libwebp*.dll", "libtiff*.dll",
+        "libicuin*.dll", "libicuuc*.dll", "libicudt*.dll",
+        "libpcre2*.dll", "libzstd*.dll", "libdouble-conversion*.dll",
+        "libbrotli*.dll", "libbz2*.dll", "liblzma*.dll", "zlib*.dll",
+        "liborc*.dll", "libffi*.dll", "libintl*.dll", "libiconv*.dll",
+        "libplist*.dll", "libpugixml*.dll", "libxml2*.dll",
+        "libsoup*.dll", "libpsl*.dll", "libsqlite*.dll",
+        "libunistring*.dll", "libidn*.dll", "libtasn*.dll",
+        "libnettle*.dll", "libgmp*.dll", "libhogweed*.dll", "libp11*.dll",
+        "libcairo*.dll", "libpango*.dll", "libgdk_pixbuf*.dll",
+        "librsvg*.dll", "libpixman*.dll",
+        "libfontconfig*.dll", "libfribidi*.dll", "libthai*.dll",
+        "libdatrie*.dll", "libexpat*.dll",
+        "libcurl*.dll", "libnghttp*.dll", "libssh*.dll",
+        "libd3dcompiler*.dll", "libdrm*.dll", "libGLESv2*.dll", "libEGL*.dll",
+        "libgcc_s*.dll", "libstdc++*.dll", "libwinpthread*.dll", "libssp*.dll",
+        "libgomp*.dll", "libatomic*.dll",
+        "libtag*.dll", "libgraphene*.dll", "libepoxy*.dll",
+        "libass*.dll", "libcaca*.dll", "libmodplug*.dll", "libopenmpt*.dll",
+        "libsoundtouch*.dll", "libspandsp*.dll",
+        "libopenal*.dll", "libfluidsynth*.dll",
+        "libdca*.dll", "libfaac*.dll", "libmpcdec*.dll",
+        "libdvdnav*.dll", "libdvdread*.dll", "libbluray*.dll",
+        "libshout*.dll", "liblc3*.dll", "libsrtp*.dll",
+        "libiex*.dll", "libimath*.dll", "libopenexr*.dll",
+        "libzbar*.dll", "libvmaf*.dll", "libchromaprint*.dll",
+        "libaom*.dll", "libdav1d*.dll", "librav1e*.dll",
+        "libsvtav1enc*.dll", "libde265*.dll",
+        "librtmp*.dll", "libsrt*.dll", "libmicrodns*.dll", "libnice*.dll",
+        "libjson-glib*.dll", "libtheora*.dll", "libgsm*.dll", "libsbc*.dll",
+        "libtwolame*.dll", "libmpg123*.dll", "libgme*.dll",
+        "libopencore-amrnb*.dll", "libopencore-amrwb*.dll",
+        "libvo-amrwbenc*.dll", "libopenjp2*.dll", "liblcms2*.dll",
+        "libva*.dll", "libvidstab*.dll", "libvpl*.dll",
+        "libzimg*.dll", "libzvbi*.dll", "libdeflate*.dll",
+        "libplacebo*.dll", "libshaderc*.dll", "libunibreak*.dll",
+        "libsharpyuv*.dll", "liblerc*.dll", "libjxl*.dll", "libjbig*.dll",
+        "libgnutls*.dll", "libngtcp2*.dll",
+        "libreadline*.dll", "libportaudio*.dll",
+        "xvidcore*.dll", "sdl3*.dll", "libdvdcss*.dll",
+        "libmd4c*.dll", "libgraphite2*.dll"
     )
-    Write-Host "  MSYS2 runtime DLLs..." -ForegroundColor Gray
-    foreach ($dll in $RuntimeDlls) {
-        $src = Join-Path $MSys2Bin $dll
-        if (Test-Path $src) { Copy-Item $src $BuildDir -Force }
+    foreach ($patt in $patterns) {
+        Get-ChildItem $MSys2Bin -Filter $patt -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $BuildDir -Force
+        }
     }
 
-    $GstCoreDlls = Get-ChildItem $MSys2Bin -Filter "libgst*-1.0-0.dll" | ForEach-Object { $_.Name }
-    $GstOtherDlls = @(
-        "libglib-2.0-0.dll", "libgobject-2.0-0.dll", "libgio-2.0-0.dll",
-        "libgmodule-2.0-0.dll", "libintl-8.dll", "libiconv-2.dll",
-        "liborc-0.4-0.dll", "liborc-test-0.4-0.dll",
-        "libpcre2-8-0.dll", "libffi-8.dll", "zlib1.dll",
-        "libcrypto-3-x64.dll", "libssl-3-x64.dll",
-        "libplist-2.0.dll", "libpugixml.dll", "libbrotlicommon.dll",
-        "libbrotlidec.dll", "libbz2-1.dll", "liblzma-5.dll",
-        "libxml2-16.dll", "libpng16-16.dll", "libjpeg-8.dll",
-        "libtasn1-6.dll", "libnettle-8.dll", "libgmp-10.dll",
-        "libhogweed-6.dll", "libp11-kit-0.dll",
-        "libunistring-5.dll", "libidn2-0.dll",
-        "libsoup-3.0-0.dll", "libpsl-5.dll",
-        "libsqlite3-0.dll",
-        "libb2-1.dll", "libdouble-conversion.dll",
-        "libicuin78.dll", "libicuuc78.dll", "libicudt78.dll",
-        "libpcre2-16-0.dll", "libzstd.dll",
-        "libfreetype-6.dll", "libharfbuzz-0.dll", "libmd4c.dll",
-        "libgraphite2.dll", "libbrotlienc.dll",
-        "libnghttp2-14.dll", "libnghttp3-9.dll", "libngtcp2-9.dll",
-        "libcurl-4.dll", "libssh2-1.dll",
-        "libGLESv2.dll", "libEGL.dll",
-        "libdrm-2.dll", "libd3dcompiler_47.dll", "dxil.dll", "dxcompiler.dll"
-    )
-    Write-Host "  GStreamer + system DLLs..." -ForegroundColor Gray
-    foreach ($dll in ($GstCoreDlls + $GstOtherDlls)) {
-        $src = Join-Path $MSys2Bin $dll
-        if (Test-Path $src) { Copy-Item $src $BuildDir -Force }
-    }
-
+    Write-Host "  Copying GStreamer plugins..." -ForegroundColor Gray
     $PluginOutDir = Join-Path $BuildDir "gstreamer-plugins"
-    Write-Host "  GStreamer plugins..." -ForegroundColor Gray
     if (-not (Test-Path $PluginOutDir)) { New-Item -ItemType Directory -Path $PluginOutDir -Force | Out-Null }
     Get-ChildItem $PluginDir -Filter "*.dll" | Copy-Item -Destination $PluginOutDir -Force
 
     $LauncherSrc = Join-Path $ProjectRoot "scripts\launcher.cmd"
-    if (Test-Path $LauncherSrc) {
-        Copy-Item $LauncherSrc $BuildDir -Force
-        Write-Host "  Launcher: $BuildDir\launcher.cmd" -ForegroundColor Gray
-    }
+    if (Test-Path $LauncherSrc) { Copy-Item $LauncherSrc $BuildDir -Force }
 
-    Write-Host "  Done. Output: $BuildDir" -ForegroundColor Green
+    Write-Host "  Done. $((Get-ChildItem $BuildDir -Filter *.dll | Measure-Object).Count) DLLs, $((Get-ChildItem $PluginOutDir -Filter *.dll | Measure-Object).Count) plugins" -ForegroundColor Green
 }
 
 if ($Test) {
