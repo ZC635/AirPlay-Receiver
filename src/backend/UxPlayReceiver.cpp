@@ -631,43 +631,29 @@ bool UxPlayReceiver::restartDiscoveryBroadcast() {
     if (!m_raop || !m_raopPort) {
         return false;
     }
-    if (!m_dnssd) {
-        return startDiscoveryBroadcast(m_raopPort);
+
+    const bool shouldStartHttpd = m_raopHttpdStarted || m_state == ReceiverState::Discoverable;
+    if (m_raopHttpdStarted) {
+        raop_stop_httpd(static_cast<raop_t *>(m_raop));
+        m_raopHttpdStarted = false;
     }
 
-    auto *oldDnssd = static_cast<dnssd_t *>(m_dnssd);
-    dnssd_unregister_raop(oldDnssd);
-    dnssd_unregister_airplay(oldDnssd);
-
-    int dnssdError = 0;
-    const QByteArray serverName = m_config.serverName.toUtf8();
-    const QByteArray hwAddress = defaultHardwareAddress();
-    auto *newDnssd = dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(), &dnssdError, 0);
-    if (dnssdError || !newDnssd) {
-        dnssd_register_raop(oldDnssd, m_raopPort);
-        dnssd_register_airplay(oldDnssd, m_raopPort);
-        setError(QString("Failed to initialize DNS-SD: %1").arg(dnssdError));
+    stopDiscoveryBroadcast();
+    if (!startDiscoveryBroadcast(m_raopPort)) {
         return false;
     }
 
-    raop_set_dnssd(static_cast<raop_t *>(m_raop), newDnssd);
-    int registerError = dnssd_register_raop(newDnssd, m_raopPort);
-    if (registerError == 0) {
-        registerError = dnssd_register_airplay(newDnssd, m_raopPort);
-    }
-    if (registerError != 0) {
-        dnssd_unregister_raop(newDnssd);
-        dnssd_unregister_airplay(newDnssd);
-        dnssd_destroy(newDnssd);
-        raop_set_dnssd(static_cast<raop_t *>(m_raop), oldDnssd);
-        dnssd_register_raop(oldDnssd, m_raopPort);
-        dnssd_register_airplay(oldDnssd, m_raopPort);
-        setError(QString("Failed to register DNS-SD services: %1").arg(registerError));
-        return false;
+    if (shouldStartHttpd) {
+        unsigned short port = m_raopPort;
+        if (raop_start_httpd(static_cast<raop_t *>(m_raop), &port) < 0) {
+            setError("Failed to restart RAOP HTTP server");
+            return false;
+        }
+        raop_set_port(static_cast<raop_t *>(m_raop), port);
+        m_raopPort = port;
+        m_raopHttpdStarted = true;
     }
 
-    dnssd_destroy(oldDnssd);
-    m_dnssd = newDnssd;
     return true;
 }
 
