@@ -50,6 +50,7 @@ endif()
 
 add_executable(airplay_receiver src/app/main.cpp)
 target_link_libraries(airplay_receiver PRIVATE airplay_app_lib)
+set_target_properties(airplay_receiver PROPERTIES WIN32_EXECUTABLE TRUE)
 
 enable_testing()
 add_subdirectory(tests)

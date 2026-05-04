@@ -1,6 +1,8 @@
 #include "backend/UxPlayReceiver.h"
 
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QDir>
 #include <QMetaObject>
 #include <QPointer>
 #include <QTimer>
@@ -285,6 +287,11 @@ void UxPlayReceiver::start() {
     setState(ReceiverState::Starting);
     m_callbackGeneration.fetch_add(1);
     m_acceptingCallbacks.store(true);
+
+    const QString pluginDir = QCoreApplication::applicationDirPath() + "/gstreamer-plugins";
+    if (QDir(pluginDir).exists()) {
+        qputenv("GST_PLUGIN_PATH", pluginDir.toLocal8Bit());
+    }
 
     if (!gstreamer_init()) {
         m_acceptingCallbacks.store(false);
