@@ -97,6 +97,12 @@ if ($Deploy) {
     if (-not (Test-Path $PluginOutDir)) { New-Item -ItemType Directory -Path $PluginOutDir -Force | Out-Null }
     Get-ChildItem $PluginDir -Filter "*.dll" | Copy-Item -Destination $PluginOutDir -Force
 
+    $LauncherSrc = Join-Path $ProjectRoot "scripts\launcher.cmd"
+    if (Test-Path $LauncherSrc) {
+        Copy-Item $LauncherSrc $BuildDir -Force
+        Write-Host "  Launcher: $BuildDir\launcher.cmd" -ForegroundColor Gray
+    }
+
     Write-Host "  Done. Output: $BuildDir" -ForegroundColor Green
 }
 
