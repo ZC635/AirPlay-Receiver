@@ -245,6 +245,35 @@ private slots:
         QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("Desk Receiver"));
     }
 
+    void changedReceiverNameRestartsBroadcastWhenDiscoverable() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("Desk Receiver");
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(receiver.broadcastRestartCount, 1);
+        QCOMPARE(receiver.stopCount, 0);
+        QCOMPARE(receiver.startCount, 0);
+    }
+
     void connectedReceiverNameChangeCanDisconnectAndApply() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

@@ -41,15 +41,20 @@ public:
             return true;
         }
 
-        const bool wasRunning = m_state != ReceiverState::Idle;
-        if (wasRunning) {
+        if (m_state == ReceiverState::Connected) {
             stop();
+            m_receiverName = name;
+            appliedReceiverNames.append(name);
+            start();
+            return true;
         }
+
+        if (m_state != ReceiverState::Idle) {
+            ++broadcastRestartCount;
+        }
+
         m_receiverName = name;
         appliedReceiverNames.append(name);
-        if (wasRunning) {
-            start();
-        }
         return true;
     }
 
@@ -59,6 +64,7 @@ public:
 
     QStringList appliedReceiverNames;
     QStringList rejectedReceiverNames;
+    int broadcastRestartCount = 0;
     int startCount = 0;
     int stopCount = 0;
 
