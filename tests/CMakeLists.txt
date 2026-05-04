@@ -48,3 +48,31 @@ add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
 add_executable(VideoSurfaceWidgetTest app/VideoSurfaceWidgetTest.cpp)
 target_link_libraries(VideoSurfaceWidgetTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoSurfaceWidgetTest COMMAND VideoSurfaceWidgetTest)
+
+get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION_RELEASE)
+if(NOT AIRPLAY_QT_CORE_LOCATION)
+    get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION)
+endif()
+get_filename_component(AIRPLAY_QT_BIN_DIR "${AIRPLAY_QT_CORE_LOCATION}" DIRECTORY)
+get_filename_component(AIRPLAY_QT_PREFIX_DIR "${AIRPLAY_QT_BIN_DIR}" DIRECTORY)
+set(AIRPLAY_QT_PLUGIN_DIR "${AIRPLAY_QT_PREFIX_DIR}/share/qt6/plugins")
+
+set(AIRPLAY_QT_TESTS
+    MainWindowSmokeTest
+    AppSettingsTest
+    AppSettingsStoreTest
+    ToolbarWidgetTest
+    SettingsDialogTest
+    HotkeyServiceTest
+    DependencyDiagnosticsTest
+    AirPlayReceiverTest
+    UxPlayReceiverConfigTest
+    VideoRendererLifecycleTest
+    VideoSurfaceWidgetTest
+)
+foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
+    set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+endforeach()
