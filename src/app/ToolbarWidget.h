@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QString>
 #include <QSlider>
 #include <QToolButton>
 #include <QWidget>
@@ -12,6 +13,8 @@ public:
     int volume() const;
     void setVolume(int value);
     void setAlwaysOnTopChecked(bool checked);
+    void setVolumeShortcutTooltip(const QString &tooltip);
+    void setAlwaysOnTopShortcutTooltip(const QString &tooltip);
 
 signals:
     void volumeChanged(int value);

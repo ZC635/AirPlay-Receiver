@@ -50,3 +50,11 @@ void ToolbarWidget::setVolume(int value) {
 void ToolbarWidget::setAlwaysOnTopChecked(bool checked) {
     alwaysOnTopButton_->setChecked(checked);
 }
+
+void ToolbarWidget::setVolumeShortcutTooltip(const QString &tooltip) {
+    volumeButton_->setToolTip(tooltip);
+}
+
+void ToolbarWidget::setAlwaysOnTopShortcutTooltip(const QString &tooltip) {
+    alwaysOnTopButton_->setToolTip(tooltip);
+}

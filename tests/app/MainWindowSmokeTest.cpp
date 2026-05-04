@@ -43,6 +43,94 @@ private slots:
         QVERIFY(!window.isToolbarVisible());
     }
 
+    void connectedStateHidesToolbar() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        QVERIFY(window.isToolbarVisible());
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+
+        QVERIFY(!window.isToolbarVisible());
+    }
+
+    void leavingConnectedStateShowsToolbar() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+        QVERIFY(!window.isToolbarVisible());
+
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+
+        QVERIFY(window.isToolbarVisible());
+    }
+
+    void shortcutShowsToolbarWhileConnected() {
+        FakeHotkeyService hotkeys;
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+        QVERIFY(!window.isToolbarVisible());
+
+        emit hotkeys.activated(ShortcutAction::ToggleToolbar);
+
+        QVERIFY(window.isToolbarVisible());
+    }
+
+    void connectedStateSyncsStatusLabelWithToolbar() {
+        FakeHotkeyService hotkeys;
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QVERIFY(!label->isHidden());
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+
+        QVERIFY(!window.isToolbarVisible());
+        QVERIFY(label->isHidden());
+
+        emit hotkeys.activated(ShortcutAction::ToggleToolbar);
+
+        QVERIFY(window.isToolbarVisible());
+        QVERIFY(!label->isHidden());
+    }
+
+    void nonConnectedStatusLabelStaysVisibleWhenToolbarToggles() {
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys);
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QVERIFY(!label->isHidden());
+
+        emit hotkeys.activated(ShortcutAction::ToggleToolbar);
+
+        QVERIFY(!window.isToolbarVisible());
+        QVERIFY(!label->isHidden());
+    }
+
+    void statusLabelTextIsBlack() {
+        MainWindow window;
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+
+        QVERIFY(label->styleSheet().contains("color: black"));
+    }
+
+    void toolbarIsNativeSiblingOverlayForVideoSurface() {
+        MainWindow window;
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        auto *volumeButton = window.findChild<QToolButton *>("volumeButton");
+        QVERIFY(surface != nullptr);
+        QVERIFY(volumeButton != nullptr);
+
+        QWidget *toolbar = volumeButton->parentWidget();
+        QVERIFY(toolbar != nullptr);
+        QVERIFY(toolbar->parentWidget() != surface);
+        QVERIFY(toolbar->testAttribute(Qt::WA_NativeWindow));
+    }
+
     void registersDefaultShortcuts() {
         FakeHotkeyService hotkeys;
         const AppSettings settings = AppSettings::defaults();
@@ -67,6 +155,26 @@ private slots:
 
         QVERIFY(window.isAlwaysOnTopEnabled());
         QVERIFY(button->isChecked());
+    }
+
+    void toolbarButtonsShowShortcutTooltips() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setShortcut(ShortcutAction::VolumeUp, QKeySequence("Ctrl+Shift+U"));
+        settings.setShortcut(ShortcutAction::VolumeDown, QKeySequence("Ctrl+Shift+D"));
+        settings.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Shift+P"));
+
+        MainWindow window(settings, nullptr);
+        auto *volumeButton = window.findChild<QToolButton *>("volumeButton");
+        auto *pinButton = window.findChild<QToolButton *>("alwaysOnTopButton");
+        QVERIFY(volumeButton != nullptr);
+        QVERIFY(pinButton != nullptr);
+
+        const QString volumeUp = settings.shortcutFor(ShortcutAction::VolumeUp).toString(QKeySequence::NativeText);
+        const QString volumeDown = settings.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText);
+        const QString pin = settings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
+
+        QCOMPARE(volumeButton->toolTip(), QString("Volume: %1 / %2").arg(volumeUp, volumeDown));
+        QCOMPARE(pinButton->toolTip(), QString("Pin: %1").arg(pin));
     }
 
     void volumeSliderUpdatesReceiver() {

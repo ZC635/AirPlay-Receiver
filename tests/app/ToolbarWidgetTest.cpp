@@ -12,6 +12,19 @@ private slots:
         QVERIFY(toolbar.findChild<QToolButton *>("alwaysOnTopButton"));
         QVERIFY(toolbar.findChild<QToolButton *>("settingsButton"));
     }
+
+    void storesShortcutTooltips() {
+        ToolbarWidget toolbar;
+        toolbar.setVolumeShortcutTooltip("Volume: Ctrl+Alt+Up / Ctrl+Alt+Down");
+        toolbar.setAlwaysOnTopShortcutTooltip("Pin: Ctrl+Alt+T");
+
+        auto *volumeButton = toolbar.findChild<QToolButton *>("volumeButton");
+        auto *pinButton = toolbar.findChild<QToolButton *>("alwaysOnTopButton");
+        QVERIFY(volumeButton != nullptr);
+        QVERIFY(pinButton != nullptr);
+        QCOMPARE(volumeButton->toolTip(), QString("Volume: Ctrl+Alt+Up / Ctrl+Alt+Down"));
+        QCOMPARE(pinButton->toolTip(), QString("Pin: Ctrl+Alt+T"));
+    }
 };
 
 QTEST_MAIN(ToolbarWidgetTest)

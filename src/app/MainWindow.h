@@ -38,4 +38,5 @@ private:
     AppSettings settings_;
     QPointer<AirPlayReceiver> receiver_;
     QString currentError_;
+    bool receiverConnected_ = false;
 };

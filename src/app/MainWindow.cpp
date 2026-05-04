@@ -7,8 +7,9 @@
 #include "platform/HotkeyService.h"
 
 #include <algorithm>
+#include <QGridLayout>
+#include <QKeySequence>
 #include <QLabel>
-#include <QVBoxLayout>
 #include <QWidget>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -29,19 +30,27 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
 
     statusLabel_->setObjectName("receiverStatusLabel");
     statusLabel_->setAlignment(Qt::AlignCenter);
-    statusLabel_->setStyleSheet("color: white; background: transparent;");
+    statusLabel_->setStyleSheet("color: black; background: transparent;");
+    statusLabel_->setAttribute(Qt::WA_NativeWindow, true);
+    toolbar_->setAttribute(Qt::WA_NativeWindow, true);
 
-    auto *layout = new QVBoxLayout(videoSurface_);
+    auto *central = new QWidget(this);
+    auto *layout = new QGridLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setAlignment(Qt::AlignTop);
-    layout->addWidget(toolbar_);
-    layout->setAlignment(toolbar_, Qt::AlignTop | Qt::AlignRight);
-    layout->addStretch();
-    layout->addWidget(statusLabel_);
-    layout->setAlignment(statusLabel_, Qt::AlignCenter);
-    layout->addStretch();
+    layout->setSpacing(0);
+    layout->addWidget(videoSurface_, 0, 0);
+    layout->addWidget(statusLabel_, 0, 0, Qt::AlignCenter);
+    layout->addWidget(toolbar_, 0, 0, Qt::AlignTop | Qt::AlignRight);
 
-    setCentralWidget(videoSurface_);
+    setCentralWidget(central);
+    statusLabel_->raise();
+    toolbar_->raise();
+
+    const QString volumeUpShortcut = settings_.shortcutFor(ShortcutAction::VolumeUp).toString(QKeySequence::NativeText);
+    const QString volumeDownShortcut = settings_.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText);
+    const QString pinShortcut = settings_.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
+    toolbar_->setVolumeShortcutTooltip(QString("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
+    toolbar_->setAlwaysOnTopShortcutTooltip(QString("Pin: %1").arg(pinShortcut));
 
     connect(toolbar_, &ToolbarWidget::volumeChanged, this, &MainWindow::setReceiverVolume);
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
@@ -76,7 +85,15 @@ bool MainWindow::isToolbarVisible() const {
 }
 
 void MainWindow::toggleToolbarVisibility() {
-    toolbar_->setVisible(!isToolbarVisible());
+    const bool showToolbar = !isToolbarVisible();
+    toolbar_->setVisible(showToolbar);
+    statusLabel_->setVisible(receiverConnected_ ? showToolbar : true);
+    if (!statusLabel_->isHidden()) {
+        statusLabel_->raise();
+    }
+    if (showToolbar) {
+        toolbar_->raise();
+    }
 }
 
 bool MainWindow::isAlwaysOnTopEnabled() const {
@@ -126,6 +143,15 @@ void MainWindow::setReceiverVolume(int value) {
 }
 
 void MainWindow::updateReceiverState(ReceiverState state) {
+    receiverConnected_ = state == ReceiverState::Connected;
+    const bool showToolbar = !receiverConnected_;
+    toolbar_->setVisible(showToolbar);
+    statusLabel_->setVisible(showToolbar);
+    if (showToolbar) {
+        statusLabel_->raise();
+        toolbar_->raise();
+    }
+
     switch (state) {
     case ReceiverState::Connecting:
         statusLabel_->setText("Connecting");
