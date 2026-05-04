@@ -189,6 +189,10 @@ void MainWindow::handleReceiverNameChange(const QString &receiverName) {
         return;
     }
 
+    if (receiverName == pendingReceiverName_) {
+        return;
+    }
+
     if (receiver_ == nullptr) {
         activeReceiverName_ = receiverName;
         pendingReceiverName_.clear();

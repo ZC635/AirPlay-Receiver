@@ -318,6 +318,72 @@ private slots:
         QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
     }
 
+    void deferredReceiverNameDoesNotPromptAgainForUnchangedPendingName() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        receiver.forceState(ReceiverState::Connected);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(edit != nullptr);
+            edit->setText("Desk Receiver");
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                auto *no = box->button(QMessageBox::No);
+                QVERIFY(no != nullptr);
+                no->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("Desk Receiver"));
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+
+        bool promptedAgain = false;
+        QTimer::singleShot(0, [&promptedAgain] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *shortcutEdit = dialog->findChild<QKeySequenceEdit *>("shortcutEdit_toggleToolbar");
+            QVERIFY(shortcutEdit != nullptr);
+            shortcutEdit->setKeySequence(QKeySequence("Ctrl+Shift+H"));
+            QTimer::singleShot(0, [&promptedAgain] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                if (box == nullptr) {
+                    return;
+                }
+                promptedAgain = true;
+                auto *no = box->button(QMessageBox::No);
+                QVERIFY(no != nullptr);
+                no->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        QVERIFY(!promptedAgain);
+        const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(loaded.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+H"));
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+    }
+
     void deferredReceiverNameIsClearedWhenChangedBackToActiveName() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
