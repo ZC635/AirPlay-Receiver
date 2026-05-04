@@ -46,6 +46,9 @@ private:
     void setError(QString error);
 #if AIRPLAY_WITH_UXPLAY
     void cleanupUxPlay();
+    bool startDiscoveryBroadcast(unsigned short port);
+    void stopDiscoveryBroadcast();
+    bool restartDiscoveryBroadcast();
 #endif
 
     UxPlayReceiverConfig m_config;
@@ -59,6 +62,7 @@ private:
     void *m_logger = nullptr;
     bool m_raopHttpdInitialized = false;
     bool m_raopHttpdStarted = false;
+    unsigned short m_raopPort = 0;
     bool m_renderersStarted = false;
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_acceptingCallbacks = false;

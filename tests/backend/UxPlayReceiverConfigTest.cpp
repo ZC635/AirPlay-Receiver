@@ -75,6 +75,37 @@ private slots:
 #endif
     }
 
+    void discoverableReceiverNameChangeRestartsDiscoveryOnly() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Before Rename";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy stateSpy(&receiver, &AirPlayReceiver::stateChanged);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+        if (errorSpy.count() != 0) {
+            QFAIL(qPrintable(errorSpy.at(0).at(0).toString()));
+        }
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        stateSpy.clear();
+
+        QVERIFY(receiver.applyReceiverName("AirPlay Receiver After Rename"));
+
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver After Rename"));
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        for (const QList<QVariant> &signal : stateSpy) {
+            const auto state = signal.at(0).value<ReceiverState>();
+            QVERIFY(state != ReceiverState::Idle);
+            QVERIFY(state != ReceiverState::Starting);
+        }
+
+        receiver.stop();
+#endif
+    }
+
     void rtpShutdownRecreatesVideoRenderer() {
 #if AIRPLAY_WITH_UXPLAY
         qputenv("AIRPLAY_DEBUG_LOG", "1");

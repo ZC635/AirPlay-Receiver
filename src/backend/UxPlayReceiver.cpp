@@ -402,18 +402,6 @@ void UxPlayReceiver::start() {
     }
     m_raopHttpdInitialized = true;
 
-    int dnssdError = 0;
-    const QByteArray hwAddress = defaultHardwareAddress();
-    auto *dnssd = dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(), &dnssdError, 0);
-    if (dnssdError || !dnssd) {
-        setError(QString("Failed to initialize DNS-SD: %1").arg(dnssdError));
-        cleanupUxPlay();
-        setState(ReceiverState::Error);
-        return;
-    }
-    m_dnssd = dnssd;
-    raop_set_dnssd(raop, dnssd);
-
     unsigned short port = static_cast<unsigned short>(m_config.basePort > 0 ? m_config.basePort : kDynamicPort);
     raop_set_port(raop, port);
     if (raop_start_httpd(raop, &port) < 0) {
@@ -424,13 +412,9 @@ void UxPlayReceiver::start() {
     }
     m_raopHttpdStarted = true;
     raop_set_port(raop, port);
+    m_raopPort = port;
 
-    int registerError = dnssd_register_raop(dnssd, port);
-    if (registerError == 0) {
-        registerError = dnssd_register_airplay(dnssd, port);
-    }
-    if (registerError != 0) {
-        setError(QString("Failed to register DNS-SD services: %1").arg(registerError));
+    if (!startDiscoveryBroadcast(m_raopPort)) {
         cleanupUxPlay();
         setState(ReceiverState::Error);
         return;
@@ -485,20 +469,33 @@ bool UxPlayReceiver::applyReceiverName(const QString &name) {
         return true;
     }
 
-    const bool wasRunning = m_state != ReceiverState::Idle;
-    if (wasRunning) {
-        stop();
-    }
-
+    const QString previousName = m_config.serverName;
     m_config.serverName = trimmed;
 
-    if (wasRunning) {
+    if (m_state == ReceiverState::Idle) {
+        return true;
+    }
+
+    if (m_state == ReceiverState::Connected) {
+        stop();
         start();
         if (m_state == ReceiverState::Error) {
+            m_config.serverName = previousName;
             return false;
         }
+        return true;
+    }
+
+#if AIRPLAY_WITH_UXPLAY
+    if (!restartDiscoveryBroadcast()) {
+        m_config.serverName = previousName;
+        restartDiscoveryBroadcast();
+        return false;
     }
     return true;
+#else
+    return true;
+#endif
 }
 
 #if AIRPLAY_WITH_UXPLAY
@@ -585,6 +582,95 @@ void UxPlayReceiver::setError(QString error) {
 }
 
 #if AIRPLAY_WITH_UXPLAY
+bool UxPlayReceiver::startDiscoveryBroadcast(unsigned short port) {
+    if (!m_raop) {
+        setError("Cannot register DNS-SD services before RAOP initialization");
+        return false;
+    }
+    if (m_dnssd) {
+        return true;
+    }
+
+    int dnssdError = 0;
+    const QByteArray serverName = m_config.serverName.toUtf8();
+    const QByteArray hwAddress = defaultHardwareAddress();
+    auto *dnssd = dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(), &dnssdError, 0);
+    if (dnssdError || !dnssd) {
+        setError(QString("Failed to initialize DNS-SD: %1").arg(dnssdError));
+        return false;
+    }
+
+    m_dnssd = dnssd;
+    raop_set_dnssd(static_cast<raop_t *>(m_raop), dnssd);
+
+    int registerError = dnssd_register_raop(dnssd, port);
+    if (registerError == 0) {
+        registerError = dnssd_register_airplay(dnssd, port);
+    }
+    if (registerError != 0) {
+        setError(QString("Failed to register DNS-SD services: %1").arg(registerError));
+        return false;
+    }
+
+    return true;
+}
+
+void UxPlayReceiver::stopDiscoveryBroadcast() {
+    if (!m_dnssd) {
+        return;
+    }
+
+    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
+    dnssd_unregister_raop(dnssd);
+    dnssd_unregister_airplay(dnssd);
+    dnssd_destroy(dnssd);
+    m_dnssd = nullptr;
+}
+
+bool UxPlayReceiver::restartDiscoveryBroadcast() {
+    if (!m_raop || !m_raopPort) {
+        return false;
+    }
+    if (!m_dnssd) {
+        return startDiscoveryBroadcast(m_raopPort);
+    }
+
+    auto *oldDnssd = static_cast<dnssd_t *>(m_dnssd);
+    dnssd_unregister_raop(oldDnssd);
+    dnssd_unregister_airplay(oldDnssd);
+
+    int dnssdError = 0;
+    const QByteArray serverName = m_config.serverName.toUtf8();
+    const QByteArray hwAddress = defaultHardwareAddress();
+    auto *newDnssd = dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(), &dnssdError, 0);
+    if (dnssdError || !newDnssd) {
+        dnssd_register_raop(oldDnssd, m_raopPort);
+        dnssd_register_airplay(oldDnssd, m_raopPort);
+        setError(QString("Failed to initialize DNS-SD: %1").arg(dnssdError));
+        return false;
+    }
+
+    raop_set_dnssd(static_cast<raop_t *>(m_raop), newDnssd);
+    int registerError = dnssd_register_raop(newDnssd, m_raopPort);
+    if (registerError == 0) {
+        registerError = dnssd_register_airplay(newDnssd, m_raopPort);
+    }
+    if (registerError != 0) {
+        dnssd_unregister_raop(newDnssd);
+        dnssd_unregister_airplay(newDnssd);
+        dnssd_destroy(newDnssd);
+        raop_set_dnssd(static_cast<raop_t *>(m_raop), oldDnssd);
+        dnssd_register_raop(oldDnssd, m_raopPort);
+        dnssd_register_airplay(oldDnssd, m_raopPort);
+        setError(QString("Failed to register DNS-SD services: %1").arg(registerError));
+        return false;
+    }
+
+    dnssd_destroy(oldDnssd);
+    m_dnssd = newDnssd;
+    return true;
+}
+
 void UxPlayReceiver::cleanupUxPlay() {
     m_acceptingCallbacks.store(false);
     m_callbackGeneration.fetch_add(1);
@@ -599,12 +685,8 @@ void UxPlayReceiver::cleanupUxPlay() {
         raop_stop_httpd(static_cast<raop_t *>(m_raop));
         m_raopHttpdStarted = false;
     }
-    if (m_dnssd) {
-        dnssd_unregister_raop(static_cast<dnssd_t *>(m_dnssd));
-        dnssd_unregister_airplay(static_cast<dnssd_t *>(m_dnssd));
-        dnssd_destroy(static_cast<dnssd_t *>(m_dnssd));
-        m_dnssd = nullptr;
-    }
+    stopDiscoveryBroadcast();
+    m_raopPort = 0;
     if (m_raop) {
         raop_destroy(static_cast<raop_t *>(m_raop));
         m_raop = nullptr;
