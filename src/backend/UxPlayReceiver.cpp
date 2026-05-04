@@ -3,8 +3,10 @@
 #include <QByteArray>
 #include <QMetaObject>
 #include <QPointer>
+#include <QTimer>
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
@@ -19,7 +21,7 @@
 namespace {
 constexpr unsigned short kDynamicPort = 0;
 constexpr bool kAudioSync = false;
-constexpr bool kVideoSync = true;
+constexpr bool kVideoSync = false;
 constexpr unsigned int kPlaybinVersion = 3;
 
 QByteArray defaultDeviceId() {
@@ -40,13 +42,14 @@ double volumeFromAirPlayDb(float volume) {
     return std::pow(10.0, 0.05 * volume);
 }
 
-void logCallback(void *, int, const char *) {}
+void logCallback(void *, int level, const char *msg) {
+}
 
-void audioProcess(void *, raop_ntp_t *, audio_decode_struct *data) {
+void audioProcess(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
     audio_renderer_render_buffer(data->data, &data->data_len, &data->seqnum, &data->ntp_time_remote);
 }
 
-void videoProcess(void *, raop_ntp_t *, video_decode_struct *data) {
+void videoProcess(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
     video_renderer_render_buffer(data->data, &data->data_len, &data->nal_count, &data->ntp_time_remote);
 }
 
@@ -99,7 +102,7 @@ void connInit(void *cls) {
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
         if (guardedReceiver) {
-            guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Connecting, generation);
+            guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Connected, generation);
         }
     }, Qt::QueuedConnection);
 }
@@ -127,8 +130,9 @@ void reportClientRequest(void *, char *, char *, char *, bool *admit) {
     *admit = true;
 }
 
-int videoSetCodec(void *, video_codec_t) {
-    return 0;
+int videoSetCodec(void *, video_codec_t codec) {
+    bool video_is_h265 = (codec == VIDEO_CODEC_H265);
+    return video_renderer_choose_codec(false, video_is_h265);
 }
 } // namespace
 #endif
@@ -180,6 +184,12 @@ void UxPlayReceiver::start() {
     video_renderer_start();
     audio_renderer_init(logger, audioSink.constData(), &kAudioSync, &kVideoSync, "");
     m_renderersStarted = true;
+
+    m_glibTimer = new QTimer();
+    QObject::connect(static_cast<QTimer *>(m_glibTimer), &QTimer::timeout, [] {
+        g_main_context_iteration(g_main_context_default(), FALSE);
+    });
+    static_cast<QTimer *>(m_glibTimer)->start(16);
 
     raop_callbacks_t callbacks;
     std::memset(&callbacks, 0, sizeof(callbacks));
@@ -352,6 +362,12 @@ void UxPlayReceiver::setError(QString error) {
 void UxPlayReceiver::cleanupUxPlay() {
     m_acceptingCallbacks.store(false);
     m_callbackGeneration.fetch_add(1);
+
+    if (m_glibTimer) {
+        static_cast<QTimer *>(m_glibTimer)->stop();
+        delete static_cast<QTimer *>(m_glibTimer);
+        m_glibTimer = nullptr;
+    }
 
     if (m_raop && m_raopHttpdStarted) {
         raop_stop_httpd(static_cast<raop_t *>(m_raop));

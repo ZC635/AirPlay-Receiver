@@ -55,5 +55,6 @@ private:
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_acceptingCallbacks = false;
     std::atomic<quint64> m_callbackGeneration = 0;
+    QObject *m_glibTimer = nullptr;
 #endif
 };
