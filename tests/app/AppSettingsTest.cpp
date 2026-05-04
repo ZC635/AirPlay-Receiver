@@ -21,6 +21,20 @@ private slots:
         settings.setShortcut(ShortcutAction::ToggleToolbar, duplicate);
         QVERIFY(!settings.validateShortcuts().isEmpty());
     }
+
+    void defaultVolumeIsMax() {
+        const AppSettings settings = AppSettings::defaults();
+        QCOMPARE(settings.volume(), 100);
+    }
+
+    void clampsVolumeRange() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setVolume(-5);
+        QCOMPARE(settings.volume(), 0);
+
+        settings.setVolume(125);
+        QCOMPARE(settings.volume(), 100);
+    }
 };
 
 QTEST_MAIN(AppSettingsTest)

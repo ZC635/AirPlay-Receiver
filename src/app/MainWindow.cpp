@@ -1,5 +1,6 @@
 #include "app/MainWindow.h"
 
+#include "app/AppSettingsStore.h"
 #include "app/SettingsDialog.h"
 #include "app/ToolbarWidget.h"
 #include "app/VideoSurfaceWidget.h"
@@ -11,20 +12,26 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QWidget>
+#include <utility>
 
 MainWindow::MainWindow(QWidget *parent)
     : MainWindow(AppSettings::defaults(), nullptr, parent) {}
 
 MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, QWidget *parent)
-    : MainWindow(std::move(settings), hotkeys, nullptr, parent) {}
+    : MainWindow(std::move(settings), hotkeys, nullptr, QString(), parent) {}
 
 MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QWidget *parent)
+    : MainWindow(std::move(settings), hotkeys, receiver, QString(), parent) {}
+
+MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QString settingsPath, QWidget *parent)
     : QMainWindow(parent),
       toolbar_(new ToolbarWidget(this)),
       statusLabel_(new QLabel("Ready for AirPlay", this)),
       videoSurface_(new VideoSurfaceWidget(this)),
       settings_(std::move(settings)),
-      receiver_(receiver) {
+      hotkeys_(hotkeys),
+      receiver_(receiver),
+      settingsPath_(std::move(settingsPath)) {
     setWindowTitle("AirPlay Receiver");
     resize(960, 540);
 
@@ -46,11 +53,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     statusLabel_->raise();
     toolbar_->raise();
 
-    const QString volumeUpShortcut = settings_.shortcutFor(ShortcutAction::VolumeUp).toString(QKeySequence::NativeText);
-    const QString volumeDownShortcut = settings_.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText);
-    const QString pinShortcut = settings_.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
-    toolbar_->setVolumeShortcutTooltip(QString("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
-    toolbar_->setAlwaysOnTopShortcutTooltip(QString("Pin: %1").arg(pinShortcut));
+    applyShortcutTooltips();
 
     connect(toolbar_, &ToolbarWidget::volumeChanged, this, &MainWindow::setReceiverVolume);
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
@@ -72,11 +75,11 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
         });
     }
 
-    if (hotkeys != nullptr) {
-        for (const auto &binding : settings_.shortcuts()) {
-            hotkeys->registerShortcut(binding.action, binding.sequence);
-        }
-        connect(hotkeys, &HotkeyService::activated, this, &MainWindow::handleShortcut);
+    setVolume(settings_.volume());
+
+    registerHotkeys();
+    if (hotkeys_ != nullptr) {
+        connect(hotkeys_, &HotkeyService::activated, this, &MainWindow::handleShortcut);
     }
 }
 
@@ -136,9 +139,42 @@ void MainWindow::handleShortcut(ShortcutAction action) {
     }
 }
 
+void MainWindow::applyShortcutTooltips() {
+    const QString volumeUpShortcut = settings_.shortcutFor(ShortcutAction::VolumeUp).toString(QKeySequence::NativeText);
+    const QString volumeDownShortcut = settings_.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText);
+    const QString pinShortcut = settings_.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
+    toolbar_->setVolumeShortcutTooltip(QString("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
+    toolbar_->setAlwaysOnTopShortcutTooltip(QString("Pin: %1").arg(pinShortcut));
+}
+
+bool MainWindow::registerHotkeys() {
+    if (hotkeys_ == nullptr) {
+        return true;
+    }
+
+    bool registeredAll = true;
+    hotkeys_->unregisterAll();
+    for (const auto &binding : settings_.shortcuts()) {
+        registeredAll = hotkeys_->registerShortcut(binding.action, binding.sequence) && registeredAll;
+    }
+    return registeredAll;
+}
+
+bool MainWindow::saveSettings() const {
+    if (settingsPath_.isEmpty()) {
+        return true;
+    }
+    return AppSettingsStore(settingsPath_).save(settings_);
+}
+
 void MainWindow::setReceiverVolume(int value) {
+    const int clamped = std::clamp(value, 0, 100);
+    settings_.setVolume(clamped);
     if (receiver_ != nullptr) {
-        receiver_->setVolume(std::clamp(value, 0, 100) / 100.0);
+        receiver_->setVolume(clamped / 100.0);
+    }
+    if (!saveSettings()) {
+        statusLabel_->setText("Could not save settings");
     }
 }
 
@@ -172,5 +208,22 @@ void MainWindow::updateReceiverState(ReceiverState state) {
 
 void MainWindow::showSettingsDialog() {
     SettingsDialog dialog(settings_, this);
-    dialog.exec();
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const AppSettings previousSettings = settings_;
+    settings_ = dialog.settings();
+    if (!registerHotkeys()) {
+        settings_ = previousSettings;
+        registerHotkeys();
+        statusLabel_->setText("Could not register one or more shortcuts");
+        return;
+    }
+
+    applyShortcutTooltips();
+    setVolume(settings_.volume());
+    if (!saveSettings()) {
+        statusLabel_->setText("Could not save settings");
+    }
 }

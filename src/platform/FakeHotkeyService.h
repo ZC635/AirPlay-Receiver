@@ -14,6 +14,11 @@ public:
     using HotkeyService::HotkeyService;
 
     bool registerShortcut(ShortcutAction action, const QKeySequence &sequence) override {
+        for (const Registration &registration : rejectedRegistrations) {
+            if (registration.action == action && registration.sequence == sequence) {
+                return false;
+            }
+        }
         registrations.append({action, sequence});
         return true;
     }
@@ -23,4 +28,5 @@ public:
     }
 
     QVector<Registration> registrations;
+    QVector<Registration> rejectedRegistrations;
 };

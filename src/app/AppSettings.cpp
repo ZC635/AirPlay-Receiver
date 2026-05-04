@@ -1,5 +1,6 @@
 #include "app/AppSettings.h"
 
+#include <algorithm>
 #include <QSet>
 
 bool AppKeySequence::isValid() const {
@@ -29,6 +30,14 @@ AppKeySequence AppSettings::shortcutFor(ShortcutAction action) const {
 
 void AppSettings::setShortcut(ShortcutAction action, const QKeySequence &sequence) {
     shortcuts_.insert(static_cast<int>(action), sequence);
+}
+
+int AppSettings::volume() const {
+    return volume_;
+}
+
+void AppSettings::setVolume(int value) {
+    volume_ = std::clamp(value, 0, 100);
 }
 
 QStringList AppSettings::validateShortcuts() const {

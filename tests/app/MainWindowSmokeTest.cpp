@@ -1,6 +1,8 @@
 #include <QtTest/QtTest>
 #include "app/AppSettings.h"
+#include "app/AppSettingsStore.h"
 #include "app/MainWindow.h"
+#include "app/SettingsDialog.h"
 #include "app/ShortcutAction.h"
 #include "app/VideoSurfaceWidget.h"
 #include "backend/FakeAirPlayReceiver.h"
@@ -8,8 +10,12 @@
 #include "platform/FakeHotkeyService.h"
 
 #include <QLabel>
+#include <QKeySequenceEdit>
 #include <QSlider>
+#include <QTemporaryDir>
+#include <QTimer>
 #include <QToolButton>
+#include <algorithm>
 #include <memory>
 
 class MainWindowSmokeTest : public QObject {
@@ -186,6 +192,131 @@ private slots:
         slider->setValue(40);
 
         QCOMPARE(receiver.volume(), 0.40);
+    }
+
+    void appliesLoadedVolume() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setVolume(45);
+        FakeAirPlayReceiver receiver;
+
+        MainWindow window(settings, nullptr, &receiver);
+
+        auto *slider = window.findChild<QSlider *>("volumeSlider");
+        QVERIFY(slider != nullptr);
+        QCOMPARE(slider->value(), 45);
+        QCOMPARE(receiver.volume(), 0.45);
+    }
+
+    void savesVolumeChanges() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        MainWindow window(settings, nullptr, nullptr, path);
+
+        auto *slider = window.findChild<QSlider *>("volumeSlider");
+        QVERIFY(slider != nullptr);
+        slider->setValue(40);
+
+        AppSettingsStore store(path);
+        QCOMPARE(store.loadOrDefaults().volume(), 40);
+    }
+
+    void acceptedSettingsDialogUpdatesHotkeysAndSavesShortcuts() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys, nullptr, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        bool edited = false;
+        QTimer::singleShot(0, [&edited] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            if (dialog == nullptr) {
+                return;
+            }
+            auto *edit = dialog->findChild<QKeySequenceEdit *>("shortcutEdit_toggleToolbar");
+            if (edit == nullptr) {
+                return;
+            }
+            edit->setKeySequence(QKeySequence("Ctrl+Shift+H"));
+            edited = true;
+            dialog->accept();
+        });
+
+        button->click();
+
+        QVERIFY(edited);
+        const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+H"));
+        QCOMPARE(hotkeys.registrations.size(), AppSettings::defaults().shortcuts().size());
+        const auto toggleToolbar = std::find_if(hotkeys.registrations.cbegin(), hotkeys.registrations.cend(), [](const auto &registration) {
+            return registration.action == ShortcutAction::ToggleToolbar;
+        });
+        QVERIFY(toggleToolbar != hotkeys.registrations.cend());
+        QCOMPARE(toggleToolbar->sequence, QKeySequence("Ctrl+Shift+H"));
+    }
+
+    void rejectedHotkeyRegistrationDoesNotSaveDialogSettings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeHotkeyService hotkeys;
+        hotkeys.rejectedRegistrations.append({ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+H")});
+        MainWindow window(AppSettings::defaults(), &hotkeys, nullptr, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        bool edited = false;
+        QTimer::singleShot(0, [&edited] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            if (dialog == nullptr) {
+                return;
+            }
+            auto *edit = dialog->findChild<QKeySequenceEdit *>("shortcutEdit_toggleToolbar");
+            if (edit == nullptr) {
+                return;
+            }
+            edit->setKeySequence(QKeySequence("Ctrl+Shift+H"));
+            edited = true;
+            dialog->accept();
+        });
+
+        button->click();
+
+        QVERIFY(edited);
+        const AppSettings defaults = AppSettings::defaults();
+        const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), defaults.shortcutFor(ShortcutAction::ToggleToolbar));
+
+        const auto toggleToolbar = std::find_if(hotkeys.registrations.cbegin(), hotkeys.registrations.cend(), [](const auto &registration) {
+            return registration.action == ShortcutAction::ToggleToolbar;
+        });
+        QVERIFY(toggleToolbar != hotkeys.registrations.cend());
+        QCOMPARE(toggleToolbar->sequence, defaults.shortcutFor(ShortcutAction::ToggleToolbar));
+
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QVERIFY(label->text().contains("Could not register"));
+    }
+
+    void saveFailureUpdatesStatusLabel() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, dir.path());
+        auto *slider = window.findChild<QSlider *>("volumeSlider");
+        QVERIFY(slider != nullptr);
+        slider->setValue(40);
+
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QVERIFY(label->text().contains("Could not save settings"));
     }
 
     void volumeChangeAfterReceiverDeletedDoesNotCrash() {

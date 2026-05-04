@@ -20,6 +20,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     MainWindow(AppSettings settings, HotkeyService *hotkeys, QWidget *parent = nullptr);
     MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QWidget *parent = nullptr);
+    MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QString settingsPath, QWidget *parent = nullptr);
     bool isToolbarVisible() const;
     void toggleToolbarVisibility();
     bool isAlwaysOnTopEnabled() const;
@@ -28,6 +29,9 @@ public:
 
 private:
     void handleShortcut(ShortcutAction action);
+    void applyShortcutTooltips();
+    bool registerHotkeys();
+    bool saveSettings() const;
     void setReceiverVolume(int value);
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
@@ -36,7 +40,9 @@ private:
     QLabel *statusLabel_;
     VideoSurfaceWidget *videoSurface_;
     AppSettings settings_;
+    QPointer<HotkeyService> hotkeys_;
     QPointer<AirPlayReceiver> receiver_;
     QString currentError_;
+    QString settingsPath_;
     bool receiverConnected_ = false;
 };

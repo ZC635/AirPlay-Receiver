@@ -1,6 +1,8 @@
 #include <QApplication>
+#include <QCoreApplication>
 
 #include "app/AppSettings.h"
+#include "app/AppSettingsStore.h"
 #include "app/MainWindow.h"
 #include "backend/UxPlayReceiver.h"
 #include "platform/WindowsHotkeyService.h"
@@ -8,6 +10,8 @@
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     WindowsHotkeyService hotkeys;
+    const QString settingsPath = QCoreApplication::applicationDirPath() + "/airplay-settings.json";
+    const AppSettings settings = AppSettingsStore(settingsPath).loadOrDefaults();
 
 #if AIRPLAY_WITH_UXPLAY
     UxPlayReceiverConfig config;
@@ -17,10 +21,10 @@ int main(int argc, char *argv[]) {
     QObject::connect(&app, &QApplication::aboutToQuit, &receiver, [&receiver] {
         receiver.stop();
     });
-    MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
+    MainWindow window(settings, &hotkeys, &receiver, settingsPath);
     receiver.start();
 #else
-    MainWindow window(AppSettings::defaults(), &hotkeys);
+    MainWindow window(settings, &hotkeys, nullptr, settingsPath);
 #endif
 
     window.show();

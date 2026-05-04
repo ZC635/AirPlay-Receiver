@@ -43,6 +43,36 @@ private slots:
         QCOMPARE(shortcuts.value("toggleToolbar").toString(), QKeySequence("Ctrl+Shift+H").toString(QKeySequence::PortableText));
     }
 
+    void savesAndLoadsVolume() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setVolume(35);
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.volume(), 35);
+    }
+
+    void malformedVolumeFallsBackToDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"volume":"loud"})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.volume(), AppSettings::defaults().volume());
+    }
+
     void saveReturnsFalseForDirectoryPath() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

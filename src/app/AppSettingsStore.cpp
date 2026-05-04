@@ -37,6 +37,10 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
             settings.setShortcut(binding.action, QKeySequence::fromString(value, QKeySequence::PortableText));
         }
     }
+    const QJsonValue volume = root.value("volume");
+    if (volume.isDouble()) {
+        settings.setVolume(volume.toInt());
+    }
     return settings;
 }
 
@@ -48,6 +52,7 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
 
     QJsonObject root;
     root.insert("shortcuts", shortcuts);
+    root.insert("volume", settings.volume());
 
     QSaveFile file(path_);
     if (!file.open(QIODevice::WriteOnly)) {

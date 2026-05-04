@@ -22,8 +22,11 @@ public:
     QVector<ShortcutBinding> shortcuts() const;
     AppKeySequence shortcutFor(ShortcutAction action) const;
     void setShortcut(ShortcutAction action, const QKeySequence &sequence);
+    int volume() const;
+    void setVolume(int value);
     QStringList validateShortcuts() const;
 
 private:
     QHash<int, QKeySequence> shortcuts_;
+    int volume_ = 100;
 };

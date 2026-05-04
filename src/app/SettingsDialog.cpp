@@ -1,7 +1,11 @@
 #include "app/SettingsDialog.h"
 
+#include "platform/WindowsHotkeyService.h"
+
 #include <QDialogButtonBox>
 #include <QHeaderView>
+#include <QKeySequenceEdit>
+#include <QLabel>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -17,33 +21,95 @@ constexpr ShortcutRow kShortcutRows[] = {
     {ShortcutAction::VolumeDown, "Volume down"},
     {ShortcutAction::ToggleToolbar, "Toggle toolbar"},
 };
+
+QString keyFor(ShortcutAction action) {
+    switch (action) {
+    case ShortcutAction::ToggleAlwaysOnTop: return "toggleAlwaysOnTop";
+    case ShortcutAction::VolumeUp: return "volumeUp";
+    case ShortcutAction::VolumeDown: return "volumeDown";
+    case ShortcutAction::ToggleToolbar: return "toggleToolbar";
+    }
+    return {};
+}
 }
 
 SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
-    : QDialog(parent) {
+    : QDialog(parent),
+      settings_(settings),
+      table_(new QTableWidget(this)),
+      errorLabel_(new QLabel(this)) {
     setWindowTitle("Settings");
 
-    auto *table = new QTableWidget(this);
-    table->setObjectName("shortcutTable");
-    table->setColumnCount(2);
-    table->setHorizontalHeaderLabels({"Action", "Shortcut"});
-    table->setRowCount(static_cast<int>(std::size(kShortcutRows)));
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table_->setObjectName("shortcutTable");
+    table_->setColumnCount(2);
+    table_->setHorizontalHeaderLabels({"Action", "Shortcut"});
+    table_->setRowCount(static_cast<int>(std::size(kShortcutRows)));
+    table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table_->setSelectionMode(QAbstractItemView::NoSelection);
 
     for (int row = 0; row < static_cast<int>(std::size(kShortcutRows)); ++row) {
         const ShortcutRow &shortcutRow = kShortcutRows[row];
-        table->setItem(row, 0, new QTableWidgetItem(shortcutRow.label));
-        table->setItem(row, 1, new QTableWidgetItem(settings.shortcutFor(shortcutRow.action).toString(QKeySequence::NativeText)));
+        auto *labelItem = new QTableWidgetItem(shortcutRow.label);
+        labelItem->setFlags(labelItem->flags() & ~Qt::ItemIsEditable);
+        table_->setItem(row, 0, labelItem);
+
+        auto *edit = new QKeySequenceEdit(settings.shortcutFor(shortcutRow.action), table_);
+        edit->setObjectName(QString("shortcutEdit_%1").arg(keyFor(shortcutRow.action)));
+        table_->setCellWidget(row, 1, edit);
+        shortcutEdits_.insert(static_cast<int>(shortcutRow.action), edit);
     }
 
-    table->horizontalHeader()->setStretchLastSection(true);
+    table_->horizontalHeader()->setStretchLastSection(true);
+
+    errorLabel_->setObjectName("settingsErrorLabel");
+    errorLabel_->setStyleSheet("color: #b00020;");
+    errorLabel_->setWordWrap(true);
+    errorLabel_->hide();
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(table);
+    layout->addWidget(table_);
+    layout->addWidget(errorLabel_);
     layout->addWidget(buttons);
+}
+
+AppSettings SettingsDialog::settings() const {
+    return settings_;
+}
+
+void SettingsDialog::accept() {
+    AppSettings candidate = settings_;
+    for (const ShortcutRow &shortcutRow : kShortcutRows) {
+        auto *edit = shortcutEdits_.value(static_cast<int>(shortcutRow.action), nullptr);
+        if (edit != nullptr) {
+            candidate.setShortcut(shortcutRow.action, edit->keySequence());
+        }
+    }
+
+    QStringList errors = candidate.validateShortcuts();
+    for (const ShortcutRow &shortcutRow : kShortcutRows) {
+        const QKeySequence sequence = candidate.shortcutFor(shortcutRow.action);
+        if (sequence.count() > 1) {
+            errors.push_back(QString("Shortcut for %1 must use a single key combination")
+                                 .arg(shortcutRow.label));
+            continue;
+        }
+        if (!sequence.isEmpty() && !WindowsHotkeyService::toNativeHotkey(sequence).has_value()) {
+            errors.push_back(QString("Unsupported shortcut for %1: %2")
+                                 .arg(shortcutRow.label, sequence.toString(QKeySequence::NativeText)));
+        }
+    }
+    if (!errors.isEmpty()) {
+        errorLabel_->setText(errors.join('\n'));
+        errorLabel_->show();
+        return;
+    }
+
+    errorLabel_->clear();
+    errorLabel_->hide();
+    settings_ = candidate;
+    QDialog::accept();
 }
