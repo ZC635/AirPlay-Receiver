@@ -84,7 +84,16 @@ if ($Deploy) {
         "libhogweed-6.dll", "libp11-kit-0.dll",
         "libunistring-5.dll", "libidn2-0.dll",
         "libsoup-3.0-0.dll", "libpsl-5.dll",
-        "libsqlite3-0.dll"
+        "libsqlite3-0.dll",
+        "libb2-1.dll", "libdouble-conversion.dll",
+        "libicuin78.dll", "libicuuc78.dll", "libicudt78.dll",
+        "libpcre2-16-0.dll", "libzstd.dll",
+        "libfreetype-6.dll", "libharfbuzz-0.dll", "libmd4c.dll",
+        "libgraphite2.dll", "libbrotlienc.dll",
+        "libnghttp2-14.dll", "libnghttp3-9.dll", "libngtcp2-9.dll",
+        "libcurl-4.dll", "libssh2-1.dll",
+        "libGLESv2.dll", "libEGL.dll",
+        "libdrm-2.dll", "libd3dcompiler_47.dll", "dxil.dll", "dxcompiler.dll"
     )
     Write-Host "  GStreamer + system DLLs..." -ForegroundColor Gray
     foreach ($dll in ($GstCoreDlls + $GstOtherDlls)) {
