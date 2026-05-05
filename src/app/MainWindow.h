@@ -34,7 +34,7 @@ private:
     bool saveSettings() const;
     void setReceiverVolume(int value);
     void handleReceiverNameChange(const QString &receiverName);
-    bool applyReceiverNameNow(const QString &receiverName);
+    bool applyReceiverNameNow(const QString &receiverName, bool revertOnFailure = true);
     void revertReceiverNameToDefaultAfterApplyFailure();
     void applyPendingReceiverNameIfNeeded(bool wasRenameBlocked);
     void updateReceiverState(ReceiverState state);

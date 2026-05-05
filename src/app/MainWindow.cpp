@@ -216,7 +216,7 @@ void MainWindow::handleReceiverNameChange(const QString &receiverName) {
     applyReceiverNameNow(receiverName);
 }
 
-bool MainWindow::applyReceiverNameNow(const QString &receiverName) {
+bool MainWindow::applyReceiverNameNow(const QString &receiverName, bool revertOnFailure) {
     if (receiver_ == nullptr) {
         activeReceiverName_ = receiverName;
         return true;
@@ -227,7 +227,9 @@ bool MainWindow::applyReceiverNameNow(const QString &receiverName) {
         return true;
     }
 
-    revertReceiverNameToDefaultAfterApplyFailure();
+    if (revertOnFailure) {
+        revertReceiverNameToDefaultAfterApplyFailure();
+    }
     return false;
 }
 
@@ -253,8 +255,12 @@ void MainWindow::applyPendingReceiverNameIfNeeded(bool wasRenameBlocked) {
     }
 
     const QString receiverName = pendingReceiverName_;
-    pendingReceiverName_.clear();
-    applyReceiverNameNow(receiverName);
+    if (applyReceiverNameNow(receiverName, /*revertOnFailure=*/false)) {
+        pendingReceiverName_.clear();
+    } else if (receiver_ != nullptr) {
+        statusLabel_->setText(QString("Could not apply receiver name \"%1\"; will retry")
+                                 .arg(receiverName));
+    }
 }
 
 void MainWindow::updateReceiverState(ReceiverState state) {
