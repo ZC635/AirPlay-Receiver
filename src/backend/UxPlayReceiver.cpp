@@ -123,11 +123,18 @@ void audioGetFormat(void *cls, unsigned char *ct, unsigned short *spf, bool *usi
     receiver->startAudioRendererFromUxPlayCallback(ct);
 }
 
-void videoReportSize(void *, float *widthSource, float *heightSource, float *width, float *height) {
-    *widthSource = 1920.0F;
-    *heightSource = 1080.0F;
-    *width = 1920.0F;
-    *height = 1080.0F;
+void videoReportSize(void *cls, float *widthSource, float *heightSource, float *width, float *height) {
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    int w = static_cast<int>(*widthSource);
+    int h = static_cast<int>(*heightSource);
+    if (w > 0 && h > 0) {
+        QPointer<UxPlayReceiver> guardedReceiver(receiver);
+        QMetaObject::invokeMethod(receiver, [guardedReceiver, w, h] {
+            if (guardedReceiver) {
+                emit guardedReceiver->videoSizeChanged(w, h);
+            }
+        }, Qt::QueuedConnection);
+    }
 }
 
 void connInit(void *cls) {

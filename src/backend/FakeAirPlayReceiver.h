@@ -68,6 +68,10 @@ public:
     int startCount = 0;
     int stopCount = 0;
 
+    void emitVideoSize(int width, int height) {
+        emit videoSizeChanged(width, height);
+    }
+
 private:
     void setState(ReceiverState state) {
         if (m_state == state) {
