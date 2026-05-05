@@ -106,6 +106,26 @@ private slots:
 #endif
     }
 
+    void discoverableReceiverNameFailureMovesToError() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Failure Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        const QString tooLongName(300, QLatin1Char('A'));
+        QVERIFY(!receiver.applyReceiverName(tooLongName));
+
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QVERIFY(errorSpy.count() > 0);
+#endif
+    }
+
     void rtpShutdownRecreatesVideoRenderer() {
 #if AIRPLAY_WITH_UXPLAY
         qputenv("AIRPLAY_DEBUG_LOG", "1");

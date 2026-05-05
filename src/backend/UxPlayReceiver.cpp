@@ -498,6 +498,7 @@ bool UxPlayReceiver::applyReceiverName(const QString &name) {
     if (!restartDiscoveryBroadcast()) {
         m_config.serverName = previousName;
         restartDiscoveryBroadcast();
+        setState(ReceiverState::Error);
         return false;
     }
     return true;
