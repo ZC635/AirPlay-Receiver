@@ -60,8 +60,17 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     connect(toolbar_, &ToolbarWidget::volumeChanged, this, &MainWindow::setReceiverVolume);
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
     connect(toolbar_, &ToolbarWidget::settingsRequested, this, &MainWindow::showSettingsDialog);
+    connect(toolbar_, &ToolbarWidget::aspectRatioToggled, this, &MainWindow::applyAspectRatioLock);
 
     if (receiver_ != nullptr) {
+        connect(receiver_, &AirPlayReceiver::videoSizeChanged, this, [this](int width, int height) {
+            if (width <= 0 || height <= 0) return;
+            videoWidth_ = width;
+            videoHeight_ = height;
+            if (aspectRatioLock_) {
+                enforceAspectRatio();
+            }
+        });
         receiver_->setVideoSurface(videoSurface_->winId());
         updateReceiverState(receiver_->state());
         connect(receiver_, &AirPlayReceiver::stateChanged, this, &MainWindow::updateReceiverState);
@@ -78,6 +87,11 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
         if (receiver_->receiverName() != settings_.receiverName()) {
             receiver_->applyReceiverName(settings_.receiverName());
         }
+    }
+
+    toolbar_->setAspectRatioChecked(settings_.aspectRatioLock());
+    if (settings_.aspectRatioLock()) {
+        aspectRatioLock_ = true;
     }
 
     setVolume(settings_.volume());
@@ -316,4 +330,36 @@ void MainWindow::showSettingsDialog() {
         statusLabel_->setText("Could not save settings");
     }
     handleReceiverNameChange(settings_.receiverName());
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    if (!aspectRatioLock_ || videoWidth_ <= 0 || videoHeight_ <= 0) return;
+
+    QSize newSize = event->size();
+    double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
+    double currentRatio = static_cast<double>(newSize.width()) / newSize.height();
+
+    if (qFuzzyCompare(currentRatio, targetRatio)) return;
+
+    int correctedHeight = static_cast<int>(newSize.width() / targetRatio);
+    if (correctedHeight < minimumHeight()) correctedHeight = minimumHeight();
+    resize(newSize.width(), correctedHeight);
+}
+
+void MainWindow::applyAspectRatioLock(bool enabled) {
+    aspectRatioLock_ = enabled;
+    settings_.setAspectRatioLock(enabled);
+    toolbar_->setAspectRatioChecked(enabled);
+    if (enabled && videoWidth_ > 0 && videoHeight_ > 0) {
+        enforceAspectRatio();
+    }
+}
+
+void MainWindow::enforceAspectRatio() {
+    if (videoWidth_ <= 0 || videoHeight_ <= 0) return;
+    double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
+    int newHeight = static_cast<int>(width() / targetRatio);
+    if (newHeight < minimumHeight()) newHeight = minimumHeight();
+    resize(width(), newHeight);
 }

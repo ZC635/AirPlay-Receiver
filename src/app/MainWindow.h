@@ -4,6 +4,7 @@
 
 #include <QMainWindow>
 #include <QPointer>
+#include <QResizeEvent>
 #include <QString>
 
 enum class ReceiverState;
@@ -39,6 +40,9 @@ private:
     void applyPendingReceiverNameIfNeeded(bool wasRenameBlocked);
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
+    void resizeEvent(QResizeEvent *event) override;
+    void applyAspectRatioLock(bool enabled);
+    void enforceAspectRatio();
 
     ToolbarWidget *toolbar_;
     QLabel *statusLabel_;
@@ -52,4 +56,7 @@ private:
     QString settingsPath_;
     bool receiverConnected_ = false;
     bool receiverRenameBlocked_ = false;
+    int videoWidth_ = 0;
+    int videoHeight_ = 0;
+    bool aspectRatioLock_ = false;
 };

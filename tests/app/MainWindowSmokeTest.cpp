@@ -735,6 +735,49 @@ private slots:
         QVERIFY(surface != nullptr);
         QCOMPARE(surface->objectName(), QString("videoSurface"));
     }
+
+    void startsWithAspectRatioLockDisabled() {
+        MainWindow window;
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(!button->isChecked());
+    }
+
+    void videoSizeStoredOnSignal() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        receiver.emitVideoSize(1170, 2532);
+
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+
+        double expectedRatio = 1170.0 / 2532.0;
+        double actualRatio = static_cast<double>(window.width()) / window.height();
+        double diff = qAbs(actualRatio - expectedRatio);
+        QVERIFY(diff < 0.01);
+    }
+
+    void disablingAspectRatioLockKeepsCurrentSize() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        receiver.emitVideoSize(1170, 2532);
+
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+        QSize lockedSize = window.size();
+
+        button->setChecked(false);
+        QCOMPARE(window.size(), lockedSize);
+    }
+
+    void loadsAspectRatioLockFromSettings() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setAspectRatioLock(true);
+        MainWindow window(settings, nullptr);
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(button->isChecked());
+    }
 };
 
 QTEST_MAIN(MainWindowSmokeTest)
