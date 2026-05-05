@@ -13,17 +13,20 @@ public:
     int volume() const;
     void setVolume(int value);
     void setAlwaysOnTopChecked(bool checked);
+    void setAspectRatioChecked(bool checked);
     void setVolumeShortcutTooltip(const QString &tooltip);
     void setAlwaysOnTopShortcutTooltip(const QString &tooltip);
 
 signals:
     void volumeChanged(int value);
     void alwaysOnTopToggled(bool enabled);
+    void aspectRatioToggled(bool enabled);
     void settingsRequested();
 
 private:
     QToolButton *volumeButton_;
     QSlider *volumeSlider_;
     QToolButton *alwaysOnTopButton_;
+    QToolButton *aspectRatioButton_;
     QToolButton *settingsButton_;
 };

@@ -9,6 +9,7 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
       volumeButton_(new QToolButton(this)),
       volumeSlider_(new QSlider(Qt::Horizontal, this)),
       alwaysOnTopButton_(new QToolButton(this)),
+      aspectRatioButton_(new QToolButton(this)),
       settingsButton_(new QToolButton(this)) {
     volumeButton_->setObjectName("volumeButton");
     volumeButton_->setText("Volume");
@@ -23,6 +24,10 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     alwaysOnTopButton_->setText("Pin");
     alwaysOnTopButton_->setCheckable(true);
 
+    aspectRatioButton_->setObjectName("aspectRatioButton");
+    aspectRatioButton_->setText("Aspect");
+    aspectRatioButton_->setCheckable(true);
+
     settingsButton_->setObjectName("settingsButton");
     settingsButton_->setText("Settings");
 
@@ -31,11 +36,13 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     layout->addWidget(volumeButton_);
     layout->addWidget(volumeSlider_);
     layout->addWidget(alwaysOnTopButton_);
+    layout->addWidget(aspectRatioButton_);
     layout->addWidget(settingsButton_);
 
     connect(volumeButton_, &QToolButton::toggled, volumeSlider_, &QSlider::setVisible);
     connect(volumeSlider_, &QSlider::valueChanged, this, &ToolbarWidget::volumeChanged);
     connect(alwaysOnTopButton_, &QToolButton::toggled, this, &ToolbarWidget::alwaysOnTopToggled);
+    connect(aspectRatioButton_, &QToolButton::toggled, this, &ToolbarWidget::aspectRatioToggled);
     connect(settingsButton_, &QToolButton::clicked, this, &ToolbarWidget::settingsRequested);
 }
 
@@ -57,4 +64,8 @@ void ToolbarWidget::setVolumeShortcutTooltip(const QString &tooltip) {
 
 void ToolbarWidget::setAlwaysOnTopShortcutTooltip(const QString &tooltip) {
     alwaysOnTopButton_->setToolTip(tooltip);
+}
+
+void ToolbarWidget::setAspectRatioChecked(bool checked) {
+    aspectRatioButton_->setChecked(checked);
 }

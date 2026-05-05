@@ -10,7 +10,26 @@ private slots:
         QVERIFY(toolbar.findChild<QToolButton *>("volumeButton"));
         QVERIFY(toolbar.findChild<QSlider *>("volumeSlider"));
         QVERIFY(toolbar.findChild<QToolButton *>("alwaysOnTopButton"));
+        QVERIFY(toolbar.findChild<QToolButton *>("aspectRatioButton"));
         QVERIFY(toolbar.findChild<QToolButton *>("settingsButton"));
+    }
+
+    void exposesAspectRatioButton() {
+        ToolbarWidget toolbar;
+        auto *button = toolbar.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(button->isCheckable());
+        QVERIFY(!button->isChecked());
+    }
+
+    void aspectRatioButtonTogglesSignal() {
+        ToolbarWidget toolbar;
+        QSignalSpy spy(&toolbar, &ToolbarWidget::aspectRatioToggled);
+        auto *button = toolbar.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(button != nullptr);
+        button->setChecked(true);
+        QCOMPARE(spy.count(), 1);
+        QVERIFY(spy.takeFirst().at(0).toBool());
     }
 
     void storesShortcutTooltips() {
