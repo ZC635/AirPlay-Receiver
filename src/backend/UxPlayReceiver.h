@@ -49,6 +49,8 @@ private:
     bool createDiscoveryBroadcast();
     bool registerDiscoveryBroadcast(unsigned short port);
     void stopDiscoveryBroadcast();
+    void unregisterDiscoveryBroadcast();
+    void destroyDiscoveryBroadcast();
     bool restartDiscoveryBroadcast();
 #endif
 

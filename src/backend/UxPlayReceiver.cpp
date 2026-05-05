@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QMetaObject>
 #include <QPointer>
+#include <QThread>
 #include <QTimer>
 
 #include <cstdarg>
@@ -142,6 +143,7 @@ void connInit(void *cls) {
 
 void connDestroy(void *cls) {
     auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    debugLog("connDestroy callback fired");
     const auto generation = receiver->callbackGenerationForUxPlayCallback();
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
@@ -473,40 +475,50 @@ QString UxPlayReceiver::receiverName() const {
 bool UxPlayReceiver::applyReceiverName(const QString &name) {
     const QString trimmed = name.trimmed();
     if (trimmed.isEmpty()) {
+        debugLog("applyReceiverName: rejected empty name");
         return false;
     }
     if (m_config.serverName == trimmed) {
+        debugLog("applyReceiverName: name unchanged \"%s\"", qPrintable(trimmed));
         return true;
     }
 
     const QString previousName = m_config.serverName;
     m_config.serverName = trimmed;
+    debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(trimmed), static_cast<int>(m_state));
 
     if (m_state == ReceiverState::Idle) {
+        debugLog("applyReceiverName: Idle state, name stored, no restart needed");
         return true;
     }
 
     if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
-        stop();
-        start();
-        if (m_state == ReceiverState::Error) {
+        debugLog("applyReceiverName: Connected/Connecting state, restarting discovery broadcast");
+        if (!restartDiscoveryBroadcast()) {
+            debugLog("applyReceiverName: restartDiscoveryBroadcast() failed, reverting name");
             m_config.serverName = previousName;
             return false;
         }
+        debugLog("applyReceiverName: restartDiscoveryBroadcast() succeeded in Connected state");
         return true;
     }
 
 #if AIRPLAY_WITH_UXPLAY
+    debugLog("applyReceiverName: Discoverable state, restarting discovery broadcast");
     if (!restartDiscoveryBroadcast()) {
+        debugLog("applyReceiverName: restartDiscoveryBroadcast() failed, reverting name");
         m_config.serverName = previousName;
         if (!restartDiscoveryBroadcast()) {
+            debugLog("applyReceiverName: recovery restartDiscoveryBroadcast() also failed");
             setError("Failed to recover discovery after receiver rename failure");
         }
         setState(ReceiverState::Error);
         return false;
     }
+    debugLog("applyReceiverName: restartDiscoveryBroadcast() succeeded");
     return true;
 #else
+    debugLog("applyReceiverName: non-UXPlay path, returning true");
     return true;
 #endif
 }
@@ -607,33 +619,40 @@ bool UxPlayReceiver::createDiscoveryBroadcast() {
     int dnssdError = 0;
     const QByteArray serverName = m_config.serverName.toUtf8();
     const QByteArray hwAddress = defaultHardwareAddress();
+    debugLog("createDiscoveryBroadcast: name=\"%s\", port=%u", serverName.constData(), m_raopPort);
     auto *dnssd = dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(), &dnssdError, 0);
     if (dnssdError || !dnssd) {
+        debugLog("createDiscoveryBroadcast: dnssd_init failed, error=%d", dnssdError);
         setError(QString("Failed to initialize DNS-SD: %1").arg(dnssdError));
         return false;
     }
 
     m_dnssd = dnssd;
     raop_set_dnssd(static_cast<raop_t *>(m_raop), dnssd);
+    debugLog("createDiscoveryBroadcast: success");
     return true;
 }
 
 bool UxPlayReceiver::registerDiscoveryBroadcast(unsigned short port) {
     if (!m_dnssd) {
+        debugLog("registerDiscoveryBroadcast: no DNS-SD object");
         setError("Cannot register DNS-SD services before DNS-SD initialization");
         return false;
     }
 
+    debugLog("registerDiscoveryBroadcast: port=%u", port);
     auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
     int registerError = dnssd_register_raop(dnssd, port);
     if (registerError == 0) {
         registerError = dnssd_register_airplay(dnssd, port);
     }
     if (registerError != 0) {
+        debugLog("registerDiscoveryBroadcast: failed, error=%d", registerError);
         setError(QString("Failed to register DNS-SD services: %1").arg(registerError));
         return false;
     }
 
+    debugLog("registerDiscoveryBroadcast: success");
     return true;
 }
 
@@ -642,9 +661,32 @@ void UxPlayReceiver::stopDiscoveryBroadcast() {
         return;
     }
 
+    debugLog("stopDiscoveryBroadcast");
     auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
     dnssd_unregister_raop(dnssd);
     dnssd_unregister_airplay(dnssd);
+    dnssd_destroy(dnssd);
+    m_dnssd = nullptr;
+}
+
+void UxPlayReceiver::unregisterDiscoveryBroadcast() {
+    if (!m_dnssd) {
+        return;
+    }
+
+    debugLog("unregisterDiscoveryBroadcast (Goodbye sent, handle kept alive)");
+    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
+    dnssd_unregister_raop(dnssd);
+    dnssd_unregister_airplay(dnssd);
+}
+
+void UxPlayReceiver::destroyDiscoveryBroadcast() {
+    if (!m_dnssd) {
+        return;
+    }
+
+    debugLog("destroyDiscoveryBroadcast");
+    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
     dnssd_destroy(dnssd);
     m_dnssd = nullptr;
 }
@@ -666,7 +708,10 @@ bool UxPlayReceiver::restartDiscoveryBroadcast() {
         m_raopHttpdStarted = false;
     }
 
-    stopDiscoveryBroadcast();
+    unregisterDiscoveryBroadcast();
+    QThread::msleep(2000);
+    destroyDiscoveryBroadcast();
+
     if (!createDiscoveryBroadcast()) {
         return false;
     }
