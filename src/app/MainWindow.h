@@ -59,4 +59,5 @@ private:
     int videoWidth_ = 0;
     int videoHeight_ = 0;
     bool aspectRatioLock_ = false;
+    bool resizing_ = false;
 };

@@ -89,10 +89,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
         }
     }
 
-    toolbar_->setAspectRatioChecked(settings_.aspectRatioLock());
-    if (settings_.aspectRatioLock()) {
-        aspectRatioLock_ = true;
-    }
+    applyAspectRatioLock(settings_.aspectRatioLock());
 
     setVolume(settings_.volume());
 
@@ -335,16 +332,18 @@ void MainWindow::showSettingsDialog() {
 void MainWindow::resizeEvent(QResizeEvent *event) {
     QMainWindow::resizeEvent(event);
     if (!aspectRatioLock_ || videoWidth_ <= 0 || videoHeight_ <= 0) return;
+    if (resizing_) return;
 
     QSize newSize = event->size();
     double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
-    double currentRatio = static_cast<double>(newSize.width()) / newSize.height();
-
-    if (qFuzzyCompare(currentRatio, targetRatio)) return;
 
     int correctedHeight = static_cast<int>(newSize.width() / targetRatio);
+    if (qAbs(newSize.height() - correctedHeight) <= 1) return;
+
     if (correctedHeight < minimumHeight()) correctedHeight = minimumHeight();
+    resizing_ = true;
     resize(newSize.width(), correctedHeight);
+    resizing_ = false;
 }
 
 void MainWindow::applyAspectRatioLock(bool enabled) {
