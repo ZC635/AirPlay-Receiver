@@ -304,6 +304,9 @@ void MainWindow::updateReceiverState(ReceiverState state) {
     case ReceiverState::Idle:
     case ReceiverState::Starting:
     case ReceiverState::Discoverable:
+        if (state == ReceiverState::Discoverable) {
+            videoSurface_->reset();
+        }
         statusLabel_->setText("Ready for AirPlay");
         break;
     }

@@ -33,7 +33,10 @@ public:
     quint64 callbackGenerationForUxPlayCallback() const;
     void startAudioRendererFromUxPlayCallback(unsigned char *compressionType);
     void setVolumeFromUxPlayCallback(double volume);
+    void setCoverArtFromUxPlayCallback(const void *buffer, int buflen);
+    void stopCoverArtRenderingFromUxPlayCallback();
     void handleVideoResetFromUxPlayCallback(int resetType);
+    void handleVideoResetFromUxPlayCallback(int resetType, quint64 generation);
     void stopVideoPipelineForDisconnect();
     void restartVideoPipelineForConnect();
 #endif
@@ -48,6 +51,7 @@ private:
     void setError(QString error);
 #if AIRPLAY_WITH_UXPLAY
     void cleanupUxPlay();
+    void bindVideoSurfaceToRenderer();
     bool createDiscoveryBroadcast();
     bool registerDiscoveryBroadcast(unsigned short port);
     void stopDiscoveryBroadcast();
@@ -68,8 +72,8 @@ private:
     bool m_raopHttpdInitialized = false;
     bool m_raopHttpdStarted = false;
     unsigned short m_raopPort = 0;
-    bool m_renderersStarted = false;
-    bool m_videoRendererStopped = false;
+    std::atomic_bool m_renderersStarted = false;
+    std::atomic_bool m_videoRendererStopped = false;
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_acceptingCallbacks = false;
     std::atomic<quint64> m_callbackGeneration = 0;

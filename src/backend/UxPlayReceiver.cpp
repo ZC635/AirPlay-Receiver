@@ -186,7 +186,13 @@ void connFeedback(void *) {
 
 void videoReset(void *cls, reset_type_t type) {
     auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->handleVideoResetFromUxPlayCallback(static_cast<int>(type));
+    const auto generation = receiver->callbackGenerationForUxPlayCallback();
+    QPointer<UxPlayReceiver> guardedReceiver(receiver);
+    QMetaObject::invokeMethod(receiver, [guardedReceiver, generation, type] {
+        if (guardedReceiver) {
+            guardedReceiver->handleVideoResetFromUxPlayCallback(static_cast<int>(type), generation);
+        }
+    }, Qt::QueuedConnection);
 }
 
 void audioSetMetadata(void *cls, const void *buffer, int buflen) {
@@ -260,26 +266,12 @@ void audioSetMetadata(void *cls, const void *buffer, int buflen) {
 
 void audioSetCoverart(void *cls, const void *buffer, int buflen) {
     auto *receiver = static_cast<UxPlayReceiver *>(cls);
-
-    if (!buffer || buflen <= 0) {
-        return;
-    }
-
-    video_renderer_choose_codec(true, false);
-    int buflen_mut = buflen;
-    video_renderer_display_jpeg(buffer, &buflen_mut);
-
-    QByteArray data(static_cast<const char *>(buffer), buflen_mut);
-    QPointer<UxPlayReceiver> guardedReceiver(receiver);
-    QMetaObject::invokeMethod(receiver, [guardedReceiver, data] {
-        if (guardedReceiver) {
-            emit guardedReceiver->coverArtReceived(data);
-        }
-    }, Qt::QueuedConnection);
+    receiver->setCoverArtFromUxPlayCallback(buffer, buflen);
 }
 
 void audioStopCoverartRendering(void *cls) {
-    videoReset(cls, RESET_TYPE_RTP_SHUTDOWN);
+    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    receiver->stopCoverArtRenderingFromUxPlayCallback();
 }
 
 void audioSetProgress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end) {
@@ -365,8 +357,9 @@ void UxPlayReceiver::start() {
                         "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
                         kPlaybinVersion, nullptr);
     video_renderer_start();
+    m_videoRendererStopped.store(false);
     audio_renderer_init(logger, audioSink.constData(), &kAudioSync, &kVideoSync, "");
-    m_renderersStarted = true;
+    m_renderersStarted.store(true);
 
     m_glibTimer = new QTimer();
     QObject::connect(static_cast<QTimer *>(m_glibTimer), &QTimer::timeout, [] {
@@ -473,7 +466,7 @@ void UxPlayReceiver::setVolume(double volume) {
 void UxPlayReceiver::setVideoSurface(WId id) {
     m_videoSurfaceId = id;
 #if AIRPLAY_WITH_UXPLAY
-    video_renderer_set_window_handle(reinterpret_cast<void *>(static_cast<uintptr_t>(id)));
+    bindVideoSurfaceToRenderer();
 #endif
 }
 
@@ -571,8 +564,36 @@ void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
     }
 }
 
+void UxPlayReceiver::setCoverArtFromUxPlayCallback(const void *buffer, int buflen) {
+    if (!m_acceptingCallbacks.load() || !buffer || buflen <= 0) {
+        return;
+    }
+
+    QByteArray data(static_cast<const char *>(buffer), buflen);
+    QPointer<UxPlayReceiver> guardedReceiver(this);
+    QMetaObject::invokeMethod(this, [guardedReceiver, data] {
+        if (guardedReceiver) {
+            emit guardedReceiver->coverArtReceived(data);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void UxPlayReceiver::stopCoverArtRenderingFromUxPlayCallback() {
+    // Cover art is surfaced through Qt, not rendered by the GStreamer video sink.
+}
+
 void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
+    handleVideoResetFromUxPlayCallback(resetType, m_callbackGeneration.load());
+}
+
+void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 generation) {
+    if (!m_acceptingCallbacks.load() || generation != m_callbackGeneration.load() || !m_renderersStarted.load()
+        || m_state != ReceiverState::Connected) {
+        return;
+    }
+
     const auto restartVideoRenderer = [this] {
+        m_videoRendererStopped.store(true);
         video_renderer_stop();
         video_renderer_destroy();
 
@@ -583,8 +604,12 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
         video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
                             "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
                             kPlaybinVersion, nullptr);
+        bindVideoSurfaceToRenderer();
         video_renderer_start();
+        bindVideoSurfaceToRenderer();
         video_renderer_choose_codec(false, false);
+        bindVideoSurfaceToRenderer();
+        m_videoRendererStopped.store(false);
     };
 
     switch (static_cast<reset_type_t>(resetType)) {
@@ -601,15 +626,31 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
 }
 
 void UxPlayReceiver::stopVideoPipelineForDisconnect() {
+    if (!m_renderersStarted.load()) {
+        return;
+    }
+    if (m_videoRendererStopped.exchange(true)) {
+        return;
+    }
     video_renderer_stop();
-    m_videoRendererStopped = true;
 }
 
 void UxPlayReceiver::restartVideoPipelineForConnect() {
-    if (m_videoRendererStopped) {
-        video_renderer_start();
-        m_videoRendererStopped = false;
+    if (!m_renderersStarted.load()) {
+        return;
     }
+    if (m_videoRendererStopped.exchange(false)) {
+        bindVideoSurfaceToRenderer();
+        video_renderer_start();
+        bindVideoSurfaceToRenderer();
+    }
+}
+
+void UxPlayReceiver::bindVideoSurfaceToRenderer() {
+    if (m_videoSurfaceId == 0) {
+        return;
+    }
+    video_renderer_set_window_handle(reinterpret_cast<void *>(static_cast<uintptr_t>(m_videoSurfaceId)));
 }
 #endif
 
@@ -786,12 +827,13 @@ void UxPlayReceiver::cleanupUxPlay() {
         m_raop = nullptr;
         m_raopHttpdInitialized = false;
     }
-    if (m_renderersStarted) {
+    if (m_renderersStarted.load()) {
         video_renderer_stop();
         video_renderer_destroy();
         audio_renderer_destroy();
-        m_renderersStarted = false;
+        m_renderersStarted.store(false);
         m_audioRendererStarted.store(false);
+        m_videoRendererStopped.store(false);
     }
     if (m_logger) {
         logger_destroy(static_cast<logger_t *>(m_logger));
