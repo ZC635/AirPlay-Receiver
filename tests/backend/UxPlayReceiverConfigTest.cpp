@@ -169,6 +169,24 @@ private slots:
 #endif
     }
 
+    void stoppedUxPlayReceiverIgnoresLateVideoReset() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Late Video Reset Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        receiver.stop();
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+
+        QCOMPARE(receiver.state(), ReceiverState::Idle);
+#endif
+    }
+
     void discoverableReceiverNameChangeRestartsDiscoveryOnly() {
 #if AIRPLAY_WITH_UXPLAY
         UxPlayReceiverConfig config;
@@ -285,6 +303,90 @@ private slots:
 #endif
     }
 
+    void disconnectRestartTracksStoppedVideoRendererAtomically() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Video Restart Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        receiver.stopVideoPipelineForDisconnect();
+        QVERIFY(receiver.m_videoRendererStopped.load());
+
+        receiver.restartVideoPipelineForConnect();
+        QVERIFY(!receiver.m_videoRendererStopped.load());
+
+        receiver.stop();
+#endif
+    }
+
+    void lateVideoResetAfterDisconnectDoesNotRecreateRenderer() {
+#if AIRPLAY_WITH_UXPLAY
+        qputenv("AIRPLAY_DEBUG_LOG", "1");
+        const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/airplay_receiver_debug.log");
+        QFile::remove(logPath);
+
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Late Reset After Disconnect Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QCOMPARE(video_renderer_choose_codec(false, false), 0);
+
+        receiver.stopVideoPipelineForDisconnect();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Discoverable);
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+        receiver.stop();
+
+        QFile logFile(logPath);
+        QVERIFY(logFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString log = QString::fromUtf8(logFile.readAll());
+        qunsetenv("AIRPLAY_DEBUG_LOG");
+        QCOMPARE(log.count(QStringLiteral("GStreamer video pipeline")), 1);
+#endif
+    }
+
+    void coverArtCallbacksDoNotRestartVideoRenderer() {
+#if AIRPLAY_WITH_UXPLAY
+        qputenv("AIRPLAY_DEBUG_LOG", "1");
+        const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/airplay_receiver_debug.log");
+        QFile::remove(logPath);
+
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Cover Art Callback Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy coverArtSpy(&receiver, &UxPlayReceiver::coverArtReceived);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QCOMPARE(video_renderer_choose_codec(false, false), 0);
+
+        const QByteArray coverArt("fake-jpeg-data");
+        receiver.setCoverArtFromUxPlayCallback(coverArt.constData(), coverArt.size());
+        QTRY_COMPARE(coverArtSpy.count(), 1);
+        receiver.stopCoverArtRenderingFromUxPlayCallback();
+        receiver.stop();
+
+        QCOMPARE(coverArtSpy.at(0).at(0).toByteArray(), coverArt);
+        QFile logFile(logPath);
+        QVERIFY(logFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString log = QString::fromUtf8(logFile.readAll());
+        qunsetenv("AIRPLAY_DEBUG_LOG");
+        QCOMPARE(log.count(QStringLiteral("GStreamer video pipeline")), 1);
+#endif
+    }
+
     void discoverableReceiverNameFailureMovesToError() {
 #if AIRPLAY_WITH_UXPLAY
         UxPlayReceiverConfig config;
@@ -323,6 +425,7 @@ private slots:
 
         receiver.start();
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
 
         QCOMPARE(video_renderer_choose_codec(false, false), 0);
 

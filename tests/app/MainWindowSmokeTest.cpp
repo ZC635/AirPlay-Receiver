@@ -12,7 +12,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QImage>
 #include <QKeySequenceEdit>
+#include <QPainter>
 #include <QPushButton>
 #include <QSlider>
 #include <QTemporaryDir>
@@ -72,6 +74,28 @@ private slots:
         emit receiver.stateChanged(ReceiverState::Discoverable);
 
         QVERIFY(window.isToolbarVisible());
+    }
+
+    void leavingConnectedStateClearsVideoSurface() {
+        const QColor expected = QApplication::palette().color(QPalette::Window);
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.resize(120, 80);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        QVERIFY(surface != nullptr);
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+
+        QImage image(surface->size(), QImage::Format_ARGB32);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        surface->render(&painter);
+        painter.end();
+
+        QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), expected);
     }
 
     void shortcutShowsToolbarWhileConnected() {

@@ -50,6 +50,10 @@ private slots:
         QVERIFY(firstStartLogCount > 0);
 
         video_renderer_stop();
+        QVERIFY2(std::any_of(messages.cbegin(), messages.cend(), [](const QString &message) {
+                     return message.contains("video_renderer_stop: state NULL");
+                 }),
+                 "Stopping must wait until the active video pipeline reaches GST_STATE_NULL");
 
         QCOMPARE(video_renderer_choose_codec(false, false), 0);
         QVERIFY2(stateChangeLogCount() > firstStartLogCount,
