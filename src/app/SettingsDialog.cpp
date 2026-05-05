@@ -102,7 +102,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
     errorLabel_->setWordWrap(true);
     errorLabel_->hide();
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    auto *buttons = new QDialogButtonBox(this);
+    buttons->addButton(QDialogButtonBox::Cancel);
+    buttons->addButton("Apply", QDialogButtonBox::AcceptRole);
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 

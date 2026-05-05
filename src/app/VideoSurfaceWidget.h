@@ -7,4 +7,12 @@ class VideoSurfaceWidget final : public QWidget {
 
 public:
     explicit VideoSurfaceWidget(QWidget *parent = nullptr);
+    void reset();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    bool requestClear_ = false;
+    QColor defaultWindowColor_;
 };

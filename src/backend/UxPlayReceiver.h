@@ -34,6 +34,8 @@ public:
     void startAudioRendererFromUxPlayCallback(unsigned char *compressionType);
     void setVolumeFromUxPlayCallback(double volume);
     void handleVideoResetFromUxPlayCallback(int resetType);
+    void stopVideoPipelineForDisconnect();
+    void restartVideoPipelineForConnect();
 #endif
 
 signals:
@@ -67,6 +69,7 @@ private:
     bool m_raopHttpdStarted = false;
     unsigned short m_raopPort = 0;
     bool m_renderersStarted = false;
+    bool m_videoRendererStopped = false;
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_acceptingCallbacks = false;
     std::atomic<quint64> m_callbackGeneration = 0;

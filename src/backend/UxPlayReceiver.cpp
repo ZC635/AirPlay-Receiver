@@ -136,6 +136,7 @@ void connInit(void *cls) {
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
         if (guardedReceiver) {
+            guardedReceiver->restartVideoPipelineForConnect();
             guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Connected, generation);
         }
     }, Qt::QueuedConnection);
@@ -148,6 +149,7 @@ void connDestroy(void *cls) {
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
         if (guardedReceiver) {
+            guardedReceiver->stopVideoPipelineForDisconnect();
             guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Discoverable, generation);
         }
     }, Qt::QueuedConnection);
@@ -584,6 +586,18 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
         break;
     case RESET_TYPE_ON_VIDEO_PLAY:
         break;
+    }
+}
+
+void UxPlayReceiver::stopVideoPipelineForDisconnect() {
+    video_renderer_stop();
+    m_videoRendererStopped = true;
+}
+
+void UxPlayReceiver::restartVideoPipelineForConnect() {
+    if (m_videoRendererStopped) {
+        video_renderer_start();
+        m_videoRendererStopped = false;
     }
 }
 #endif
