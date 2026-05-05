@@ -12,7 +12,6 @@ This project was developed with assistance from OpenCode, Codex, and DeepSeek. I
 - MSYS2 installed; the build script detects the UCRT64 prefix and can install missing MSYS2 packages after confirmation
 - Bonjour SDK 3.0 and Bonjour runtime service
 
-See `docs/uxplay-windows-build.md` for exact package versions and setup notes.
 
 ### Clone
 
@@ -132,18 +131,6 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 - Global hotkey registration via the Windows hotkey API
 - Dependency diagnostics for missing runtimes
 
-## Documentation
-
-- Design: `docs/plans/2026-05-03-airplay-receiver-design.md`
-- Implementation plan: `docs/plans/2026-05-03-airplay-receiver-mvp.md`
-- Repository publication design: `docs/plans/2026-05-04-repository-publication-design.md`
-- Repository publication plan: `docs/plans/2026-05-04-repository-publication.md`
-- Build bootstrap design: `docs/plans/2026-05-04-build-bootstrap-design.md`
-- Build bootstrap plan: `docs/plans/2026-05-04-build-bootstrap.md`
-- Windows build notes: `docs/uxplay-windows-build.md`
-- Manual acceptance: `docs/manual-acceptance.md`
-- Third-party dependencies: `third_party/README.md`
-
 ## Project Structure
 
 ```text
@@ -153,8 +140,6 @@ src/
   platform/     Windows-specific hotkey, diagnostics
 third_party/
   uxplay/       UxPlay submodule
-docs/
-  plans/        Design and implementation plans
 tests/
   app/          UI tests
   backend/      Backend tests
