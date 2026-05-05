@@ -130,14 +130,31 @@ private slots:
     void savesAndLoadsAspectRatioLock() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
-        const QString path = dir.filePath("settings.json");
 
+        const QString path = dir.filePath("settings.json");
         AppSettings settings = AppSettings::defaults();
         settings.setAspectRatioLock(true);
-        AppSettingsStore(path).save(settings);
 
-        AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        const AppSettings loaded = store.loadOrDefaults();
         QVERIFY(loaded.aspectRatioLock());
+    }
+
+    void malformedAspectRatioLockFallsBackToDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"aspectRatioLock":"yes"})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.aspectRatioLock(), AppSettings::defaults().aspectRatioLock());
     }
 };
 
