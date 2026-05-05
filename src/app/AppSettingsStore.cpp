@@ -14,6 +14,7 @@ QString keyFor(ShortcutAction action) {
     case ShortcutAction::VolumeUp: return "volumeUp";
     case ShortcutAction::VolumeDown: return "volumeDown";
     case ShortcutAction::ToggleToolbar: return "toggleToolbar";
+    case ShortcutAction::ToggleAspectRatio: return "toggleAspectRatio";
     }
     return {};
 }

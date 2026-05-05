@@ -16,6 +16,7 @@ public:
     void setAspectRatioChecked(bool checked);
     void setVolumeShortcutTooltip(const QString &tooltip);
     void setAlwaysOnTopShortcutTooltip(const QString &tooltip);
+    void setAspectRatioShortcutTooltip(const QString &tooltip);
 
 signals:
     void volumeChanged(int value);

@@ -166,24 +166,41 @@ private slots:
         QVERIFY(button->isChecked());
     }
 
+    void shortcutAspectRatioTogglesButton() {
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys);
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(!button->isChecked());
+
+        emit hotkeys.activated(ShortcutAction::ToggleAspectRatio);
+
+        QVERIFY(button->isChecked());
+    }
+
     void toolbarButtonsShowShortcutTooltips() {
         AppSettings settings = AppSettings::defaults();
         settings.setShortcut(ShortcutAction::VolumeUp, QKeySequence("Ctrl+Shift+U"));
         settings.setShortcut(ShortcutAction::VolumeDown, QKeySequence("Ctrl+Shift+D"));
         settings.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Shift+P"));
+        settings.setShortcut(ShortcutAction::ToggleAspectRatio, QKeySequence("Ctrl+Shift+A"));
 
         MainWindow window(settings, nullptr);
         auto *volumeButton = window.findChild<QToolButton *>("volumeButton");
         auto *pinButton = window.findChild<QToolButton *>("alwaysOnTopButton");
+        auto *aspectButton = window.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(volumeButton != nullptr);
         QVERIFY(pinButton != nullptr);
+        QVERIFY(aspectButton != nullptr);
 
         const QString volumeUp = settings.shortcutFor(ShortcutAction::VolumeUp).toString(QKeySequence::NativeText);
         const QString volumeDown = settings.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText);
         const QString pin = settings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
+        const QString aspect = settings.shortcutFor(ShortcutAction::ToggleAspectRatio).toString(QKeySequence::NativeText);
 
         QCOMPARE(volumeButton->toolTip(), QString("Volume: %1 / %2").arg(volumeUp, volumeDown));
         QCOMPARE(pinButton->toolTip(), QString("Pin: %1").arg(pin));
+        QCOMPARE(aspectButton->toolTip(), QString("Aspect: %1").arg(aspect));
     }
 
     void volumeSliderUpdatesReceiver() {

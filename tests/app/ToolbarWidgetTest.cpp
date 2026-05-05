@@ -36,13 +36,17 @@ private slots:
         ToolbarWidget toolbar;
         toolbar.setVolumeShortcutTooltip("Volume: Ctrl+Alt+Up / Ctrl+Alt+Down");
         toolbar.setAlwaysOnTopShortcutTooltip("Pin: Ctrl+Alt+T");
+        toolbar.setAspectRatioShortcutTooltip("Aspect: Ctrl+Alt+A");
 
         auto *volumeButton = toolbar.findChild<QToolButton *>("volumeButton");
         auto *pinButton = toolbar.findChild<QToolButton *>("alwaysOnTopButton");
+        auto *aspectButton = toolbar.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(volumeButton != nullptr);
         QVERIFY(pinButton != nullptr);
+        QVERIFY(aspectButton != nullptr);
         QCOMPARE(volumeButton->toolTip(), QString("Volume: Ctrl+Alt+Up / Ctrl+Alt+Down"));
         QCOMPARE(pinButton->toolTip(), QString("Pin: Ctrl+Alt+T"));
+        QCOMPARE(aspectButton->toolTip(), QString("Aspect: Ctrl+Alt+A"));
     }
 };
 

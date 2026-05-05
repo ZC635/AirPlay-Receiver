@@ -7,11 +7,12 @@ class AppSettingsTest : public QObject {
 private slots:
     void defaultShortcutsContainRequestedActions() {
         const AppSettings settings = AppSettings::defaults();
-        QCOMPARE(settings.shortcuts().size(), 4);
+        QCOMPARE(settings.shortcuts().size(), 5);
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::VolumeUp).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::VolumeDown).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleToolbar).isValid());
+        QVERIFY(settings.shortcutFor(ShortcutAction::ToggleAspectRatio).isValid());
     }
 
     void rejectsDuplicateShortcuts() {

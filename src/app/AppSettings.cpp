@@ -14,6 +14,7 @@ AppSettings AppSettings::defaults() {
     settings.setShortcut(ShortcutAction::VolumeUp, QKeySequence("Ctrl+Alt+Up"));
     settings.setShortcut(ShortcutAction::VolumeDown, QKeySequence("Ctrl+Alt+Down"));
     settings.setShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Alt+B"));
+    settings.setShortcut(ShortcutAction::ToggleAspectRatio, QKeySequence("Ctrl+Alt+A"));
     return settings;
 }
 

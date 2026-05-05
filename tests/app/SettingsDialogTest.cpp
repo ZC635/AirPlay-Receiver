@@ -17,7 +17,7 @@ private slots:
         SettingsDialog dialog(AppSettings::defaults());
         auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
         QVERIFY(table);
-        QCOMPARE(table->rowCount(), 4);
+        QCOMPARE(table->rowCount(), 5);
     }
 
     void showsGeneralAndHotkeyBindingSections() {

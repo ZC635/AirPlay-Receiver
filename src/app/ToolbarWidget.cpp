@@ -69,3 +69,7 @@ void ToolbarWidget::setAlwaysOnTopShortcutTooltip(const QString &tooltip) {
 void ToolbarWidget::setAspectRatioChecked(bool checked) {
     aspectRatioButton_->setChecked(checked);
 }
+
+void ToolbarWidget::setAspectRatioShortcutTooltip(const QString &tooltip) {
+    aspectRatioButton_->setToolTip(tooltip);
+}

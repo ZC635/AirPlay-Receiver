@@ -5,4 +5,5 @@ enum class ShortcutAction {
     VolumeUp,
     VolumeDown,
     ToggleToolbar,
+    ToggleAspectRatio,
 };

@@ -152,6 +152,9 @@ void MainWindow::handleShortcut(ShortcutAction action) {
     case ShortcutAction::ToggleToolbar:
         toggleToolbarVisibility();
         break;
+    case ShortcutAction::ToggleAspectRatio:
+        applyAspectRatioLock(!aspectRatioLock_);
+        break;
     }
 }
 
@@ -159,8 +162,10 @@ void MainWindow::applyShortcutTooltips() {
     const QString volumeUpShortcut = settings_.shortcutFor(ShortcutAction::VolumeUp).toString(QKeySequence::NativeText);
     const QString volumeDownShortcut = settings_.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText);
     const QString pinShortcut = settings_.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
+    const QString aspectShortcut = settings_.shortcutFor(ShortcutAction::ToggleAspectRatio).toString(QKeySequence::NativeText);
     toolbar_->setVolumeShortcutTooltip(QString("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
     toolbar_->setAlwaysOnTopShortcutTooltip(QString("Pin: %1").arg(pinShortcut));
+    toolbar_->setAspectRatioShortcutTooltip(QString("Aspect: %1").arg(aspectShortcut));
 }
 
 bool MainWindow::registerHotkeys() {
@@ -337,12 +342,12 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
     QSize newSize = event->size();
     double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
 
-    int correctedHeight = static_cast<int>(newSize.width() / targetRatio);
-    if (qAbs(newSize.height() - correctedHeight) <= 1) return;
+    int correctedWidth = static_cast<int>(newSize.height() * targetRatio);
+    if (qAbs(newSize.width() - correctedWidth) <= 1) return;
 
-    if (correctedHeight < minimumHeight()) correctedHeight = minimumHeight();
+    if (correctedWidth < minimumWidth()) correctedWidth = minimumWidth();
     resizing_ = true;
-    resize(newSize.width(), correctedHeight);
+    resize(correctedWidth, newSize.height());
     resizing_ = false;
 }
 
@@ -361,7 +366,7 @@ void MainWindow::applyAspectRatioLock(bool enabled) {
 void MainWindow::enforceAspectRatio() {
     if (videoWidth_ <= 0 || videoHeight_ <= 0) return;
     double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
-    int newHeight = static_cast<int>(width() / targetRatio);
-    if (newHeight < minimumHeight()) newHeight = minimumHeight();
-    resize(width(), newHeight);
+    int newWidth = static_cast<int>(height() * targetRatio);
+    if (newWidth < minimumWidth()) newWidth = minimumWidth();
+    resize(newWidth, height());
 }
