@@ -23,6 +23,44 @@
 #include <algorithm>
 #include <memory>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
+class WindowVisibilityEventCounter final : public QObject {
+public:
+    int hideEvents = 0;
+    int showEvents = 0;
+
+    void reset() {
+        hideEvents = 0;
+        showEvents = 0;
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (event->type() == QEvent::Hide) {
+            ++hideEvents;
+        } else if (event->type() == QEvent::Show) {
+            ++showEvents;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+#ifdef Q_OS_WIN
+bool windowHasNativeTopmostState(const QWidget &widget) {
+    const HWND window = reinterpret_cast<HWND>(widget.winId());
+    return (GetWindowLongPtr(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+}
+#endif
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -44,6 +82,41 @@ private slots:
         QVERIFY(!window.isAlwaysOnTopEnabled());
         window.setAlwaysOnTopEnabled(true);
         QVERIFY(window.isAlwaysOnTopEnabled());
+    }
+
+    void visibleAlwaysOnTopToggleDoesNotHideOrShowWindow() {
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+
+        MainWindow window;
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        WindowVisibilityEventCounter events;
+        window.installEventFilter(&events);
+
+        window.setAlwaysOnTopEnabled(true);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(events.hideEvents, 0);
+        QCOMPARE(events.showEvents, 0);
+        QVERIFY(window.isAlwaysOnTopEnabled());
+        QVERIFY(windowHasNativeTopmostState(window));
+
+        events.reset();
+
+        window.setAlwaysOnTopEnabled(false);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(events.hideEvents, 0);
+        QCOMPARE(events.showEvents, 0);
+        QVERIFY(!window.isAlwaysOnTopEnabled());
+        QVERIFY(!windowHasNativeTopmostState(window));
+#else
+        QSKIP("Windows-specific topmost behavior");
+#endif
     }
 
     void shortcutTogglesToolbar() {

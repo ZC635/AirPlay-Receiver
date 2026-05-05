@@ -2,6 +2,16 @@ add_executable(MainWindowSmokeTest app/MainWindowSmokeTest.cpp)
 target_link_libraries(MainWindowSmokeTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME MainWindowSmokeTest COMMAND MainWindowSmokeTest)
 
+set(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS_DEFAULT ON)
+if(DEFINED ENV{CI})
+    set(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS_DEFAULT OFF)
+endif()
+option(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS "Enable tests that require the Windows QPA platform" ${AIRPLAY_ENABLE_WINDOWS_QPA_TESTS_DEFAULT})
+
+if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
+    add_test(NAME MainWindowTopmostFlickerTest COMMAND MainWindowSmokeTest visibleAlwaysOnTopToggleDoesNotHideOrShowWindow)
+endif()
+
 add_executable(AppSettingsTest app/AppSettingsTest.cpp)
 target_link_libraries(AppSettingsTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AppSettingsTest COMMAND AppSettingsTest)
@@ -79,3 +89,10 @@ foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
 endforeach()
+
+if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
+    set_tests_properties(MainWindowTopmostFlickerTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+endif()

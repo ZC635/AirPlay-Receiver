@@ -15,6 +15,36 @@
 #include <QWidget>
 #include <utility>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
+#ifdef Q_OS_WIN
+namespace {
+bool setNativeAlwaysOnTop(WId windowId, bool enabled) {
+    HWND window = reinterpret_cast<HWND>(windowId);
+    if (window == nullptr || !IsWindow(window)) {
+        return false;
+    }
+
+    return SetWindowPos(
+               window,
+               enabled ? HWND_TOPMOST : HWND_NOTOPMOST,
+               0,
+               0,
+               0,
+               0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER) != FALSE;
+}
+}
+#endif
+
 MainWindow::MainWindow(QWidget *parent)
     : MainWindow(AppSettings::defaults(), nullptr, parent) {}
 
@@ -36,6 +66,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
       settingsPath_(std::move(settingsPath)) {
     setWindowTitle("AirPlay Receiver");
     resize(960, 540);
+    alwaysOnTopEnabled_ = windowFlags().testFlag(Qt::WindowStaysOnTopHint);
 
     statusLabel_->setObjectName("receiverStatusLabel");
     statusLabel_->setAlignment(Qt::AlignCenter);
@@ -116,12 +147,28 @@ void MainWindow::toggleToolbarVisibility() {
 }
 
 bool MainWindow::isAlwaysOnTopEnabled() const {
-    return windowFlags().testFlag(Qt::WindowStaysOnTopHint);
+    return alwaysOnTopEnabled_;
 }
 
 void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
+    if (alwaysOnTopEnabled_ == enabled) {
+        toolbar_->setAlwaysOnTopChecked(enabled);
+        return;
+    }
+
     const bool wasVisible = isVisible();
+
+#ifdef Q_OS_WIN
+    // Qt's window flag path hides and shows visible HWNDs, which causes a flash.
+    if (wasVisible && setNativeAlwaysOnTop(winId(), enabled)) {
+        alwaysOnTopEnabled_ = enabled;
+        toolbar_->setAlwaysOnTopChecked(enabled);
+        return;
+    }
+#endif
+
     setWindowFlag(Qt::WindowStaysOnTopHint, enabled);
+    alwaysOnTopEnabled_ = enabled;
     toolbar_->setAlwaysOnTopChecked(enabled);
     if (wasVisible) {
         show();
