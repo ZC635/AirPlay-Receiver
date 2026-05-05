@@ -35,6 +35,9 @@ ui_*.h
 .env
 local.settings.json
 
+# Documentation (plans, design notes)
+docs/
+
 # OS/editor
 .DS_Store
 Thumbs.db
