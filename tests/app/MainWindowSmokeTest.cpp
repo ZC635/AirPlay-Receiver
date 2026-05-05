@@ -778,6 +778,21 @@ private slots:
         auto *button = window.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(button->isChecked());
     }
+
+    void aspectRatioLockTogglePersistsToSettings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, path);
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(button != nullptr);
+
+        button->setChecked(true);
+
+        AppSettingsStore store(path);
+        QVERIFY(store.loadOrDefaults().aspectRatioLock());
+    }
 };
 
 QTEST_MAIN(MainWindowSmokeTest)

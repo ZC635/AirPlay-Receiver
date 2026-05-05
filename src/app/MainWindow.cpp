@@ -350,6 +350,9 @@ void MainWindow::applyAspectRatioLock(bool enabled) {
     aspectRatioLock_ = enabled;
     settings_.setAspectRatioLock(enabled);
     toolbar_->setAspectRatioChecked(enabled);
+    if (!saveSettings()) {
+        statusLabel_->setText("Could not save settings");
+    }
     if (enabled && videoWidth_ > 0 && videoHeight_ > 0) {
         enforceAspectRatio();
     }

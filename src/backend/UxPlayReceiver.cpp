@@ -124,6 +124,8 @@ void audioGetFormat(void *cls, unsigned char *ct, unsigned short *spf, bool *usi
 }
 
 void videoReportSize(void *cls, float *widthSource, float *heightSource, float *width, float *height) {
+    *width = *widthSource;
+    *height = *heightSource;
     auto *receiver = static_cast<UxPlayReceiver *>(cls);
     int w = static_cast<int>(*widthSource);
     int h = static_cast<int>(*heightSource);
