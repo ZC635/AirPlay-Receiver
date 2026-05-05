@@ -199,7 +199,7 @@ void MainWindow::handleReceiverNameChange(const QString &receiverName) {
         return;
     }
 
-    if (receiverConnected_) {
+    if (receiverRenameBlocked_) {
         const auto answer = QMessageBox::question(
             this,
             "Apply receiver name",
@@ -247,8 +247,8 @@ void MainWindow::revertReceiverNameToDefaultAfterApplyFailure() {
     statusLabel_->setText("Could not apply receiver name; reverted to default");
 }
 
-void MainWindow::applyPendingReceiverNameIfNeeded(bool wasConnected) {
-    if (!wasConnected || receiverConnected_ || pendingReceiverName_.isEmpty()) {
+void MainWindow::applyPendingReceiverNameIfNeeded(bool wasRenameBlocked) {
+    if (!wasRenameBlocked || receiverRenameBlocked_ || pendingReceiverName_.isEmpty()) {
         return;
     }
 
@@ -258,8 +258,9 @@ void MainWindow::applyPendingReceiverNameIfNeeded(bool wasConnected) {
 }
 
 void MainWindow::updateReceiverState(ReceiverState state) {
-    const bool wasConnected = receiverConnected_;
+    const bool wasRenameBlocked = receiverRenameBlocked_;
     receiverConnected_ = state == ReceiverState::Connected;
+    receiverRenameBlocked_ = state == ReceiverState::Connecting || state == ReceiverState::Connected;
     const bool showToolbar = !receiverConnected_;
     toolbar_->setVisible(showToolbar);
     statusLabel_->setVisible(showToolbar);
@@ -285,7 +286,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
         break;
     }
 
-    applyPendingReceiverNameIfNeeded(wasConnected);
+    applyPendingReceiverNameIfNeeded(wasRenameBlocked);
 }
 
 void MainWindow::showSettingsDialog() {

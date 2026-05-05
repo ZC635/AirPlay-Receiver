@@ -391,6 +391,8 @@ void UxPlayReceiver::start() {
         setState(ReceiverState::Error);
         return;
     }
+    raop_set_log_callback(raop, logCallback, this);
+    raop_set_log_level(raop, debugLogEnabled() ? LOGGER_DEBUG : LOGGER_INFO);
     m_raop = raop;
 
     const QByteArray deviceId = defaultDeviceId();
@@ -484,7 +486,7 @@ bool UxPlayReceiver::applyReceiverName(const QString &name) {
         return true;
     }
 
-    if (m_state == ReceiverState::Connected) {
+    if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
         stop();
         start();
         if (m_state == ReceiverState::Error) {
@@ -649,6 +651,12 @@ void UxPlayReceiver::stopDiscoveryBroadcast() {
 
 bool UxPlayReceiver::restartDiscoveryBroadcast() {
     if (!m_raop || !m_raopPort) {
+        setError("Cannot restart discovery before RAOP HTTP server is ready");
+        if (m_raop && m_raopHttpdStarted) {
+            raop_stop_httpd(static_cast<raop_t *>(m_raop));
+            m_raopHttpdStarted = false;
+        }
+        stopDiscoveryBroadcast();
         return false;
     }
 
@@ -663,19 +671,25 @@ bool UxPlayReceiver::restartDiscoveryBroadcast() {
         return false;
     }
 
-    if (!registerDiscoveryBroadcast(m_raopPort)) {
-        return false;
-    }
-
     if (shouldStartHttpd) {
         unsigned short port = m_raopPort;
         if (raop_start_httpd(static_cast<raop_t *>(m_raop), &port) < 0) {
             setError("Failed to restart RAOP HTTP server");
+            stopDiscoveryBroadcast();
             return false;
         }
         raop_set_port(static_cast<raop_t *>(m_raop), port);
         m_raopPort = port;
         m_raopHttpdStarted = true;
+    }
+
+    if (!registerDiscoveryBroadcast(m_raopPort)) {
+        if (m_raopHttpdStarted) {
+            raop_stop_httpd(static_cast<raop_t *>(m_raop));
+            m_raopHttpdStarted = false;
+        }
+        stopDiscoveryBroadcast();
+        return false;
     }
 
     return true;

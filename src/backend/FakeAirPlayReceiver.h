@@ -41,7 +41,7 @@ public:
             return true;
         }
 
-        if (m_state == ReceiverState::Connected) {
+        if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
             stop();
             m_receiverName = name;
             appliedReceiverNames.append(name);

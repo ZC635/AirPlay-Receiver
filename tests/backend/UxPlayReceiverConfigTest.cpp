@@ -1,11 +1,105 @@
+#if AIRPLAY_WITH_UXPLAY && defined(_WIN32)
+#include <winsock2.h>
+#elif AIRPLAY_WITH_UXPLAY
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 #include <QtTest/QtTest>
 #include <QFile>
+
+#if AIRPLAY_WITH_UXPLAY
+#define private public
+#endif
 #include "backend/UxPlayReceiver.h"
+#if AIRPLAY_WITH_UXPLAY
+#undef private
+#endif
 
 #if AIRPLAY_WITH_UXPLAY
 #include "lib/raop.h"
 
 extern "C" int video_renderer_choose_codec(bool video_is_jpeg, bool video_is_h265);
+
+class TcpPortBlocker {
+public:
+    ~TcpPortBlocker() { close(); }
+
+    bool start(unsigned short port) {
+#if defined(_WIN32)
+        m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (m_socket == INVALID_SOCKET) {
+            m_error = QString("socket failed: %1").arg(WSAGetLastError());
+            return false;
+        }
+
+        BOOL exclusive = TRUE;
+        setsockopt(m_socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char *>(&exclusive), sizeof(exclusive));
+
+        sockaddr_in address = {};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_ANY);
+        address.sin_port = htons(port);
+        if (bind(m_socket, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == SOCKET_ERROR) {
+            m_error = QString("bind failed: %1").arg(WSAGetLastError());
+            close();
+            return false;
+        }
+        if (::listen(m_socket, 1) == SOCKET_ERROR) {
+            m_error = QString("listen failed: %1").arg(WSAGetLastError());
+            close();
+            return false;
+        }
+#else
+        m_socket = socket(AF_INET, SOCK_STREAM, 0);
+        if (m_socket < 0) {
+            m_error = "socket failed";
+            return false;
+        }
+
+        sockaddr_in address = {};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_ANY);
+        address.sin_port = htons(port);
+        if (bind(m_socket, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
+            m_error = "bind failed";
+            close();
+            return false;
+        }
+        if (::listen(m_socket, 1) != 0) {
+            m_error = "listen failed";
+            close();
+            return false;
+        }
+#endif
+        return true;
+    }
+
+    void close() {
+#if defined(_WIN32)
+        if (m_socket != INVALID_SOCKET) {
+            closesocket(m_socket);
+            m_socket = INVALID_SOCKET;
+        }
+#else
+        if (m_socket >= 0) {
+            ::close(m_socket);
+            m_socket = -1;
+        }
+#endif
+    }
+
+    QString errorString() const { return m_error; }
+
+private:
+#if defined(_WIN32)
+    SOCKET m_socket = INVALID_SOCKET;
+#else
+    int m_socket = -1;
+#endif
+    QString m_error;
+};
 #endif
 
 class UxPlayReceiverConfigTest : public QObject {
@@ -103,6 +197,91 @@ private slots:
         }
 
         receiver.stop();
+#endif
+    }
+
+    void restartDiscoveryFailureClearsStaleBroadcast() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Restart Failure Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        QVERIFY(receiver.m_dnssd != nullptr);
+        QVERIFY(receiver.m_raopPort != 0);
+
+        const unsigned short port = receiver.m_raopPort;
+        raop_stop_httpd(static_cast<raop_t *>(receiver.m_raop));
+        receiver.m_raopHttpdStarted = false;
+
+        TcpPortBlocker blocker;
+        QVERIFY2(blocker.start(port), qPrintable(blocker.errorString()));
+
+        const bool restarted = receiver.restartDiscoveryBroadcast();
+        const bool staleBroadcastLeft = receiver.m_dnssd != nullptr;
+        const bool httpdRestarted = receiver.m_raopHttpdStarted;
+        blocker.close();
+        receiver.stop();
+
+        QVERIFY(!restarted);
+        QVERIFY(!staleBroadcastLeft);
+        QVERIFY(!httpdRestarted);
+#endif
+    }
+
+    void restartDiscoveryGuardClearsExistingBroadcast() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Restart Guard Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        QVERIFY(receiver.m_dnssd != nullptr);
+
+        receiver.m_raopPort = 0;
+        const bool restarted = receiver.restartDiscoveryBroadcast();
+        const bool staleBroadcastLeft = receiver.m_dnssd != nullptr;
+        const bool httpdLeftRunning = receiver.m_raopHttpdStarted;
+        receiver.stop();
+
+        QVERIFY(!restarted);
+        QVERIFY(!staleBroadcastLeft);
+        QVERIFY(!httpdLeftRunning);
+        QVERIFY(errorSpy.count() > 0);
+#endif
+    }
+
+    void restartDiscoveryRegisterFailureStopsHttpdAndClearsBroadcast() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Register Failure Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        QVERIFY(receiver.m_raopHttpdStarted);
+        QVERIFY(receiver.m_dnssd != nullptr);
+
+        receiver.m_config.serverName = QString(300, QLatin1Char('A'));
+        const bool restarted = receiver.restartDiscoveryBroadcast();
+        const bool staleBroadcastLeft = receiver.m_dnssd != nullptr;
+        const bool httpdLeftRunning = receiver.m_raopHttpdStarted;
+        receiver.stop();
+
+        QVERIFY(!restarted);
+        QVERIFY(!staleBroadcastLeft);
+        QVERIFY(!httpdLeftRunning);
+        QVERIFY(errorSpy.count() > 0);
 #endif
     }
 

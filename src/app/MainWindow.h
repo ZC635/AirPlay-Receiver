@@ -36,7 +36,7 @@ private:
     void handleReceiverNameChange(const QString &receiverName);
     bool applyReceiverNameNow(const QString &receiverName);
     void revertReceiverNameToDefaultAfterApplyFailure();
-    void applyPendingReceiverNameIfNeeded(bool wasConnected);
+    void applyPendingReceiverNameIfNeeded(bool wasRenameBlocked);
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
 
@@ -51,4 +51,5 @@ private:
     QString currentError_;
     QString settingsPath_;
     bool receiverConnected_ = false;
+    bool receiverRenameBlocked_ = false;
 };
