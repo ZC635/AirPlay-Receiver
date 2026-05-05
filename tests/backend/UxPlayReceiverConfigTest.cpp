@@ -122,7 +122,11 @@ private slots:
         QVERIFY(!receiver.applyReceiverName(tooLongName));
 
         QCOMPARE(receiver.state(), ReceiverState::Error);
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver Failure Test"));
         QVERIFY(errorSpy.count() > 0);
+
+        receiver.stop();
+        QCOMPARE(receiver.state(), ReceiverState::Idle);
 #endif
     }
 

@@ -497,7 +497,9 @@ bool UxPlayReceiver::applyReceiverName(const QString &name) {
 #if AIRPLAY_WITH_UXPLAY
     if (!restartDiscoveryBroadcast()) {
         m_config.serverName = previousName;
-        restartDiscoveryBroadcast();
+        if (!restartDiscoveryBroadcast()) {
+            setError("Failed to recover discovery after receiver rename failure");
+        }
         setState(ReceiverState::Error);
         return false;
     }
