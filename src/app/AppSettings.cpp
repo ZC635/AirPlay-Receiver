@@ -49,6 +49,14 @@ void AppSettings::setReceiverName(QString name) {
     receiverName_ = std::move(name).trimmed();
 }
 
+bool AppSettings::aspectRatioLock() const {
+    return aspectRatioLock_;
+}
+
+void AppSettings::setAspectRatioLock(bool enabled) {
+    aspectRatioLock_ = enabled;
+}
+
 QStringList AppSettings::validateGeneral() const {
     QStringList errors;
     if (receiverName_.trimmed().isEmpty()) {

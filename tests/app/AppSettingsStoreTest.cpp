@@ -126,6 +126,19 @@ private slots:
 
         QVERIFY(!store.save(AppSettings::defaults()));
     }
+
+    void savesAndLoadsAspectRatioLock() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("settings.json");
+
+        AppSettings settings = AppSettings::defaults();
+        settings.setAspectRatioLock(true);
+        AppSettingsStore(path).save(settings);
+
+        AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        QVERIFY(loaded.aspectRatioLock());
+    }
 };
 
 QTEST_MAIN(AppSettingsStoreTest)

@@ -45,6 +45,10 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     if (volume.isDouble()) {
         settings.setVolume(volume.toInt());
     }
+    const QJsonValue aspectLock = root.value("aspectRatioLock");
+    if (aspectLock.isBool()) {
+        settings.setAspectRatioLock(aspectLock.toBool());
+    }
     return settings;
 }
 
@@ -58,6 +62,7 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
     root.insert("receiverName", settings.receiverName());
     root.insert("shortcuts", shortcuts);
     root.insert("volume", settings.volume());
+    root.insert("aspectRatioLock", settings.aspectRatioLock());
 
     QSaveFile file(path_);
     if (!file.open(QIODevice::WriteOnly)) {

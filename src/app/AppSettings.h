@@ -27,6 +27,8 @@ public:
     void setVolume(int value);
     QString receiverName() const;
     void setReceiverName(QString name);
+    bool aspectRatioLock() const;
+    void setAspectRatioLock(bool enabled);
     QStringList validateGeneral() const;
     QStringList validateShortcuts() const;
 
@@ -34,4 +36,5 @@ private:
     QHash<int, QKeySequence> shortcuts_;
     int volume_ = 100;
     QString receiverName_ = "AirPlay Receiver";
+    bool aspectRatioLock_ = false;
 };

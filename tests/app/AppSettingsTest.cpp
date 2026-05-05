@@ -52,6 +52,19 @@ private slots:
         settings.setReceiverName("   ");
         QVERIFY(settings.validateGeneral().join('\n').contains("Receiver name"));
     }
+
+    void aspectRatioLockDefaultsToFalse() {
+        AppSettings settings = AppSettings::defaults();
+        QVERIFY(!settings.aspectRatioLock());
+    }
+
+    void aspectRatioLockSetterAndGetter() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setAspectRatioLock(true);
+        QVERIFY(settings.aspectRatioLock());
+        settings.setAspectRatioLock(false);
+        QVERIFY(!settings.aspectRatioLock());
+    }
 };
 
 QTEST_MAIN(AppSettingsTest)
