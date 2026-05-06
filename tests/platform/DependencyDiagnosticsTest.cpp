@@ -43,6 +43,7 @@ private slots:
         QVERIFY(missing.contains("airplay_receiver.exe"));
         QVERIFY(missing.contains("Qt6Core.dll"));
         QVERIFY(missing.contains("gstreamer-plugins/libgstapp.dll"));
+        QVERIFY(missing.contains("dnssd.dll"));
     }
 
     void acceptsCompleteStandaloneRuntimeFiles() {
@@ -65,7 +66,8 @@ private slots:
             "gstreamer-plugins/libgstvideoparsersbad.dll",
             "gstreamer-plugins/libgstlibav.dll",
             "gstreamer-plugins/libgstd3d11.dll",
-            "gstreamer-plugins/libgstwasapi.dll"
+            "gstreamer-plugins/libgstwasapi.dll",
+            "dnssd.dll"
         };
 
         for (const QString &relativePath : requiredPaths) {

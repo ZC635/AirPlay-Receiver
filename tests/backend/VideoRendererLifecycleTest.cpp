@@ -15,6 +15,35 @@ class VideoRendererLifecycleTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void initReturnsErrorOnInvalidPlaybinVersion() {
+#if AIRPLAY_WITH_UXPLAY
+        if (!gstreamer_init()) {
+            QSKIP("GStreamer is not available in this environment");
+        }
+
+        QStringList messages;
+        auto logger = std::unique_ptr<logger_t, decltype(&logger_destroy)>(logger_init(), logger_destroy);
+        QVERIFY(logger != nullptr);
+        logger_set_level(logger.get(), LOGGER_DEBUG);
+        logger_set_callback(logger.get(), [](void *cls, int, const char *message) {
+            auto *messages = static_cast<QStringList *>(cls);
+            messages->append(QString::fromUtf8(message ? message : ""));
+        }, &messages);
+
+        struct RendererCleanup {
+            ~RendererCleanup() { video_renderer_destroy(); }
+        } cleanup;
+
+        videoflip_t videoFlip[2] = {NONE, NONE};
+        const int result = video_renderer_init(logger.get(), "Bad Playbin Test", videoFlip, "h264parse", "",
+                                                "decodebin", "videoconvert", "fakesink", "", false, false, false, false,
+                                                99, "http://fake-hls-stream.example/test.m3u8");
+        QVERIFY2(result != 0, "video_renderer_init must return non-zero for invalid playbin version");
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
+
     void choosingSameCodecAfterStopRestartsVideoPipeline() {
 #if AIRPLAY_WITH_UXPLAY
         if (!gstreamer_init()) {
@@ -35,8 +64,9 @@ private slots:
         } cleanup;
 
         videoflip_t videoFlip[2] = {NONE, NONE};
-        video_renderer_init(logger.get(), "Video Renderer Lifecycle Test", videoFlip, "h264parse", "",
-                            "decodebin", "videoconvert", "fakesink", "", false, false, false, false, 3, nullptr);
+        QCOMPARE(video_renderer_init(logger.get(), "Video Renderer Lifecycle Test", videoFlip, "h264parse", "",
+                                      "decodebin", "videoconvert", "fakesink", "", false, false, false, false,
+                                      3, nullptr), 0);
         video_renderer_start();
 
         auto stateChangeLogCount = [&messages] {

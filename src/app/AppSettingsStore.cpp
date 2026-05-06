@@ -29,7 +29,12 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
         return AppSettings::defaults();
     }
 
-    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    if (doc.isNull() || !doc.isObject()) {
+        return AppSettings::defaults();
+    }
+
+    const QJsonObject root = doc.object();
     const QJsonObject shortcuts = root.value("shortcuts").toObject();
     AppSettings settings = AppSettings::defaults();
     const QString receiverName = root.value("receiverName").toString().trimmed();
@@ -39,7 +44,10 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     for (const ShortcutBinding &binding : settings.shortcuts()) {
         const QString value = shortcuts.value(keyFor(binding.action)).toString();
         if (!value.isEmpty()) {
-            settings.setShortcut(binding.action, QKeySequence::fromString(value, QKeySequence::PortableText));
+            const QKeySequence parsed = QKeySequence::fromString(value, QKeySequence::PortableText);
+            if (!parsed.toString(QKeySequence::PortableText).isEmpty() && parsed.count() == 1) {
+                settings.setShortcut(binding.action, parsed);
+            }
         }
     }
     const QJsonValue volume = root.value("volume");

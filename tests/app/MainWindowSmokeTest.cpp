@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QImage>
+#include <QFileInfo>
 #include <QKeySequenceEdit>
 #include <QPainter>
 #include <QPushButton>
@@ -23,7 +24,6 @@
 #include <algorithm>
 #include <memory>
 
-#ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -31,7 +31,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#endif
 
 class WindowVisibilityEventCounter final : public QObject {
 public:
@@ -54,12 +53,10 @@ protected:
     }
 };
 
-#ifdef Q_OS_WIN
 bool windowHasNativeTopmostState(const QWidget &widget) {
     const HWND window = reinterpret_cast<HWND>(widget.winId());
     return (GetWindowLongPtr(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 }
-#endif
 
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
@@ -85,7 +82,6 @@ private slots:
     }
 
     void visibleAlwaysOnTopToggleDoesNotHideOrShowWindow() {
-#ifdef Q_OS_WIN
         if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
             QSKIP("Requires the Windows QPA platform");
         }
@@ -114,9 +110,6 @@ private slots:
         QCOMPARE(events.showEvents, 0);
         QVERIFY(!window.isAlwaysOnTopEnabled());
         QVERIFY(!windowHasNativeTopmostState(window));
-#else
-        QSKIP("Windows-specific topmost behavior");
-#endif
     }
 
     void shortcutTogglesToolbar() {
@@ -248,6 +241,15 @@ private slots:
             QCOMPARE(hotkeys.registrations[i].action, shortcuts[i].action);
             QCOMPARE(hotkeys.registrations[i].sequence, shortcuts[i].sequence);
         }
+    }
+
+    void failedInitialHotkeyRegistrationShowsError() {
+        FakeHotkeyService hotkeys;
+        hotkeys.rejectedRegistrations.append({ShortcutAction::ToggleToolbar, AppSettings::defaults().shortcutFor(ShortcutAction::ToggleToolbar)});
+        MainWindow window(AppSettings::defaults(), &hotkeys);
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QCOMPARE(label->text(), QString("Could not register one or more shortcuts"));
     }
 
     void shortcutAlwaysOnTopSyncsToolbarButton() {
@@ -698,6 +700,27 @@ private slots:
         QCOMPARE(store.loadOrDefaults().volume(), 40);
     }
 
+    void startupWithDefaultVolumeDoesNotOverwriteFile() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(R"({"receiverName":"AirPlay Receiver","shortcuts":{"toggleAlwaysOnTop":"Ctrl+Shift+P","volumeUp":"Ctrl+Shift+Up","volumeDown":"Ctrl+Shift+Down","toggleToolbar":"Ctrl+Shift+T","toggleAspectRatio":"Ctrl+Shift+A"},"volume":100,"aspectRatioLock":false})");
+            file.close();
+        }
+
+        AppSettings settings = AppSettings::defaults();
+        MainWindow window(settings, nullptr, nullptr, path);
+
+        const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(loaded.volume(), 100);
+        QCOMPARE(loaded.receiverName(), QString("AirPlay Receiver"));
+        QVERIFY(!loaded.aspectRatioLock());
+    }
+
     void acceptedSettingsDialogUpdatesHotkeysAndSavesShortcuts() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
@@ -884,7 +907,6 @@ private slots:
     }
 
     void nativeAspectSizingAdjustsPendingRightEdgeRect() {
-#ifdef Q_OS_WIN
         if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
             QSKIP("Requires the Windows QPA platform");
         }
@@ -920,9 +942,6 @@ private slots:
         QCOMPARE(rect.right, originalRight + 160);
         QVERIFY(qAbs(((rect.top + rect.bottom) / 2) - originalCenterY) <= 1);
         QVERIFY(qAbs(actualRatio - (16.0 / 9.0)) < 0.01);
-#else
-        QSKIP("Windows-specific native sizing behavior");
-#endif
     }
 
     void disablingAspectRatioLockKeepsCurrentSize() {

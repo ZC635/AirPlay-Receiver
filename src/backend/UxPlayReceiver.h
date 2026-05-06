@@ -3,6 +3,8 @@
 #include <atomic>
 
 #include <QString>
+#include <QMutex>
+#include <QRecursiveMutex>
 
 #include "backend/AirPlayReceiver.h"
 
@@ -39,6 +41,13 @@ public:
     void handleVideoResetFromUxPlayCallback(int resetType, quint64 generation);
     void stopVideoPipelineForDisconnect();
     void restartVideoPipelineForConnect();
+    void renderAudioBufferFromCallback(void *data, int *data_len, unsigned short *seqnum, uint64_t *ntp_time);
+    void renderVideoBufferFromCallback(void *data, int *data_len, int *nal_count, uint64_t *ntp_time);
+    void flushAudioRendererFromCallback();
+    void flushVideoRendererFromCallback();
+    void pauseVideoRendererFromCallback();
+    void resumeVideoRendererFromCallback();
+    int chooseVideoCodecFromCallback(bool video_is_h265);
 #endif
 
 signals:
@@ -58,6 +67,7 @@ private:
     void unregisterDiscoveryBroadcast();
     void destroyDiscoveryBroadcast();
     bool restartDiscoveryBroadcast();
+    void cancelPendingDiscoveryRestart();
 #endif
 
     UxPlayReceiverConfig m_config;
@@ -77,6 +87,10 @@ private:
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_acceptingCallbacks = false;
     std::atomic<quint64> m_callbackGeneration = 0;
+    std::atomic_bool m_discoveryRestartPending = false;
     QObject *m_glibTimer = nullptr;
+    QTimer *m_discoveryRestartTimer = nullptr;
+    QRecursiveMutex m_rendererMutex;
+    QString m_pendingDiscoveryRecoveryName; // last stable advertised name, used for async rollback if rename restart fails
 #endif
 };

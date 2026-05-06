@@ -1,12 +1,11 @@
 #include <QtTest/QtTest>
 
 #include "app/AppSettings.h"
+#include "app/ShortcutBinding.h"
 #include "platform/WindowsHotkeyService.h"
 
-#ifdef Q_OS_WIN
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#endif
 
 class HotkeyServiceTest : public QObject {
     Q_OBJECT
@@ -21,6 +20,11 @@ private slots:
 
     void rejectsEmptyShortcut() {
         QVERIFY(!WindowsHotkeyService::toNativeHotkey(QKeySequence()).has_value());
+    }
+
+    void rejectsMultiKeySequence() {
+        QVERIFY(!WindowsHotkeyService::toNativeHotkey(QKeySequence("Ctrl+K, Ctrl+C")).has_value());
+        QVERIFY(!WindowsHotkeyService::toNativeHotkey(QKeySequence("Ctrl+A, Ctrl+B, Ctrl+C")).has_value());
     }
 
     void convertsDefaultShortcuts() {
@@ -39,13 +43,67 @@ private slots:
 
         QVERIFY(up.has_value());
         QVERIFY(down.has_value());
-#ifdef Q_OS_WIN
         QCOMPARE(up->virtualKey, static_cast<unsigned int>(VK_UP));
         QCOMPARE(down->virtualKey, static_cast<unsigned int>(VK_DOWN));
-#else
-        QVERIFY(up->virtualKey != 0);
-        QVERIFY(down->virtualKey != 0);
-#endif
+    }
+
+    void registerShortcutRejectsInvalidSequence() {
+        WindowsHotkeyService service;
+        QVERIFY(!service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence()));
+        QVERIFY(!service.registerShortcut(ShortcutAction::VolumeUp, QKeySequence("F99")));
+    }
+
+    void registerShortcutPreservesExistingOnInvalidReregistration() {
+        WindowsHotkeyService service;
+        service.registrations_.insert(1, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+        QVERIFY(!service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence()));
+        QCOMPARE(service.registrations_.size(), 1);
+        QVERIFY(service.registrations_.contains(1));
+        QCOMPARE(service.registrations_.value(1).action, ShortcutAction::ToggleToolbar);
+        QCOMPARE(service.registrations_.value(1).sequence, QKeySequence("Ctrl+Shift+Z"));
+    }
+
+    void nativeEventFilterSetsResultOnHandledHotkey() {
+        WindowsHotkeyService service;
+        const int id = 1;
+        service.registrations_.insert(id, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+
+        MSG msg{};
+        msg.message = WM_HOTKEY;
+        msg.wParam = id;
+        qintptr result = 0;
+
+        const bool handled = service.nativeEventFilter(QByteArray(), &msg, &result);
+
+        QVERIFY(handled);
+        QCOMPARE(result, static_cast<qintptr>(TRUE));
+    }
+
+    void nativeEventFilterIgnoresUnregisteredHotkeyId() {
+        WindowsHotkeyService service;
+        service.registrations_.insert(1, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+
+        MSG msg{};
+        msg.message = WM_HOTKEY;
+        msg.wParam = 999;
+        qintptr result = 0;
+
+        const bool handled = service.nativeEventFilter(QByteArray(), &msg, &result);
+
+        QVERIFY(!handled);
+        QCOMPARE(result, static_cast<qintptr>(0));
+    }
+
+    void nativeEventFilterPassesThroughNonHotkeyMessages() {
+        WindowsHotkeyService service;
+        MSG msg{};
+        msg.message = WM_PAINT;
+        qintptr result = 0;
+
+        const bool handled = service.nativeEventFilter(QByteArray(), &msg, &result);
+
+        QVERIFY(!handled);
+        QCOMPARE(result, static_cast<qintptr>(0));
     }
 };
 

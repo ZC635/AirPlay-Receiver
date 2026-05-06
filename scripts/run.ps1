@@ -57,7 +57,8 @@ function Get-StandaloneMissingRequirements {
         "gstreamer-plugins\libgstvideoparsersbad.dll",
         "gstreamer-plugins\libgstlibav.dll",
         "gstreamer-plugins\libgstd3d11.dll",
-        "gstreamer-plugins\libgstwasapi.dll"
+        "gstreamer-plugins\libgstwasapi.dll",
+        "dnssd.dll"
     )
 
     $missing = @()
@@ -139,11 +140,17 @@ function Start-PortableProcess {
     $previousPath = $env:PATH
     $hadGstPluginPath = Test-Path Env:GST_PLUGIN_PATH
     $previousGstPluginPath = $env:GST_PLUGIN_PATH
+    $hadGstRegistry = Test-Path Env:GST_REGISTRY
+    $previousGstRegistry = $env:GST_REGISTRY
     $msys2InstallRoots = @(Get-MSys2InstallRootCandidates $RequestedMSys2Root)
 
     try {
         $env:PATH = Remove-PathTreeEntries $env:PATH $msys2InstallRoots
         Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
+        $portableRegistry = Join-Path $WorkingDirectory "gstreamer-1.0\registry.x86_64.bin"
+        if (Test-Path $portableRegistry) {
+            $env:GST_REGISTRY = $portableRegistry
+        }
         Start-Process -FilePath $ExePath -WorkingDirectory $WorkingDirectory -WindowStyle Normal
     } finally {
         $env:PATH = $previousPath
@@ -151,6 +158,11 @@ function Start-PortableProcess {
             $env:GST_PLUGIN_PATH = $previousGstPluginPath
         } else {
             Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
+        }
+        if ($hadGstRegistry) {
+            $env:GST_REGISTRY = $previousGstRegistry
+        } else {
+            Remove-Item Env:GST_REGISTRY -ErrorAction SilentlyContinue
         }
     }
 }
@@ -196,8 +208,28 @@ if (-not $ResolvedMSys2Root) {
 
 $MSys2Bin = Join-Path $ResolvedMSys2Root "bin"
 $PluginDir = Join-Path $ResolvedMSys2Root "lib\gstreamer-1.0"
-$env:GST_PLUGIN_PATH = $PluginDir
-$env:PATH = "$MSys2Bin;$env:PATH"
+$previousPath = $env:PATH
+$hadGstPluginPath = Test-Path Env:GST_PLUGIN_PATH
+$previousGstPluginPath = $env:GST_PLUGIN_PATH
+$hadGstRegistry = Test-Path Env:GST_REGISTRY
+$previousGstRegistry = $env:GST_REGISTRY
 
-Write-Host "Launching (MSYS2 PATH mode: $ResolvedMSys2Root)" -ForegroundColor Green
-Start-Process -FilePath $ExePath -WindowStyle Normal
+try {
+    $env:GST_PLUGIN_PATH = $PluginDir
+    $env:PATH = "$MSys2Bin;$env:PATH"
+
+    Write-Host "Launching (MSYS2 PATH mode: $ResolvedMSys2Root)" -ForegroundColor Green
+    Start-Process -FilePath $ExePath -WindowStyle Normal
+} finally {
+    $env:PATH = $previousPath
+    if ($hadGstPluginPath) {
+        $env:GST_PLUGIN_PATH = $previousGstPluginPath
+    } else {
+        Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
+    }
+    if ($hadGstRegistry) {
+        $env:GST_REGISTRY = $previousGstRegistry
+    } else {
+        Remove-Item Env:GST_REGISTRY -ErrorAction SilentlyContinue
+    }
+}

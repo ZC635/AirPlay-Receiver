@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX)
 
+if(NOT WIN32)
+    message(FATAL_ERROR "This project requires Windows")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -47,7 +51,7 @@ if(AIRPLAY_WITH_UXPLAY)
     target_link_libraries(airplay_app_lib PRIVATE uxplay_dependency)
 endif()
 if(WIN32)
-    target_link_libraries(airplay_app_lib PUBLIC user32 dwmapi)
+    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi)
 endif()
 
 add_executable(airplay_receiver src/app/main.cpp)

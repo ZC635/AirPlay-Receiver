@@ -17,7 +17,6 @@
 #include <QWidget>
 #include <utility>
 
-#ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -26,9 +25,7 @@
 #endif
 #include <windows.h>
 #include <dwmapi.h>
-#endif
 
-#ifdef Q_OS_WIN
 namespace {
 bool setNativeAlwaysOnTop(WId windowId, bool enabled) {
     HWND window = reinterpret_cast<HWND>(windowId);
@@ -79,7 +76,6 @@ AspectRatioSizeConstraints sizeConstraintsFor(const QWidget &widget, const Aspec
         widget.maximumHeight() + verticalFrame};
 }
 }
-#endif
 
 MainWindow::MainWindow(QWidget *parent)
     : MainWindow(AppSettings::defaults(), nullptr, parent) {}
@@ -160,9 +156,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
 
     setVolume(settings_.volume());
 
-    registerHotkeys();
+    const bool hotkeysOk = registerHotkeys();
     if (hotkeys_ != nullptr) {
         connect(hotkeys_, &HotkeyService::activated, this, &MainWindow::handleShortcut);
+    }
+    if (!hotkeysOk) {
+        statusLabel_->setText("Could not register one or more shortcuts");
     }
 }
 
@@ -194,14 +193,12 @@ void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
 
     const bool wasVisible = isVisible();
 
-#ifdef Q_OS_WIN
     if (wasVisible && setNativeAlwaysOnTop(winId(), enabled)) {
         alwaysOnTopEnabled_ = enabled;
         toolbar_->setAlwaysOnTopChecked(enabled);
         setWindowBorderColor(winId(), enabled);
         return;
     }
-#endif
 
     setWindowFlag(Qt::WindowStaysOnTopHint, enabled);
     alwaysOnTopEnabled_ = enabled;
@@ -274,11 +271,12 @@ bool MainWindow::saveSettings() const {
 
 void MainWindow::setReceiverVolume(int value) {
     const int clamped = std::clamp(value, 0, 100);
+    const bool changed = (settings_.volume() != clamped);
     settings_.setVolume(clamped);
     if (receiver_ != nullptr) {
         receiver_->setVolume(clamped / 100.0);
     }
-    if (!saveSettings()) {
+    if (changed && !saveSettings()) {
         statusLabel_->setText("Could not save settings");
     }
 }
@@ -422,7 +420,6 @@ void MainWindow::showSettingsDialog() {
 }
 
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
-#ifdef Q_OS_WIN
     auto *msg = static_cast<MSG *>(message);
     if (msg != nullptr && msg->message == WM_SIZING && aspectRatioLock_ && videoWidth_ > 0 && videoHeight_ > 0) {
         auto *rect = reinterpret_cast<RECT *>(msg->lParam);
@@ -435,7 +432,6 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr
             return true;
         }
     }
-#endif
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 
@@ -457,10 +453,11 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
 }
 
 void MainWindow::applyAspectRatioLock(bool enabled) {
+    const bool changed = (aspectRatioLock_ != enabled);
     aspectRatioLock_ = enabled;
     settings_.setAspectRatioLock(enabled);
     toolbar_->setAspectRatioChecked(enabled);
-    if (!saveSettings()) {
+    if (changed && !saveSettings()) {
         statusLabel_->setText("Could not save settings");
     }
     if (enabled && videoWidth_ > 0 && videoHeight_ > 0) {

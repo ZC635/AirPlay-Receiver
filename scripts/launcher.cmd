@@ -12,6 +12,16 @@ if not exist "%~dp0Qt6Core.dll" (
     pause
     exit /b 1
 )
+if not exist "%~dp0airplay_receiver.exe" (
+    echo [ERROR] airplay_receiver.exe not found. Run: .\scripts\build.ps1 -Deploy
+    pause
+    exit /b 1
+)
+if not exist "%~dp0dnssd.dll" (
+    echo [ERROR] dnssd.dll not found. Run: .\scripts\build.ps1 -Deploy
+    pause
+    exit /b 1
+)
 
 set "GST_PLUGIN_PATH=%~dp0gstreamer-plugins"
 if exist "%~dp0gstreamer-1.0\registry.x86_64.bin" set "GST_REGISTRY=%~dp0gstreamer-1.0\registry.x86_64.bin"

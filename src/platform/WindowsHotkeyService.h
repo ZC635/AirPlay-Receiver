@@ -2,6 +2,7 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QHash>
+#include <QKeySequence>
 
 #include <optional>
 
@@ -26,5 +27,10 @@ public:
     static std::optional<NativeHotkey> toNativeHotkey(const QKeySequence &sequence);
 
 private:
-    QHash<int, ShortcutAction> actionsById;
+    struct HotkeyEntry {
+        ShortcutAction action;
+        QKeySequence sequence;
+    };
+    QHash<int, HotkeyEntry> registrations_;
+    friend class HotkeyServiceTest;
 };

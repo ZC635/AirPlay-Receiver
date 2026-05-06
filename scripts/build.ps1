@@ -6,11 +6,15 @@ param(
     [string]$MSys2Root,
     [switch]$AssumeYes,
     [switch]$SkipInstall,
-    [switch]$Portable
+    [switch]$Portable,
+    [switch]$All
 )
 
 $ErrorActionPreference = "Stop"
 
+if ($All -and ($Deploy -or $Portable)) {
+    throw "-All is mutually exclusive with -Deploy and -Portable. -All already builds both variants."
+}
 if ($Portable -and $Deploy) {
     throw "-Portable and -Deploy are mutually exclusive. -Portable already implies deployment."
 }
@@ -274,7 +278,8 @@ function Get-StandaloneMissingRequirements {
         "gstreamer-plugins\libgstvideoparsersbad.dll",
         "gstreamer-plugins\libgstlibav.dll",
         "gstreamer-plugins\libgstd3d11.dll",
-        "gstreamer-plugins\libgstwasapi.dll"
+        "gstreamer-plugins\libgstwasapi.dll",
+        "dnssd.dll"
     )
 
     $missing = @()
@@ -353,8 +358,168 @@ function Start-PortableProcess {
     }
 }
 
+function Invoke-Build {
+    param(
+        [string]$VariantBuildDir,
+        [bool]$IsPortable,
+        [bool]$ShouldDeploy
+    )
+
+    if ($Clean -and (Test-Path $VariantBuildDir)) {
+        Write-Host "Cleaning build directory..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $VariantBuildDir
+    }
+
+    $BuildNinja = Join-Path $VariantBuildDir "build.ninja"
+    if (Test-Path $BuildNinja) {
+        $BuildNinjaTimestamp = (Get-Item $BuildNinja).LastWriteTime
+        $SrcFiles = Get-ChildItem (Join-Path $ProjectRoot "src") -Recurse -Include "*.cpp","*.h" -ErrorAction SilentlyContinue
+        $BuildFiles = @(
+            (Get-Item (Join-Path $ProjectRoot "CMakeLists.txt") -ErrorAction SilentlyContinue),
+            (Get-ChildItem (Join-Path $ProjectRoot "cmake") -Filter "*.cmake" -ErrorAction SilentlyContinue)
+        )
+        $latestSource = ($SrcFiles + $BuildFiles) |
+            Where-Object { $_ } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($latestSource -and ($latestSource.LastWriteTime -gt $BuildNinjaTimestamp)) {
+            $relativeName = $latestSource.FullName.Replace("$ProjectRoot\", "")
+            Write-Host "Source changes detected (newest: $relativeName), forcing build system regeneration..." -ForegroundColor Yellow
+            Remove-Item $BuildNinja -Force
+        }
+    }
+
+    Write-Host "`n=== [$VariantBuildDir] CMake Configure (UxPlay=ON) ===" -ForegroundColor Cyan
+    cmake -S $ProjectRoot -B $VariantBuildDir -G Ninja `
+        -DCMAKE_BUILD_TYPE=Release `
+        -DAIRPLAY_WITH_UXPLAY=ON
+
+    if ($LASTEXITCODE -ne 0) { Write-Error "CMake configure failed"; exit 1 }
+
+    Write-Host "`n=== [$VariantBuildDir] CMake Build ===" -ForegroundColor Cyan
+    cmake --build $VariantBuildDir
+
+    if ($LASTEXITCODE -ne 0) { Write-Error "CMake build failed"; exit 1 }
+
+    $VariantExePath = Join-Path $VariantBuildDir "airplay_receiver.exe"
+    if (Test-Path $VariantExePath) {
+        $info = Get-Item $VariantExePath
+        Write-Host "`nBuild succeeded: $VariantExePath ($($info.Length) bytes)" -ForegroundColor Green
+    } else {
+        Write-Error "Exe not found after build"
+        exit 1
+    }
+
+    if ($ShouldDeploy) {
+        Write-Host "`n=== Deploy: bundling dependencies ===" -ForegroundColor Cyan
+
+        Write-Host "  windeployqt..." -ForegroundColor Gray
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $windeployqtOutput = & "$MSys2Bin\windeployqt.exe" $VariantExePath --no-translations --no-compiler-runtime 2>&1
+        $windeployqtExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        if ($windeployqtExit -ne 0) {
+            Write-Error "windeployqt.exe failed with exit code ${windeployqtExit}: $($windeployqtOutput -join ' ')"
+            exit $windeployqtExit
+        }
+
+        Write-Host "  Bundling dnssd.dll..." -ForegroundColor Gray
+        $dnssdSources = @(
+            $(if ($env:BONJOUR_SDK_HOME) { Join-Path $env:BONJOUR_SDK_HOME "Lib\x64\dnssd.dll" } else { $null }),
+            (Join-Path $MSys2Bin "dnssd.dll"),
+            (Join-Path $env:SystemRoot "System32\dnssd.dll")
+        ) | Where-Object { $_ -and (Test-Path $_) }
+        $dnssdSource = $dnssdSources | Select-Object -First 1
+        if ($dnssdSource) {
+            Copy-Item $dnssdSource $VariantBuildDir -Force
+            Write-Host "    Copied dnssd.dll from $dnssdSource" -ForegroundColor Gray
+        } else {
+            throw "dnssd.dll was not found. Install Apple Bonjour Print Services or place dnssd.dll in MSYS2 bin or System32 before building."
+        }
+
+        if ($IsPortable) {
+            Write-Host "  Copying ALL runtime DLLs (portable mode)..." -ForegroundColor Gray
+            Get-ChildItem $MSys2Bin -Filter "*.dll" | Copy-Item -Destination $VariantBuildDir -Force
+        } else {
+            Write-Host "  Copying filtered runtime DLLs..." -ForegroundColor Gray
+            $exclude = @("gcc", "g++", "cpp", "cc1", "cc1plus", "collect2", "ld", "ar", "as", "nm",
+                "objdump", "objcopy", "ranlib", "strip", "readelf", "addr2line", "c++filt",
+                "cmake", "ctest", "cpack", "ninja", "make", "pkg-config", "meson",
+                "python", "perl", "bash", "git", "curl", "wget", "ssh", "scp")
+            $exePatterns = ($exclude | ForEach-Object { "$_.exe" })
+            Get-ChildItem $MSys2Bin -Filter "*.dll" | Where-Object {
+                $n = $_.Name.ToLower()
+                $exePatterns -notcontains $n -and
+                ($n -like "lib*" -or $n -like "av*" -or $n -like "sw*" -or
+                 $n -like "zlib*" -or $n -like "xvid*" -or $n -like "sdl*" -or
+                 $n -like "D3D*" -or $n -like "Qt*" -or $n -like "dx*")
+            } | Copy-Item -Destination $VariantBuildDir -Force
+        }
+
+        Write-Host "  Copying GStreamer plugins..." -ForegroundColor Gray
+        $PluginOutDir = Join-Path $VariantBuildDir "gstreamer-plugins"
+        if (-not (Test-Path $PluginOutDir)) { New-Item -ItemType Directory -Path $PluginOutDir -Force | Out-Null }
+        Get-ChildItem $PluginDir -Filter "*.dll" | Copy-Item -Destination $PluginOutDir -Force
+
+        if ($IsPortable) {
+            Write-Host "  Generating GStreamer registry cache..." -ForegroundColor Gray
+            $registryDir = Join-Path $VariantBuildDir "gstreamer-1.0"
+            if (-not (Test-Path $registryDir)) { New-Item -ItemType Directory -Path $registryDir -Force | Out-Null }
+            $portableRegistry = Join-Path $registryDir "registry.x86_64.bin"
+            $hadGstRegistryForScan = Test-Path Env:GST_REGISTRY
+            $previousGstRegistryForScan = $env:GST_REGISTRY
+            $env:GST_REGISTRY = $portableRegistry
+            $hadGstPluginPathForScan = Test-Path Env:GST_PLUGIN_PATH
+            $previousGstPluginPathForScan = $env:GST_PLUGIN_PATH
+            $env:GST_PLUGIN_PATH = $PluginOutDir
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $gstInspectOutput = & "$MSys2Bin\gst-inspect-1.0.exe" --gst-disable-registry-fork 2>&1
+            $gstInspectExit = $LASTEXITCODE
+            $ErrorActionPreference = $prevEAP
+            if ($gstInspectExit -ne 0) {
+                Write-Warning "gst-inspect-1.0.exe exited with code $gstInspectExit. GStreamer registry may be incomplete. $($gstInspectOutput -join ' ')"
+            }
+            if ($hadGstPluginPathForScan) {
+                $env:GST_PLUGIN_PATH = $previousGstPluginPathForScan
+            } else {
+                Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
+            }
+            if ($hadGstRegistryForScan) {
+                $env:GST_REGISTRY = $previousGstRegistryForScan
+            } else {
+                Remove-Item Env:GST_REGISTRY -ErrorAction SilentlyContinue
+            }
+            if (Test-Path $portableRegistry) {
+                Write-Host "    Registry generated at gstreamer-1.0\registry.x86_64.bin" -ForegroundColor Gray
+            } else {
+                Write-Warning "GStreamer registry was not generated. Plugin discovery may be slow."
+            }
+        }
+
+        $LauncherSrc = Join-Path $ProjectRoot "scripts\launcher.cmd"
+        if (Test-Path $LauncherSrc) { Copy-Item $LauncherSrc $VariantBuildDir -Force }
+
+        $dllCount = (Get-ChildItem $VariantBuildDir -Filter *.dll -ErrorAction SilentlyContinue | Measure-Object).Count
+        $pluginCount = (Get-ChildItem $PluginOutDir -Filter *.dll -ErrorAction SilentlyContinue | Measure-Object).Count
+        Write-Host "  Done. ${dllCount} DLLs, ${pluginCount} plugins" -ForegroundColor Green
+
+        $missingStandalone = @(Get-StandaloneMissingRequirements $VariantBuildDir)
+        if ($missingStandalone.Count -ne 0) {
+            throw "Deploy output is incomplete. Missing: $($missingStandalone -join ', ')"
+        }
+    }
+
+    return @{ BuildDir = $VariantBuildDir; ExePath = $VariantExePath }
+}
+
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$BuildDir = if ($Portable) { Join-Path $ProjectRoot "build-uxplay-portable" } else { Join-Path $ProjectRoot "build-uxplay" }
+if ($All) {
+    $BuildDir = Join-Path $ProjectRoot "build-uxplay-portable"
+} else {
+    $BuildDir = if ($Portable) { Join-Path $ProjectRoot "build-uxplay-portable" } else { Join-Path $ProjectRoot "build-uxplay" }
+}
 $ResolvedMSys2Root = Resolve-MSys2Root $MSys2Root
 if (-not $ResolvedMSys2Root) {
     throw "MSYS2 UCRT64 was not found. Install MSYS2, then rerun this script or pass -MSys2Root C:\msys64\ucrt64."
@@ -371,126 +536,37 @@ Ensure-MSys2Requirements $MSys2Root $MSys2Bin $MSys2Lib $PluginDir -AssumeYes:$A
 Ensure-BonjourSdk
 Write-BonjourRuntimeStatus
 
-if ($Clean -and (Test-Path $BuildDir)) {
-    Write-Host "Cleaning build directory..." -ForegroundColor Yellow
-    Remove-Item -Recurse -Force $BuildDir
-}
-
-Write-Host "=== CMake Configure (UxPlay=ON) ===" -ForegroundColor Cyan
-cmake -S $ProjectRoot -B $BuildDir -G Ninja `
-    -DCMAKE_BUILD_TYPE=Release `
-    -DAIRPLAY_WITH_UXPLAY=ON
-
-if ($LASTEXITCODE -ne 0) { Write-Error "CMake configure failed"; exit 1 }
-
-Write-Host "`n=== CMake Build ===" -ForegroundColor Cyan
-cmake --build $BuildDir
-
-if ($LASTEXITCODE -ne 0) { Write-Error "CMake build failed"; exit 1 }
-
-$ExePath = Join-Path $BuildDir "airplay_receiver.exe"
-if (Test-Path $ExePath) {
-    $info = Get-Item $ExePath
-    Write-Host "`nBuild succeeded: $ExePath ($($info.Length) bytes)" -ForegroundColor Green
+if ($All) {
+    $deployResult = Invoke-Build -VariantBuildDir (Join-Path $ProjectRoot "build-uxplay") -IsPortable:$false -ShouldDeploy:$true
+    $portableResult = Invoke-Build -VariantBuildDir (Join-Path $ProjectRoot "build-uxplay-portable") -IsPortable:$true -ShouldDeploy:$true
+    $BuildDir = $portableResult.BuildDir
+    $ExePath = $portableResult.ExePath
 } else {
-    Write-Error "Exe not found after build"
-    exit 1
-}
-
-if ($Portable -or $Deploy) {
-    Write-Host "`n=== Deploy: bundling dependencies ===" -ForegroundColor Cyan
-
-    Write-Host "  windeployqt..." -ForegroundColor Gray
-    $prevEAP = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    & "$MSys2Bin\windeployqt.exe" $ExePath --no-translations --no-compiler-runtime 2>&1 | Out-Null
-    $ErrorActionPreference = $prevEAP
-
-    if ($Portable) {
-        Write-Host "  Copying ALL runtime DLLs (portable mode)..." -ForegroundColor Gray
-        Get-ChildItem $MSys2Bin -Filter "*.dll" | Copy-Item -Destination $BuildDir -Force
-
-        Write-Host "  Bundling dnssd.dll..." -ForegroundColor Gray
-        $dnssdSources = @(
-            $(if ($env:BONJOUR_SDK_HOME) { Join-Path $env:BONJOUR_SDK_HOME "Lib\x64\dnssd.dll" } else { $null }),
-            (Join-Path $MSys2Bin "dnssd.dll"),
-            (Join-Path $env:SystemRoot "System32\dnssd.dll")
-        ) | Where-Object { $_ -and (Test-Path $_) }
-        $dnssdSource = $dnssdSources | Select-Object -First 1
-        if ($dnssdSource) {
-            Copy-Item $dnssdSource $BuildDir -Force
-            Write-Host "    Copied dnssd.dll from $dnssdSource" -ForegroundColor Gray
-        } else {
-            Write-Warning "dnssd.dll was not found. Portable build may not support Bonjour/mDNS discovery."
-        }
-    } else {
-        Write-Host "  Copying filtered runtime DLLs..." -ForegroundColor Gray
-        $exclude = @("gcc", "g++", "cpp", "cc1", "cc1plus", "collect2", "ld", "ar", "as", "nm",
-            "objdump", "objcopy", "ranlib", "strip", "readelf", "addr2line", "c++filt",
-            "cmake", "ctest", "cpack", "ninja", "make", "pkg-config", "meson",
-            "python", "perl", "bash", "git", "curl", "wget", "ssh", "scp")
-        $exePatterns = ($exclude | ForEach-Object { "$_.exe" })
-        Get-ChildItem $MSys2Bin -Filter "*.dll" | Where-Object {
-            $n = $_.Name.ToLower()
-            $exePatterns -notcontains $n -and
-            ($n -like "lib*" -or $n -like "av*" -or $n -like "sw*" -or
-             $n -like "zlib*" -or $n -like "xvid*" -or $n -like "sdl*" -or
-             $n -like "D3D*" -or $n -like "Qt*" -or $n -like "dx*")
-        } | Copy-Item -Destination $BuildDir -Force
-    }
-
-    Write-Host "  Copying GStreamer plugins..." -ForegroundColor Gray
-    $PluginOutDir = Join-Path $BuildDir "gstreamer-plugins"
-    if (-not (Test-Path $PluginOutDir)) { New-Item -ItemType Directory -Path $PluginOutDir -Force | Out-Null }
-    Get-ChildItem $PluginDir -Filter "*.dll" | Copy-Item -Destination $PluginOutDir -Force
-
-    if ($Portable) {
-        Write-Host "  Generating GStreamer registry cache..." -ForegroundColor Gray
-        $registryDir = Join-Path $BuildDir "gstreamer-1.0"
-        if (-not (Test-Path $registryDir)) { New-Item -ItemType Directory -Path $registryDir -Force | Out-Null }
-        $env:GST_REGISTRY = Join-Path $registryDir "registry.x86_64.bin"
-        $hadGstPluginPathForScan = Test-Path Env:GST_PLUGIN_PATH
-        $previousGstPluginPathForScan = $env:GST_PLUGIN_PATH
-        $env:GST_PLUGIN_PATH = $PluginOutDir
-        & "$MSys2Bin\gst-inspect-1.0.exe" --gst-disable-registry-fork 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "gst-inspect-1.0.exe exited with code $LASTEXITCODE. GStreamer registry may be incomplete."
-        }
-        if ($hadGstPluginPathForScan) {
-            $env:GST_PLUGIN_PATH = $previousGstPluginPathForScan
-        } else {
-            Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
-        }
-        if (Test-Path $env:GST_REGISTRY) {
-            Write-Host "    Registry generated at gstreamer-1.0\registry.x86_64.bin" -ForegroundColor Gray
-        } else {
-            Write-Warning "GStreamer registry was not generated. Plugin discovery may be slow."
-        }
-    }
-
-    $LauncherSrc = Join-Path $ProjectRoot "scripts\launcher.cmd"
-    if (Test-Path $LauncherSrc) { Copy-Item $LauncherSrc $BuildDir -Force }
-
-    $dllCount = (Get-ChildItem $BuildDir -Filter *.dll -ErrorAction SilentlyContinue | Measure-Object).Count
-    $pluginCount = (Get-ChildItem $PluginOutDir -Filter *.dll -ErrorAction SilentlyContinue | Measure-Object).Count
-    Write-Host "  Done. ${dllCount} DLLs, ${pluginCount} plugins" -ForegroundColor Green
-
-    $missingStandalone = @(Get-StandaloneMissingRequirements $BuildDir)
-    if ($missingStandalone.Count -ne 0) {
-        throw "Deploy output is incomplete. Missing: $($missingStandalone -join ', ')"
-    }
+    $result = Invoke-Build -VariantBuildDir $BuildDir -IsPortable:$Portable -ShouldDeploy:($Portable -or $Deploy)
+    $BuildDir = $result.BuildDir
+    $ExePath = $result.ExePath
 }
 
 if ($Test) {
-    Write-Host "`n=== CTest ===" -ForegroundColor Cyan
-    ctest --test-dir $BuildDir --output-on-failure
-    if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed"; exit 1 }
+    if ($All) {
+        Write-Host "`n=== CTest [build-uxplay] ===" -ForegroundColor Cyan
+        ctest --test-dir (Join-Path $ProjectRoot "build-uxplay") --output-on-failure
+        if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed in build-uxplay"; exit 1 }
+
+        Write-Host "`n=== CTest [build-uxplay-portable] ===" -ForegroundColor Cyan
+        ctest --test-dir (Join-Path $ProjectRoot "build-uxplay-portable") --output-on-failure
+        if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed in build-uxplay-portable"; exit 1 }
+    } else {
+        Write-Host "`n=== CTest ===" -ForegroundColor Cyan
+        ctest --test-dir $BuildDir --output-on-failure
+        if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed"; exit 1 }
+    }
     Write-Host "Tests passed" -ForegroundColor Green
 }
 
 if ($Run) {
     Write-Host "`n=== Launching ===" -ForegroundColor Cyan
-    if ($Portable -or $Deploy) {
+    if ($Portable -or $Deploy -or $All) {
         Start-PortableProcess $ExePath $BuildDir $MSys2Root
     } else {
         $env:GST_PLUGIN_PATH = $PluginDir

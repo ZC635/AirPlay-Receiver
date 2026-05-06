@@ -2,10 +2,8 @@
 
 #include <QCoreApplication>
 
-#ifdef Q_OS_WIN
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#endif
 
 namespace {
 int idForAction(ShortcutAction action) {
@@ -22,13 +20,25 @@ unsigned int toVirtualKey(int key) {
     if (key >= Qt::Key_F1 && key <= Qt::Key_F24) {
         return static_cast<unsigned int>(0x70 + key - Qt::Key_F1);
     }
-    if (key == Qt::Key_Up) {
-        return 0x26;
+    switch (key) {
+    case Qt::Key_Up: return VK_UP;
+    case Qt::Key_Down: return VK_DOWN;
+    case Qt::Key_Left: return VK_LEFT;
+    case Qt::Key_Right: return VK_RIGHT;
+    case Qt::Key_Space: return VK_SPACE;
+    case Qt::Key_Tab: return VK_TAB;
+    case Qt::Key_Return: return VK_RETURN;
+    case Qt::Key_Enter: return VK_RETURN;
+    case Qt::Key_Home: return VK_HOME;
+    case Qt::Key_End: return VK_END;
+    case Qt::Key_PageUp: return VK_PRIOR;
+    case Qt::Key_PageDown: return VK_NEXT;
+    case Qt::Key_Insert: return VK_INSERT;
+    case Qt::Key_Delete: return VK_DELETE;
+    case Qt::Key_Escape: return VK_ESCAPE;
+    case Qt::Key_Backspace: return VK_BACK;
+    default: return 0;
     }
-    if (key == Qt::Key_Down) {
-        return 0x28;
-    }
-    return 0;
 }
 }
 
@@ -52,52 +62,55 @@ bool WindowsHotkeyService::registerShortcut(ShortcutAction action, const QKeySeq
         return false;
     }
 
-#ifdef Q_OS_WIN
     const int id = idForAction(action);
-    if (actionsById.contains(id)) {
+    const auto oldEntry = registrations_.constFind(id);
+    const bool hadPrevious = (oldEntry != registrations_.constEnd());
+
+    if (hadPrevious) {
         UnregisterHotKey(nullptr, id);
-        actionsById.remove(id);
+        registrations_.erase(oldEntry);
     }
 
     if (!RegisterHotKey(nullptr, id, native->modifiers, native->virtualKey)) {
+        if (hadPrevious) {
+            const auto restoreNative = toNativeHotkey(oldEntry->sequence);
+            if (restoreNative.has_value()
+                && RegisterHotKey(nullptr, id, restoreNative->modifiers, restoreNative->virtualKey)) {
+                registrations_.insert(id, {oldEntry->action, oldEntry->sequence});
+            }
+        }
         return false;
     }
 
-    actionsById.insert(id, action);
+    registrations_.insert(id, {action, sequence});
     return true;
-#else
-    return false;
-#endif
 }
 
 void WindowsHotkeyService::unregisterAll() {
-#ifdef Q_OS_WIN
-    for (const int id : actionsById.keys()) {
+    for (const int id : registrations_.keys()) {
         UnregisterHotKey(nullptr, id);
     }
-#endif
-    actionsById.clear();
+    registrations_.clear();
 }
 
-bool WindowsHotkeyService::nativeEventFilter(const QByteArray &, void *message, qintptr *) {
-#ifdef Q_OS_WIN
+bool WindowsHotkeyService::nativeEventFilter(const QByteArray &, void *message, qintptr *result) {
     const auto *msg = static_cast<MSG *>(message);
     if (msg && msg->message == WM_HOTKEY) {
         const int id = static_cast<int>(msg->wParam);
-        const auto action = actionsById.constFind(id);
-        if (action != actionsById.constEnd()) {
-            emit activated(action.value());
+        const auto entry = registrations_.constFind(id);
+        if (entry != registrations_.constEnd()) {
+            emit activated(entry->action);
+            if (result != nullptr) {
+                *result = TRUE;
+            }
             return true;
         }
     }
-#else
-    Q_UNUSED(message);
-#endif
     return false;
 }
 
 std::optional<WindowsHotkeyService::NativeHotkey> WindowsHotkeyService::toNativeHotkey(const QKeySequence &sequence) {
-    if (sequence.isEmpty()) {
+    if (sequence.isEmpty() || sequence.count() > 1) {
         return std::nullopt;
     }
 
@@ -109,7 +122,6 @@ std::optional<WindowsHotkeyService::NativeHotkey> WindowsHotkeyService::toNative
 
     unsigned int modifiers = 0;
     const Qt::KeyboardModifiers qtModifiers = combination.keyboardModifiers();
-#ifdef Q_OS_WIN
     if (qtModifiers.testFlag(Qt::ControlModifier)) {
         modifiers |= MOD_CONTROL;
     }
@@ -122,20 +134,6 @@ std::optional<WindowsHotkeyService::NativeHotkey> WindowsHotkeyService::toNative
     if (qtModifiers.testFlag(Qt::MetaModifier)) {
         modifiers |= MOD_WIN;
     }
-#else
-    if (qtModifiers.testFlag(Qt::ControlModifier)) {
-        modifiers |= 0x0002;
-    }
-    if (qtModifiers.testFlag(Qt::AltModifier)) {
-        modifiers |= 0x0001;
-    }
-    if (qtModifiers.testFlag(Qt::ShiftModifier)) {
-        modifiers |= 0x0004;
-    }
-    if (qtModifiers.testFlag(Qt::MetaModifier)) {
-        modifiers |= 0x0008;
-    }
-#endif
 
     return NativeHotkey{modifiers, virtualKey};
 }

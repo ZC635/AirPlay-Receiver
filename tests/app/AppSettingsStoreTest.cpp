@@ -156,6 +156,94 @@ private slots:
         const AppSettings loaded = store.loadOrDefaults();
         QCOMPARE(loaded.aspectRatioLock(), AppSettings::defaults().aspectRatioLock());
     }
+
+    void corruptJsonReturnsDefaults() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("{not valid json at all!!!") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        const AppSettings defaults = AppSettings::defaults();
+        QCOMPARE(loaded.volume(), defaults.volume());
+        QCOMPARE(loaded.receiverName(), defaults.receiverName());
+        QCOMPARE(loaded.aspectRatioLock(), defaults.aspectRatioLock());
+        QCOMPARE(loaded.shortcuts().size(), defaults.shortcuts().size());
+        for (const ShortcutBinding &binding : defaults.shortcuts()) {
+            QCOMPARE(loaded.shortcutFor(binding.action), binding.sequence);
+        }
+    }
+
+    void validJsonArrayReturnsDefaults() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("[]") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        const AppSettings defaults = AppSettings::defaults();
+        QCOMPARE(loaded.volume(), defaults.volume());
+        QCOMPARE(loaded.receiverName(), defaults.receiverName());
+        QCOMPARE(loaded.aspectRatioLock(), defaults.aspectRatioLock());
+    }
+
+    void invalidShortcutStringKeepsDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"shortcuts":{"toggleToolbar":"garbage_not_a_shortcut"}})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        const AppSettings defaults = AppSettings::defaults();
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), defaults.shortcutFor(ShortcutAction::ToggleToolbar));
+    }
+
+    void emptyShortcutStringKeepsDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"shortcuts":{"toggleToolbar":""}})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        const AppSettings defaults = AppSettings::defaults();
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), defaults.shortcutFor(ShortcutAction::ToggleToolbar));
+    }
+
+    void multiKeyShortcutStringKeepsDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"shortcuts":{"toggleToolbar":"Ctrl+A, Ctrl+B"}})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        const AppSettings defaults = AppSettings::defaults();
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), defaults.shortcutFor(ShortcutAction::ToggleToolbar));
+    }
 };
 
 QTEST_MAIN(AppSettingsStoreTest)

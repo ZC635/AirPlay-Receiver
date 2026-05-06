@@ -44,7 +44,8 @@ QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directo
         "gstreamer-plugins/libgstvideoparsersbad.dll",
         "gstreamer-plugins/libgstlibav.dll",
         "gstreamer-plugins/libgstd3d11.dll",
-        "gstreamer-plugins/libgstwasapi.dll"
+        "gstreamer-plugins/libgstwasapi.dll",
+        "dnssd.dll"
     };
 
     QStringList missing;

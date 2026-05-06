@@ -103,7 +103,7 @@ private slots:
         auto *edit = dialog.findChild<QKeySequenceEdit *>("shortcutEdit_toggleToolbar");
         QVERIFY(edit != nullptr);
 
-        edit->setKeySequence(QKeySequence("Ctrl+Alt+Left"));
+        edit->setKeySequence(QKeySequence(QKeyCombination(Qt::ControlModifier | Qt::AltModifier, Qt::Key_NumLock)));
         dialog.accept();
 
         QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));

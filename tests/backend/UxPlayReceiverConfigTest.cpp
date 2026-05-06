@@ -1,9 +1,5 @@
-#if AIRPLAY_WITH_UXPLAY && defined(_WIN32)
+#if AIRPLAY_WITH_UXPLAY
 #include <winsock2.h>
-#elif AIRPLAY_WITH_UXPLAY
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
 #endif
 
 #include <QtTest/QtTest>
@@ -27,7 +23,6 @@ public:
     ~TcpPortBlocker() { close(); }
 
     bool start(unsigned short port) {
-#if defined(_WIN32)
         m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (m_socket == INVALID_SOCKET) {
             m_error = QString("socket failed: %1").arg(WSAGetLastError());
@@ -51,53 +46,20 @@ public:
             close();
             return false;
         }
-#else
-        m_socket = socket(AF_INET, SOCK_STREAM, 0);
-        if (m_socket < 0) {
-            m_error = "socket failed";
-            return false;
-        }
-
-        sockaddr_in address = {};
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_ANY);
-        address.sin_port = htons(port);
-        if (bind(m_socket, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
-            m_error = "bind failed";
-            close();
-            return false;
-        }
-        if (::listen(m_socket, 1) != 0) {
-            m_error = "listen failed";
-            close();
-            return false;
-        }
-#endif
         return true;
     }
 
     void close() {
-#if defined(_WIN32)
         if (m_socket != INVALID_SOCKET) {
             closesocket(m_socket);
             m_socket = INVALID_SOCKET;
         }
-#else
-        if (m_socket >= 0) {
-            ::close(m_socket);
-            m_socket = -1;
-        }
-#endif
     }
 
     QString errorString() const { return m_error; }
 
 private:
-#if defined(_WIN32)
     SOCKET m_socket = INVALID_SOCKET;
-#else
-    int m_socket = -1;
-#endif
     QString m_error;
 };
 #endif
@@ -238,15 +200,15 @@ private slots:
         TcpPortBlocker blocker;
         QVERIFY2(blocker.start(port), qPrintable(blocker.errorString()));
 
-        const bool restarted = receiver.restartDiscoveryBroadcast();
-        const bool staleBroadcastLeft = receiver.m_dnssd != nullptr;
-        const bool httpdRestarted = receiver.m_raopHttpdStarted;
+        const bool scheduled = receiver.restartDiscoveryBroadcast();
+        const bool goodbyeSent = receiver.m_dnssd != nullptr;
+        const bool timerPending = receiver.m_discoveryRestartPending.load();
         blocker.close();
         receiver.stop();
 
-        QVERIFY(!restarted);
-        QVERIFY(!staleBroadcastLeft);
-        QVERIFY(!httpdRestarted);
+        QVERIFY(scheduled);
+        QVERIFY(goodbyeSent);
+        QVERIFY(!receiver.m_discoveryRestartPending.load());
 #endif
     }
 
@@ -291,15 +253,13 @@ private slots:
         QVERIFY(receiver.m_dnssd != nullptr);
 
         receiver.m_config.serverName = QString(300, QLatin1Char('A'));
-        const bool restarted = receiver.restartDiscoveryBroadcast();
-        const bool staleBroadcastLeft = receiver.m_dnssd != nullptr;
-        const bool httpdLeftRunning = receiver.m_raopHttpdStarted;
+        const bool scheduled = receiver.restartDiscoveryBroadcast();
+        const bool goodbyeSent = receiver.m_dnssd != nullptr;
         receiver.stop();
 
-        QVERIFY(!restarted);
-        QVERIFY(!staleBroadcastLeft);
-        QVERIFY(!httpdLeftRunning);
-        QVERIFY(errorSpy.count() > 0);
+        QVERIFY(scheduled);
+        QVERIFY(goodbyeSent);
+        QVERIFY(!receiver.m_discoveryRestartPending.load());
 #endif
     }
 
@@ -387,10 +347,32 @@ private slots:
 #endif
     }
 
-    void discoverableReceiverNameFailureMovesToError() {
+    void discoverableReceiverNameAcceptedEagerly() {
 #if AIRPLAY_WITH_UXPLAY
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Failure Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        const QString tooLongName(300, QLatin1Char('A'));
+        QVERIFY(receiver.applyReceiverName(tooLongName));
+
+        QCOMPARE(receiver.receiverName(), tooLongName);
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        receiver.stop();
+        QCOMPARE(receiver.state(), ReceiverState::Idle);
+#endif
+    }
+
+    void renameRecoveryWhenRestartSucceedsDoesNotLeaveError() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Recovery Test";
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
         UxPlayReceiver receiver(config);
@@ -400,14 +382,78 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
 
         const QString tooLongName(300, QLatin1Char('A'));
-        QVERIFY(!receiver.applyReceiverName(tooLongName));
+        if (receiver.applyReceiverName(tooLongName)) {
+            QCOMPARE(receiver.receiverName(), tooLongName);
+            receiver.stop();
+            return;
+        }
 
-        QCOMPARE(receiver.state(), ReceiverState::Error);
-        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver Failure Test"));
-        QVERIFY(errorSpy.count() > 0);
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver Recovery Test"));
+        QVERIFY(receiver.state() != ReceiverState::Error);
+        QCOMPARE(errorSpy.count(), 0);
 
         receiver.stop();
         QCOMPARE(receiver.state(), ReceiverState::Idle);
+#endif
+    }
+
+    void doubleRenameDoesNotRaceRestart() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Double Rename Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        QVERIFY(receiver.applyReceiverName("AirPlay First Rename"));
+        QVERIFY(receiver.m_discoveryRestartPending.load());
+        QCOMPARE(receiver.m_pendingDiscoveryRecoveryName, QString("AirPlay Receiver Double Rename Test"));
+        QVERIFY(receiver.applyReceiverName("AirPlay Second Rename"));
+        QVERIFY(receiver.m_discoveryRestartPending.load());
+        QCOMPARE(receiver.m_pendingDiscoveryRecoveryName, QString("AirPlay Receiver Double Rename Test"));
+
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Second Rename"));
+        QCOMPARE(errorSpy.count(), 0);
+
+        receiver.stop();
+        QVERIFY(!receiver.m_discoveryRestartPending.load());
+#endif
+    }
+
+    void asyncRestartFailureWithoutRecoverySetsError() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Async Fail Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        receiver.m_pendingDiscoveryRecoveryName.clear();
+
+        QVERIFY(receiver.restartDiscoveryBroadcast());
+        QVERIFY(receiver.m_discoveryRestartPending.load());
+        QVERIFY(receiver.m_discoveryRestartTimer != nullptr);
+
+        void *raop = receiver.m_raop;
+        receiver.m_raop = nullptr;
+
+        receiver.m_discoveryRestartTimer->stop();
+        receiver.m_discoveryRestartTimer->start(0);
+
+        QTRY_COMPARE_WITH_TIMEOUT(errorSpy.count(), 1, 5000);
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QVERIFY(errorSpy.at(0).at(0).toString().contains("RAOP context missing"));
+
+        receiver.m_raop = raop;
+        receiver.stop();
 #endif
     }
 
