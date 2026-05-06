@@ -23,6 +23,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <dwmapi.h>
 #endif
 
 #ifdef Q_OS_WIN
@@ -41,6 +42,17 @@ bool setNativeAlwaysOnTop(WId windowId, bool enabled) {
                0,
                0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER) != FALSE;
+}
+
+bool setWindowBorderColor(WId windowId, bool enabled) {
+    HWND window = reinterpret_cast<HWND>(windowId);
+    if (window == nullptr || !IsWindow(window)) {
+        return false;
+    }
+    const COLORREF blue = RGB(0x33, 0x96, 0xF3);
+    const COLORREF none = 0xFFFFFFFE;
+    return SUCCEEDED(DwmSetWindowAttribute(
+        window, 34, enabled ? &blue : &none, sizeof(COLORREF)));
 }
 }
 #endif
@@ -159,10 +171,10 @@ void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
     const bool wasVisible = isVisible();
 
 #ifdef Q_OS_WIN
-    // Qt's window flag path hides and shows visible HWNDs, which causes a flash.
     if (wasVisible && setNativeAlwaysOnTop(winId(), enabled)) {
         alwaysOnTopEnabled_ = enabled;
         toolbar_->setAlwaysOnTopChecked(enabled);
+        setWindowBorderColor(winId(), enabled);
         return;
     }
 #endif
@@ -173,6 +185,7 @@ void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
     if (wasVisible) {
         show();
     }
+    setWindowBorderColor(winId(), enabled);
 }
 
 void MainWindow::setVolume(int value) {

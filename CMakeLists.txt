@@ -45,7 +45,7 @@ if(AIRPLAY_WITH_UXPLAY)
     target_link_libraries(airplay_app_lib PRIVATE uxplay_dependency)
 endif()
 if(WIN32)
-    target_link_libraries(airplay_app_lib PUBLIC user32)
+    target_link_libraries(airplay_app_lib PUBLIC user32 dwmapi)
 endif()
 
 add_executable(airplay_receiver src/app/main.cpp)
