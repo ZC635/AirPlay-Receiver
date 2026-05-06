@@ -7,12 +7,18 @@ class AppSettingsTest : public QObject {
 private slots:
     void defaultShortcutsContainRequestedActions() {
         const AppSettings settings = AppSettings::defaults();
-        QCOMPARE(settings.shortcuts().size(), 5);
+        QCOMPARE(settings.shortcuts().size(), 6);
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::VolumeUp).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::VolumeDown).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleToolbar).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleAspectRatio).isValid());
+        QVERIFY(settings.shortcutFor(ShortcutAction::ToggleVideoFit).isValid());
+    }
+
+    void defaultToggleVideoFitShortcutIsCorrect() {
+        const AppSettings settings = AppSettings::defaults();
+        QCOMPARE(settings.shortcutFor(ShortcutAction::ToggleVideoFit), QKeySequence("Ctrl+Alt+F"));
     }
 
     void rejectsDuplicateShortcuts() {
@@ -65,6 +71,19 @@ private slots:
         QVERIFY(settings.aspectRatioLock());
         settings.setAspectRatioLock(false);
         QVERIFY(!settings.aspectRatioLock());
+    }
+
+    void videoFitModeDefaultsToFalse() {
+        AppSettings settings = AppSettings::defaults();
+        QVERIFY(!settings.videoFitMode());
+    }
+
+    void videoFitModeSetterAndGetter() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setVideoFitMode(true);
+        QVERIFY(settings.videoFitMode());
+        settings.setVideoFitMode(false);
+        QVERIFY(!settings.videoFitMode());
     }
 };
 

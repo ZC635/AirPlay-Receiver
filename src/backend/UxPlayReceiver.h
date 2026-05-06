@@ -26,6 +26,7 @@ public:
     void stop() override;
     void setVolume(double volume) override;
     void setVideoSurface(WId id) override;
+    void setVideoFitMode(bool enabled) override;
     ReceiverState state() const override;
     QString receiverName() const override;
     bool applyReceiverName(const QString &name) override;
@@ -61,6 +62,7 @@ private:
 #if AIRPLAY_WITH_UXPLAY
     void cleanupUxPlay();
     void bindVideoSurfaceToRenderer();
+    void applyVideoFitModeToRenderer();
     bool createDiscoveryBroadcast();
     bool registerDiscoveryBroadcast(unsigned short port);
     void stopDiscoveryBroadcast();
@@ -75,6 +77,7 @@ private:
     QString m_error;
     WId m_videoSurfaceId = 0;
     std::atomic<double> m_volume = 1.0;
+    std::atomic_bool m_videoFitMode = false;
 #if AIRPLAY_WITH_UXPLAY
     void *m_raop = nullptr;
     void *m_dnssd = nullptr;

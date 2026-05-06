@@ -19,6 +19,7 @@ public:
     virtual QString receiverName() const = 0;
     virtual bool applyReceiverName(const QString &name) = 0;
     virtual void setVideoSurface(WId id) { Q_UNUSED(id); }
+    virtual void setVideoFitMode(bool enabled) { Q_UNUSED(enabled); }
 
 signals:
     void stateChanged(ReceiverState state);

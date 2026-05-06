@@ -14,14 +14,17 @@ public:
     void setVolume(int value);
     void setAlwaysOnTopChecked(bool checked);
     void setAspectRatioChecked(bool checked);
+    void setVideoFitChecked(bool checked);
     void setVolumeShortcutTooltip(const QString &tooltip);
     void setAlwaysOnTopShortcutTooltip(const QString &tooltip);
     void setAspectRatioShortcutTooltip(const QString &tooltip);
+    void setVideoFitShortcutTooltip(const QString &tooltip);
 
 signals:
     void volumeChanged(int value);
     void alwaysOnTopToggled(bool enabled);
     void aspectRatioToggled(bool enabled);
+    void videoFitToggled(bool enabled);
     void settingsRequested();
 
 private:
@@ -29,5 +32,6 @@ private:
     QSlider *volumeSlider_;
     QToolButton *alwaysOnTopButton_;
     QToolButton *aspectRatioButton_;
+    QToolButton *videoFitButton_;
     QToolButton *settingsButton_;
 };

@@ -15,6 +15,7 @@ QString keyFor(ShortcutAction action) {
     case ShortcutAction::VolumeDown: return "volumeDown";
     case ShortcutAction::ToggleToolbar: return "toggleToolbar";
     case ShortcutAction::ToggleAspectRatio: return "toggleAspectRatio";
+    case ShortcutAction::ToggleVideoFit: return "toggleVideoFit";
     }
     return {};
 }
@@ -58,6 +59,10 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     if (aspectLock.isBool()) {
         settings.setAspectRatioLock(aspectLock.toBool());
     }
+    const QJsonValue videoFit = root.value("videoFitMode");
+    if (videoFit.isBool()) {
+        settings.setVideoFitMode(videoFit.toBool());
+    }
     return settings;
 }
 
@@ -72,6 +77,7 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
     root.insert("shortcuts", shortcuts);
     root.insert("volume", settings.volume());
     root.insert("aspectRatioLock", settings.aspectRatioLock());
+    root.insert("videoFitMode", settings.videoFitMode());
 
     QSaveFile file(path_);
     if (!file.open(QIODevice::WriteOnly)) {

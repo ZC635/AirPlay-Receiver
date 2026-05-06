@@ -29,6 +29,8 @@ public:
     void setReceiverName(QString name);
     bool aspectRatioLock() const;
     void setAspectRatioLock(bool enabled);
+    bool videoFitMode() const;
+    void setVideoFitMode(bool enabled);
     QStringList validateGeneral() const;
     QStringList validateShortcuts() const;
 
@@ -37,4 +39,5 @@ private:
     int volume_ = 100;
     QString receiverName_ = "AirPlay Receiver";
     bool aspectRatioLock_ = false;
+    bool videoFitMode_ = false;
 };

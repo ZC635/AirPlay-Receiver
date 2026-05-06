@@ -124,6 +124,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
     connect(toolbar_, &ToolbarWidget::settingsRequested, this, &MainWindow::showSettingsDialog);
     connect(toolbar_, &ToolbarWidget::aspectRatioToggled, this, &MainWindow::applyAspectRatioLock);
+    connect(toolbar_, &ToolbarWidget::videoFitToggled, this, &MainWindow::applyVideoFitMode);
 
     if (receiver_ != nullptr) {
         connect(receiver_, &AirPlayReceiver::videoSizeChanged, this, [this](int width, int height) {
@@ -153,6 +154,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     }
 
     applyAspectRatioLock(settings_.aspectRatioLock());
+    applyVideoFitMode(settings_.videoFitMode());
 
     setVolume(settings_.volume());
 
@@ -236,6 +238,9 @@ void MainWindow::handleShortcut(ShortcutAction action) {
     case ShortcutAction::ToggleAspectRatio:
         applyAspectRatioLock(!aspectRatioLock_);
         break;
+    case ShortcutAction::ToggleVideoFit:
+        applyVideoFitMode(!videoFitMode_);
+        break;
     }
 }
 
@@ -244,9 +249,11 @@ void MainWindow::applyShortcutTooltips() {
     const QString volumeDownShortcut = settings_.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText);
     const QString pinShortcut = settings_.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
     const QString aspectShortcut = settings_.shortcutFor(ShortcutAction::ToggleAspectRatio).toString(QKeySequence::NativeText);
+    const QString videoFitShortcut = settings_.shortcutFor(ShortcutAction::ToggleVideoFit).toString(QKeySequence::NativeText);
     toolbar_->setVolumeShortcutTooltip(QString("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
     toolbar_->setAlwaysOnTopShortcutTooltip(QString("Pin: %1").arg(pinShortcut));
     toolbar_->setAspectRatioShortcutTooltip(QString("Aspect: %1").arg(aspectShortcut));
+    toolbar_->setVideoFitShortcutTooltip(QString("Fit: %1").arg(videoFitShortcut));
 }
 
 bool MainWindow::registerHotkeys() {
@@ -462,6 +469,27 @@ void MainWindow::applyAspectRatioLock(bool enabled) {
     }
     if (enabled && videoWidth_ > 0 && videoHeight_ > 0) {
         enforceAspectRatio();
+    }
+}
+
+void MainWindow::applyVideoFitMode(bool enabled) {
+    if (videoFitMode_ == enabled) {
+        toolbar_->setVideoFitChecked(enabled);
+        if (receiver_ != nullptr) {
+            receiver_->setVideoFitMode(enabled);
+        }
+        return;
+    }
+
+    const bool changed = (settings_.videoFitMode() != enabled);
+    videoFitMode_ = enabled;
+    settings_.setVideoFitMode(enabled);
+    toolbar_->setVideoFitChecked(enabled);
+    if (receiver_ != nullptr) {
+        receiver_->setVideoFitMode(enabled);
+    }
+    if (changed && !saveSettings()) {
+        statusLabel_->setText("Could not save settings");
     }
 }
 

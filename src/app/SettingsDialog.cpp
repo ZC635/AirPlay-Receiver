@@ -26,6 +26,7 @@ constexpr ShortcutRow kShortcutRows[] = {
     {ShortcutAction::VolumeDown, "Volume down"},
     {ShortcutAction::ToggleToolbar, "Toggle toolbar"},
     {ShortcutAction::ToggleAspectRatio, "Toggle aspect ratio"},
+    {ShortcutAction::ToggleVideoFit, "Toggle video fit"},
 };
 
 QString keyFor(ShortcutAction action) {
@@ -35,6 +36,7 @@ QString keyFor(ShortcutAction action) {
     case ShortcutAction::VolumeDown: return "volumeDown";
     case ShortcutAction::ToggleToolbar: return "toggleToolbar";
     case ShortcutAction::ToggleAspectRatio: return "toggleAspectRatio";
+    case ShortcutAction::ToggleVideoFit: return "toggleVideoFit";
     }
     return {};
 }

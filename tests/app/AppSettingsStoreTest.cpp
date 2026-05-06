@@ -157,6 +157,36 @@ private slots:
         QCOMPARE(loaded.aspectRatioLock(), AppSettings::defaults().aspectRatioLock());
     }
 
+    void savesAndLoadsVideoFitMode() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setVideoFitMode(true);
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        const AppSettings loaded = store.loadOrDefaults();
+        QVERIFY(loaded.videoFitMode());
+    }
+
+    void malformedVideoFitModeFallsBackToDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"videoFitMode":"yes"})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.videoFitMode(), AppSettings::defaults().videoFitMode());
+    }
+
     void corruptJsonReturnsDefaults() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
@@ -173,6 +203,7 @@ private slots:
         QCOMPARE(loaded.volume(), defaults.volume());
         QCOMPARE(loaded.receiverName(), defaults.receiverName());
         QCOMPARE(loaded.aspectRatioLock(), defaults.aspectRatioLock());
+        QCOMPARE(loaded.videoFitMode(), defaults.videoFitMode());
         QCOMPARE(loaded.shortcuts().size(), defaults.shortcuts().size());
         for (const ShortcutBinding &binding : defaults.shortcuts()) {
             QCOMPARE(loaded.shortcutFor(binding.action), binding.sequence);
@@ -195,6 +226,7 @@ private slots:
         QCOMPARE(loaded.volume(), defaults.volume());
         QCOMPARE(loaded.receiverName(), defaults.receiverName());
         QCOMPARE(loaded.aspectRatioLock(), defaults.aspectRatioLock());
+        QCOMPARE(loaded.videoFitMode(), defaults.videoFitMode());
     }
 
     void invalidShortcutStringKeepsDefault() {

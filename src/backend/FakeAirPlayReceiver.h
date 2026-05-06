@@ -27,6 +27,10 @@ public:
         AirPlayReceiver::setVideoSurface(id);
     }
 
+    void setVideoFitMode(bool enabled) override { m_videoFitMode = enabled; }
+
+    bool lastVideoFitMode() const { return m_videoFitMode; }
+
     WId videoSurfaceId() const { return m_videoSurfaceId; }
 
     ReceiverState state() const override { return m_state; }
@@ -86,4 +90,5 @@ private:
     QString m_receiverName = "AirPlay Receiver";
     double m_volume = 1.0;
     WId m_videoSurfaceId = 0;
+    bool m_videoFitMode = false;
 };

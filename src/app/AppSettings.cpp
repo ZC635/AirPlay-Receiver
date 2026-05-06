@@ -15,6 +15,7 @@ AppSettings AppSettings::defaults() {
     settings.setShortcut(ShortcutAction::VolumeDown, QKeySequence("Ctrl+Alt+Down"));
     settings.setShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Alt+B"));
     settings.setShortcut(ShortcutAction::ToggleAspectRatio, QKeySequence("Ctrl+Alt+A"));
+    settings.setShortcut(ShortcutAction::ToggleVideoFit, QKeySequence("Ctrl+Alt+F"));
     return settings;
 }
 
@@ -56,6 +57,14 @@ bool AppSettings::aspectRatioLock() const {
 
 void AppSettings::setAspectRatioLock(bool enabled) {
     aspectRatioLock_ = enabled;
+}
+
+bool AppSettings::videoFitMode() const {
+    return videoFitMode_;
+}
+
+void AppSettings::setVideoFitMode(bool enabled) {
+    videoFitMode_ = enabled;
 }
 
 QStringList AppSettings::validateGeneral() const {

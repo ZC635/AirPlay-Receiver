@@ -5,6 +5,8 @@
 #include <QtTest/QtTest>
 #include <QFile>
 
+#include "backend/FakeAirPlayReceiver.h"
+
 #if AIRPLAY_WITH_UXPLAY
 #define private public
 #endif
@@ -17,6 +19,8 @@
 #include "lib/raop.h"
 
 extern "C" int video_renderer_choose_codec(bool video_is_jpeg, bool video_is_h265);
+extern "C" void video_renderer_set_force_aspect_ratio(bool enabled);
+extern "C" bool video_renderer_get_force_aspect_ratio(void);
 
 class TcpPortBlocker {
 public:
@@ -484,6 +488,75 @@ private slots:
         qunsetenv("AIRPLAY_DEBUG_LOG");
         QCOMPARE(log.count(QStringLiteral("GStreamer video pipeline")), 2);
         QCOMPARE(log.count(QStringLiteral("video_pipeline state change")), 2);
+#endif
+    }
+
+    void fakeReceiverRecordsLastVideoFitMode() {
+        FakeAirPlayReceiver fake;
+        QVERIFY(!fake.lastVideoFitMode());
+        fake.setVideoFitMode(true);
+        QVERIFY(fake.lastVideoFitMode());
+        fake.setVideoFitMode(false);
+        QVERIFY(!fake.lastVideoFitMode());
+    }
+
+    void uxplayReceiverStoresVideoFitMode() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        QVERIFY(!receiver.m_videoFitMode.load());
+        receiver.setVideoFitMode(true);
+        QVERIFY(receiver.m_videoFitMode.load());
+        receiver.setVideoFitMode(false);
+        QVERIFY(!receiver.m_videoFitMode.load());
+#endif
+    }
+
+    void setVideoFitModeUpdatesRenderer() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+
+        QVERIFY(!video_renderer_get_force_aspect_ratio());
+
+        receiver.setVideoFitMode(true);
+        QVERIFY(video_renderer_get_force_aspect_ratio());
+
+        receiver.setVideoFitMode(false);
+        QVERIFY(!video_renderer_get_force_aspect_ratio());
+
+        receiver.stop();
+#endif
+    }
+
+    void videoFitModePersistsAfterRendererRestart() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QCOMPARE(video_renderer_choose_codec(false, false), 0);
+
+        receiver.setVideoFitMode(true);
+        QVERIFY(video_renderer_get_force_aspect_ratio());
+
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+
+        QVERIFY(video_renderer_get_force_aspect_ratio());
+
+        receiver.stop();
 #endif
     }
 };

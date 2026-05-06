@@ -43,6 +43,7 @@ private:
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void resizeEvent(QResizeEvent *event) override;
     void applyAspectRatioLock(bool enabled);
+    void applyVideoFitMode(bool enabled);
     void enforceAspectRatio();
 
     ToolbarWidget *toolbar_;
@@ -61,5 +62,6 @@ private:
     int videoHeight_ = 0;
     bool aspectRatioLock_ = false;
     bool alwaysOnTopEnabled_ = false;
+    bool videoFitMode_ = false;
     bool resizing_ = false;
 };

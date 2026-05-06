@@ -979,6 +979,133 @@ private slots:
         AppSettingsStore store(path);
         QVERIFY(store.loadOrDefaults().aspectRatioLock());
     }
+
+    void shortcutVideoFitTogglesButtonAndReceiver() {
+        FakeHotkeyService hotkeys;
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(!button->isChecked());
+        QVERIFY(!receiver.lastVideoFitMode());
+
+        emit hotkeys.activated(ShortcutAction::ToggleVideoFit);
+
+        QVERIFY(button->isChecked());
+        QVERIFY(receiver.lastVideoFitMode());
+    }
+
+    void toolbarVideoFitTooltipUsesDefaultShortcut() {
+        MainWindow window(AppSettings::defaults(), nullptr);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+
+        const QString shortcut = AppSettings::defaults().shortcutFor(ShortcutAction::ToggleVideoFit).toString(QKeySequence::NativeText);
+        QCOMPARE(button->toolTip(), QString("Fit: %1").arg(shortcut));
+    }
+
+    void toolbarVideoFitTooltipUsesCustomizedShortcut() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setShortcut(ShortcutAction::ToggleVideoFit, QKeySequence("Ctrl+Alt+V"));
+        MainWindow window(settings, nullptr);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+
+        const QString shortcut = settings.shortcutFor(ShortcutAction::ToggleVideoFit).toString(QKeySequence::NativeText);
+        QCOMPARE(button->toolTip(), QString("Fit: %1").arg(shortcut));
+    }
+
+    void clickingVideoFitButtonCallsReceiverSetTrue() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+
+        button->setChecked(true);
+
+        QVERIFY(receiver.lastVideoFitMode());
+    }
+
+    void clickingVideoFitButtonCallsReceiverSetFalse() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+
+        button->setChecked(true);
+        QVERIFY(receiver.lastVideoFitMode());
+
+        button->setChecked(false);
+        QVERIFY(!receiver.lastVideoFitMode());
+    }
+
+    void loadedVideoFitModeInitializesButtonAndReceiver() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setVideoFitMode(true);
+        FakeAirPlayReceiver receiver;
+
+        MainWindow window(settings, nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(button->isChecked());
+        QVERIFY(receiver.lastVideoFitMode());
+    }
+
+    void videoFitModeTogglePersistsToSettings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, path);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+
+        button->setChecked(true);
+
+        AppSettingsStore store(path);
+        QVERIFY(store.loadOrDefaults().videoFitMode());
+    }
+
+    void videoFitModeToggleOffPersistsToSettings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setVideoFitMode(true);
+        MainWindow window(settings, nullptr, nullptr, path);
+        auto *button = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(button->isChecked());
+
+        button->setChecked(false);
+
+        AppSettingsStore store(path);
+        QVERIFY(!store.loadOrDefaults().videoFitMode());
+    }
+
+    void startupWithVideoFitModeTrueDoesNotSaveUnchangedSettings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(R"({"videoFitMode":true})");
+            file.close();
+        }
+
+        AppSettings settings = AppSettingsStore(path).loadOrDefaults();
+        QVERIFY(settings.videoFitMode());
+
+        QFile::remove(path);
+        QVERIFY(!QFile::exists(path));
+
+        MainWindow window(settings, nullptr, nullptr, path);
+
+        QVERIFY(!QFile::exists(path));
+    }
 };
 
 QTEST_MAIN(MainWindowSmokeTest)

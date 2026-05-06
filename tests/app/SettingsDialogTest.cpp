@@ -17,7 +17,32 @@ private slots:
         SettingsDialog dialog(AppSettings::defaults());
         auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
         QVERIFY(table);
-        QCOMPARE(table->rowCount(), 5);
+        QCOMPARE(table->rowCount(), 6);
+    }
+
+    void toggleVideoFitShortcutEditExists() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *edit = dialog.findChild<QKeySequenceEdit *>("shortcutEdit_toggleVideoFit");
+        QVERIFY(edit != nullptr);
+    }
+
+    void toggleVideoFitShortcutStartsWithDefault() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *edit = dialog.findChild<QKeySequenceEdit *>("shortcutEdit_toggleVideoFit");
+        QVERIFY(edit != nullptr);
+        QCOMPARE(edit->keySequence(), AppSettings::defaults().shortcutFor(ShortcutAction::ToggleVideoFit));
+    }
+
+    void exposesAcceptedToggleVideoFitShortcut() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *edit = dialog.findChild<QKeySequenceEdit *>("shortcutEdit_toggleVideoFit");
+        QVERIFY(edit != nullptr);
+
+        edit->setKeySequence(QKeySequence("Ctrl+Shift+V"));
+        dialog.accept();
+
+        QCOMPARE(dialog.result(), static_cast<int>(QDialog::Accepted));
+        QCOMPARE(dialog.settings().shortcutFor(ShortcutAction::ToggleVideoFit), QKeySequence("Ctrl+Shift+V"));
     }
 
     void showsGeneralAndHotkeyBindingSections() {

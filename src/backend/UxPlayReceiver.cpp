@@ -487,6 +487,13 @@ void UxPlayReceiver::setVideoSurface(WId id) {
 #endif
 }
 
+void UxPlayReceiver::setVideoFitMode(bool enabled) {
+    m_videoFitMode.store(enabled);
+#if AIRPLAY_WITH_UXPLAY
+    applyVideoFitModeToRenderer();
+#endif
+}
+
 ReceiverState UxPlayReceiver::state() const {
     return m_state;
 }
@@ -626,6 +633,7 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
         video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
                             "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
                             kPlaybinVersion, nullptr);
+        applyVideoFitModeToRenderer();
         bindVideoSurfaceToRenderer();
         video_renderer_start();
         bindVideoSurfaceToRenderer();
@@ -674,7 +682,12 @@ void UxPlayReceiver::bindVideoSurfaceToRenderer() {
     if (m_videoSurfaceId == 0) {
         return;
     }
+    applyVideoFitModeToRenderer();
     video_renderer_set_window_handle(reinterpret_cast<void *>(static_cast<uintptr_t>(m_videoSurfaceId)));
+}
+
+void UxPlayReceiver::applyVideoFitModeToRenderer() {
+    video_renderer_set_force_aspect_ratio(m_videoFitMode.load());
 }
 
 void UxPlayReceiver::renderAudioBufferFromCallback(void *data, int *data_len, unsigned short *seqnum, uint64_t *ntp_time) {
