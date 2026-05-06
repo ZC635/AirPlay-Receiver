@@ -5,9 +5,11 @@
 #include "app/ToolbarWidget.h"
 #include "app/VideoSurfaceWidget.h"
 #include "backend/AirPlayReceiver.h"
+#include "platform/AspectRatioSizing.h"
 #include "platform/HotkeyService.h"
 
 #include <algorithm>
+#include <cmath>
 #include <QGridLayout>
 #include <QKeySequence>
 #include <QLabel>
@@ -53,6 +55,28 @@ bool setWindowBorderColor(WId windowId, bool enabled) {
     const COLORREF none = 0xFFFFFFFE;
     return SUCCEEDED(DwmSetWindowAttribute(
         window, 34, enabled ? &blue : &none, sizeof(COLORREF)));
+}
+
+AspectRatioFrameMargins frameMarginsFor(const QWidget &widget) {
+    const QRect frame = widget.frameGeometry();
+    const QRect client = widget.geometry();
+    const int left = client.left() - frame.left();
+    const int top = client.top() - frame.top();
+    return AspectRatioFrameMargins{
+        left,
+        top,
+        frame.width() - client.width() - left,
+        frame.height() - client.height() - top};
+}
+
+AspectRatioSizeConstraints sizeConstraintsFor(const QWidget &widget, const AspectRatioFrameMargins &margins) {
+    const int horizontalFrame = std::max(0, margins.left) + std::max(0, margins.right);
+    const int verticalFrame = std::max(0, margins.top) + std::max(0, margins.bottom);
+    return AspectRatioSizeConstraints{
+        widget.minimumWidth() + horizontalFrame,
+        widget.minimumHeight() + verticalFrame,
+        widget.maximumWidth() + horizontalFrame,
+        widget.maximumHeight() + verticalFrame};
 }
 }
 #endif
@@ -397,6 +421,24 @@ void MainWindow::showSettingsDialog() {
     handleReceiverNameChange(settings_.receiverName());
 }
 
+bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
+#ifdef Q_OS_WIN
+    auto *msg = static_cast<MSG *>(message);
+    if (msg != nullptr && msg->message == WM_SIZING && aspectRatioLock_ && videoWidth_ > 0 && videoHeight_ > 0) {
+        auto *rect = reinterpret_cast<RECT *>(msg->lParam);
+        const double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
+        const AspectRatioFrameMargins margins = frameMarginsFor(*this);
+        if (rect != nullptr && adjustWindowRectForAspectRatio(*rect, static_cast<unsigned int>(msg->wParam), targetRatio, margins, sizeConstraintsFor(*this, margins))) {
+            if (result != nullptr) {
+                *result = TRUE;
+            }
+            return true;
+        }
+    }
+#endif
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
 void MainWindow::resizeEvent(QResizeEvent *event) {
     QMainWindow::resizeEvent(event);
     if (!aspectRatioLock_ || videoWidth_ <= 0 || videoHeight_ <= 0) return;
@@ -405,7 +447,7 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
     QSize newSize = event->size();
     double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
 
-    int correctedWidth = static_cast<int>(newSize.height() * targetRatio);
+    int correctedWidth = static_cast<int>(std::lround(newSize.height() * targetRatio));
     if (qAbs(newSize.width() - correctedWidth) <= 1) return;
 
     if (correctedWidth < minimumWidth()) correctedWidth = minimumWidth();
@@ -429,7 +471,7 @@ void MainWindow::applyAspectRatioLock(bool enabled) {
 void MainWindow::enforceAspectRatio() {
     if (videoWidth_ <= 0 || videoHeight_ <= 0) return;
     double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
-    int newWidth = static_cast<int>(height() * targetRatio);
+    int newWidth = static_cast<int>(std::lround(height() * targetRatio));
     if (newWidth < minimumWidth()) newWidth = minimumWidth();
     resize(newWidth, height());
 }

@@ -10,6 +10,7 @@ option(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS "Enable tests that require the Windows Q
 
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     add_test(NAME MainWindowTopmostFlickerTest COMMAND MainWindowSmokeTest visibleAlwaysOnTopToggleDoesNotHideOrShowWindow)
+    add_test(NAME MainWindowNativeAspectSizingTest COMMAND MainWindowSmokeTest nativeAspectSizingAdjustsPendingRightEdgeRect)
 endif()
 
 add_executable(AppSettingsTest app/AppSettingsTest.cpp)
@@ -31,6 +32,10 @@ add_test(NAME SettingsDialogTest COMMAND SettingsDialogTest)
 add_executable(HotkeyServiceTest platform/HotkeyServiceTest.cpp)
 target_link_libraries(HotkeyServiceTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME HotkeyServiceTest COMMAND HotkeyServiceTest)
+
+add_executable(AspectRatioSizingTest platform/AspectRatioSizingTest.cpp)
+target_link_libraries(AspectRatioSizingTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME AspectRatioSizingTest COMMAND AspectRatioSizingTest)
 
 add_executable(DependencyDiagnosticsTest platform/DependencyDiagnosticsTest.cpp)
 target_link_libraries(DependencyDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
@@ -77,6 +82,7 @@ set(AIRPLAY_QT_TESTS
     ToolbarWidgetTest
     SettingsDialogTest
     HotkeyServiceTest
+    AspectRatioSizingTest
     DependencyDiagnosticsTest
     AirPlayReceiverTest
     UxPlayReceiverConfigTest
@@ -92,6 +98,10 @@ endforeach()
 
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     set_tests_properties(MainWindowTopmostFlickerTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+    set_tests_properties(MainWindowNativeAspectSizingTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )

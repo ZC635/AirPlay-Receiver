@@ -872,6 +872,59 @@ private slots:
         QVERIFY(diff < 0.01);
     }
 
+    void aspectRatioLockRoundsToNearestWidth() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        receiver.emitVideoSize(1170, 2532);
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+
+        QCOMPARE(window.width(), 250);
+    }
+
+    void nativeAspectSizingAdjustsPendingRightEdgeRect() {
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        receiver.emitVideoSize(1920, 1080);
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+        QCoreApplication::processEvents();
+
+        const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+        RECT rect{};
+        QVERIFY(GetWindowRect(hwnd, &rect));
+
+        const LONG originalLeft = rect.left;
+        const LONG originalRight = rect.right;
+        const LONG originalCenterY = (rect.top + rect.bottom) / 2;
+        rect.right += 160;
+
+        SendMessage(hwnd, WM_SIZING, WMSZ_RIGHT, reinterpret_cast<LPARAM>(&rect));
+
+        const int frameWidth = window.frameGeometry().width() - window.width();
+        const int frameHeight = window.frameGeometry().height() - window.height();
+        const int clientWidth = static_cast<int>(rect.right - rect.left) - frameWidth;
+        const int clientHeight = static_cast<int>(rect.bottom - rect.top) - frameHeight;
+        const double actualRatio = static_cast<double>(clientWidth) / clientHeight;
+
+        QCOMPARE(rect.left, originalLeft);
+        QCOMPARE(rect.right, originalRight + 160);
+        QVERIFY(qAbs(((rect.top + rect.bottom) / 2) - originalCenterY) <= 1);
+        QVERIFY(qAbs(actualRatio - (16.0 / 9.0)) < 0.01);
+#else
+        QSKIP("Windows-specific native sizing behavior");
+#endif
+    }
+
     void disablingAspectRatioLockKeepsCurrentSize() {
         FakeAirPlayReceiver receiver;
         MainWindow window(AppSettings::defaults(), nullptr, &receiver);

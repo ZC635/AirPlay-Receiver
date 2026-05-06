@@ -33,6 +33,8 @@ add_library(airplay_app_lib
     src/backend/UxPlayReceiver.h
     src/platform/DependencyDiagnostics.cpp
     src/platform/DependencyDiagnostics.h
+    src/platform/AspectRatioSizing.cpp
+    src/platform/AspectRatioSizing.h
     src/platform/FakeHotkeyService.h
     src/platform/HotkeyService.h
     src/platform/WindowsHotkeyService.cpp

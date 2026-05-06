@@ -40,6 +40,7 @@ private:
     void applyPendingReceiverNameIfNeeded(bool wasRenameBlocked);
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
+    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void resizeEvent(QResizeEvent *event) override;
     void applyAspectRatioLock(bool enabled);
     void enforceAspectRatio();
