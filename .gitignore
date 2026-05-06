@@ -1,6 +1,7 @@
 # Build outputs
 build/
 build-uxplay/
+build-uxplay-portable/
 .opencode/
 out/
 dist/

@@ -1,5 +1,6 @@
 param(
     [switch]$Deploy,
+    [switch]$Portable,
     [string]$MSys2Root,
     [switch]$AssumeYes,
     [switch]$SkipInstall
@@ -155,11 +156,11 @@ function Start-PortableProcess {
 }
 
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$BuildDir = Join-Path $ProjectRoot "build-uxplay"
+$BuildDir = if ($Portable) { Join-Path $ProjectRoot "build-uxplay-portable" } else { Join-Path $ProjectRoot "build-uxplay" }
 $ExePath = Join-Path $BuildDir "airplay_receiver.exe"
 $BuildScript = Join-Path $ProjectRoot "scripts\build.ps1"
 
-if ((-not (Test-Path $ExePath)) -or $Deploy) {
+if ((-not (Test-Path $ExePath)) -or $Deploy -or $Portable) {
     if (-not (Test-Path $ExePath)) {
         Write-Host "Not built yet. Running build..." -ForegroundColor Yellow
     } else {
@@ -167,7 +168,8 @@ if ((-not (Test-Path $ExePath)) -or $Deploy) {
     }
 
     $buildArgs = @()
-    if ($Deploy) { $buildArgs += "-Deploy" }
+    if ($Portable) { $buildArgs += "-Portable" }
+    elseif ($Deploy) { $buildArgs += "-Deploy" }
     if ($MSys2Root) { $buildArgs += @("-MSys2Root", $MSys2Root) }
     if ($AssumeYes) { $buildArgs += "-AssumeYes" }
     if ($SkipInstall) { $buildArgs += "-SkipInstall" }

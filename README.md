@@ -94,6 +94,17 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+### Portable Build
+
+A portable build is a fully self-contained deployment that does not require MSYS2 to run. The build bundles all required DLLs, GStreamer plugins, and a pre-built GStreamer registry into a single directory. The resulting folder is larger (~200MB+) but can be copied to any Windows machine and run by simply double-clicking `launcher.cmd`.
+
+```powershell
+.\scripts\build.ps1 -Portable   # Build the portable bundle
+.\scripts\run.ps1 -Portable     # Build + launch portable
+```
+
+Or double-click `launcher.cmd` inside the `build-uxplay-portable\` folder.
+
 ### Run
 
 Launch through the helper script:

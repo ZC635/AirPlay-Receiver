@@ -13,5 +13,8 @@ if not exist "%~dp0Qt6Core.dll" (
     exit /b 1
 )
 
+set "GST_PLUGIN_PATH=%~dp0gstreamer-plugins"
+if exist "%~dp0gstreamer-1.0\registry.x86_64.bin" set "GST_REGISTRY=%~dp0gstreamer-1.0\registry.x86_64.bin"
+
 "%~dp0airplay_receiver.exe"
 exit /b %errorlevel%
