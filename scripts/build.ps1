@@ -1,3 +1,4 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Clean,
     [switch]$Test,
@@ -7,10 +8,45 @@ param(
     [switch]$AssumeYes,
     [switch]$SkipInstall,
     [switch]$Portable,
-    [switch]$All
+    [switch]$All,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
 )
 
 $ErrorActionPreference = "Stop"
+
+# Normalize GNU-style aliases because PowerShell only binds -Name parameters.
+$NormalizedArgs = @()
+if ($RemainingArgs.Count -gt 0) { $NormalizedArgs += $RemainingArgs }
+
+if ($NormalizedArgs.Count -gt 0) {
+    for ($i = 0; $i -lt $NormalizedArgs.Count; $i++) {
+        $arg = [string]$NormalizedArgs[$i]
+        if ($arg -ieq "--Clean") { $Clean = $true }
+        elseif ($arg -ieq "--Test") { $Test = $true }
+        elseif ($arg -ieq "--Run") { $Run = $true }
+        elseif ($arg -ieq "--Deploy") { $Deploy = $true }
+        elseif ($arg -ieq "--AssumeYes") { $AssumeYes = $true }
+        elseif ($arg -ieq "--SkipInstall") { $SkipInstall = $true }
+        elseif ($arg -ieq "--Portable") { $Portable = $true }
+        elseif ($arg -ieq "--All") { $All = $true }
+        elseif ($arg -match "(?i)^--MSys2Root=(.*)$") { $MSys2Root = $Matches[1] }
+        elseif ($arg -ieq "--MSys2Root") {
+            if ($i + 1 -ge $NormalizedArgs.Count) {
+                throw "--MSys2Root requires a value."
+            }
+            $i++
+            $MSys2Root = [string]$NormalizedArgs[$i]
+            if ($MSys2Root.StartsWith("--", [System.StringComparison]::Ordinal)) {
+                throw "--MSys2Root requires a value."
+            }
+        }
+        elseif ((-not $MSys2Root) -and (-not $arg.StartsWith("-", [System.StringComparison]::Ordinal))) { $MSys2Root = $arg }
+        else {
+            throw "Unknown argument: $arg. Use PowerShell parameters such as -All, or supported double-dash aliases such as --All."
+        }
+    }
+}
 
 if ($All -and ($Deploy -or $Portable)) {
     throw "-All is mutually exclusive with -Deploy and -Portable. -All already builds both variants."
