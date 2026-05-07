@@ -11,7 +11,7 @@ option(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS "Enable tests that require the Windows Q
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     add_test(NAME MainWindowTopmostFlickerTest COMMAND MainWindowSmokeTest visibleAlwaysOnTopToggleDoesNotHideOrShowWindow)
     add_test(NAME MainWindowNativeAspectSizingTest COMMAND MainWindowSmokeTest nativeAspectSizingAdjustsPendingRightEdgeRect)
-    add_test(NAME MainWindowSmokeTestNativeOverlayStacking COMMAND MainWindowSmokeTest nativeVideoSurfaceDoesNotCoverVisibleOverlays)
+    add_test(NAME MainWindowSmokeTestNativeOverlayStacking COMMAND MainWindowSmokeTest videoSurfaceDoesNotCoverVisibleOverlays)
 endif()
 
 add_executable(AppSettingsTest app/AppSettingsTest.cpp)

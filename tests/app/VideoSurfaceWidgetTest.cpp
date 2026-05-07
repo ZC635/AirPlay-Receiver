@@ -14,7 +14,7 @@ private slots:
         QVERIFY(widget.inherits("QWidget"));
     }
 
-    void defaultsToPainterSurfaceWithoutNativeD3DChild() {
+    void defaultsToPainterSurfaceWithoutNativeChild() {
         VideoSurfaceWidget widget;
 
         QVERIFY(!widget.testAttribute(Qt::WA_NativeWindow));
