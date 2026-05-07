@@ -103,8 +103,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     statusLabel_->setObjectName("receiverStatusLabel");
     statusLabel_->setAlignment(Qt::AlignCenter);
     statusLabel_->setStyleSheet("color: black; background: transparent;");
-    statusLabel_->setAttribute(Qt::WA_NativeWindow, true);
-    toolbar_->setAttribute(Qt::WA_NativeWindow, true);
+    statusLabel_->setAttribute(Qt::WA_TranslucentBackground, true);
 
     auto *central = new QWidget(this);
     auto *layout = new QGridLayout(central);

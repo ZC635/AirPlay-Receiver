@@ -223,7 +223,6 @@ private slots:
         QWidget *toolbar = volumeButton->parentWidget();
         QVERIFY(toolbar != nullptr);
         QVERIFY(toolbar->parentWidget() != surface);
-        QVERIFY(toolbar->testAttribute(Qt::WA_NativeWindow));
     }
 
     void registersDefaultShortcuts() {

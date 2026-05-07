@@ -48,11 +48,6 @@ void VideoSurfaceWidget::paintGL() {
                 drawH = widgetW / videoAspect;
             else
                 drawW = widgetH * videoAspect;
-        } else {
-            if (videoAspect > widgetAspect)
-                drawW = widgetH * videoAspect;
-            else
-                drawH = widgetW / videoAspect;
         }
     }
 
@@ -67,10 +62,10 @@ void VideoSurfaceWidget::paintGL() {
 
     glEnable(GL_TEXTURE_2D);
     glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 1.0f); glVertex2f(x, y);
-    glTexCoord2f(1.0f, 1.0f); glVertex2f(x + drawW, y);
-    glTexCoord2f(1.0f, 0.0f); glVertex2f(x + drawW, y + drawH);
-    glTexCoord2f(0.0f, 0.0f); glVertex2f(x, y + drawH);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(x, y);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(x + drawW, y);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(x + drawW, y + drawH);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(x, y + drawH);
     glEnd();
     glDisable(GL_TEXTURE_2D);
 

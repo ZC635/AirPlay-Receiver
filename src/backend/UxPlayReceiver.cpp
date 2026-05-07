@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QMetaObject>
 #include <QPointer>
@@ -375,6 +376,9 @@ void UxPlayReceiver::start() {
         GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
         if (pipeline && m_frameCallback) {
             GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h264");
+            if (!appsink) {
+                appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h265");
+            }
             if (appsink) {
                 m_videoFrameBridge = new VideoFrameBridge(appsink, this);
                 m_videoFrameBridge->start();
@@ -755,7 +759,27 @@ int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265) {
     if (!m_acceptingCallbacks.load()) {
         return -1;
     }
-    return video_renderer_choose_codec(false, video_is_h265);
+    int result = video_renderer_choose_codec(false, video_is_h265);
+    if (result == 0 && !m_videoFrameBridge) {
+        GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
+        if (pipeline && m_frameCallback) {
+            GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h264");
+            if (!appsink) {
+                // try alternate
+                appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h265");
+            }
+            if (appsink) {
+                m_videoFrameBridge = new VideoFrameBridge(appsink, this);
+                m_videoFrameBridge->start();
+                QObject::connect(m_videoFrameBridge, &VideoFrameBridge::frameReady,
+                                 this, [this](QImage frame) {
+                                     if (m_frameCallback) m_frameCallback(frame);
+                                 }, Qt::QueuedConnection);
+                gst_object_unref(appsink);
+            }
+        }
+    }
+    return result;
 }
 #endif
 

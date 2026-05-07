@@ -1,6 +1,5 @@
 #include "backend/VideoFrameBridge.h"
 
-#include <QMetaObject>
 #include <gst/video/gstvideometa.h>
 
 VideoFrameBridge::VideoFrameBridge(GstElement *appsink, QObject *parent)
@@ -66,12 +65,6 @@ GstFlowReturn VideoFrameBridge::onNewSample(GstAppSink *appsink, gpointer userDa
     gst_buffer_unmap(buffer, &map);
     gst_sample_unref(sample);
 
-    QPointer<VideoFrameBridge> guarded(self);
-    QMetaObject::invokeMethod(self, [guarded, copy] {
-        if (guarded) {
-            emit guarded->frameReady(copy);
-        }
-    }, Qt::QueuedConnection);
-
+    emit self->frameReady(copy);
     return GST_FLOW_OK;
 }
