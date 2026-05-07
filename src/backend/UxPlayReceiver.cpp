@@ -1,4 +1,5 @@
 #include "backend/UxPlayReceiver.h"
+#include "backend/VideoFrameBridge.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -370,6 +371,21 @@ void UxPlayReceiver::start() {
     }
     video_renderer_start();
     m_videoRendererStopped.store(false);
+    {
+        GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
+        if (pipeline && m_frameCallback) {
+            GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h264");
+            if (appsink) {
+                m_videoFrameBridge = new VideoFrameBridge(appsink, this);
+                m_videoFrameBridge->start();
+                QObject::connect(m_videoFrameBridge, &VideoFrameBridge::frameReady,
+                                 this, [this](QImage frame) {
+                                     if (m_frameCallback) m_frameCallback(frame);
+                                 }, Qt::QueuedConnection);
+                gst_object_unref(appsink);
+            }
+        }
+    }
     if (audio_renderer_init(logger, audioSink.constData(), &kAudioSync, &kVideoSync, "") != 0) {
         m_acceptingCallbacks.store(false);
         setError("Failed to initialize GStreamer audio renderer");
@@ -482,9 +498,17 @@ void UxPlayReceiver::setVolume(double volume) {
 }
 
 void UxPlayReceiver::setVideoSurface(WId id) {
-    m_videoSurfaceId = id;
+    Q_UNUSED(id);
+}
+
+void UxPlayReceiver::setVideoFrameCallback(FrameCallback callback) {
+    m_frameCallback = std::move(callback);
 #if AIRPLAY_WITH_UXPLAY
-    bindVideoSurfaceToRenderer();
+    if (m_videoFrameBridge) {
+        QObject::disconnect(m_videoFrameBridge, nullptr, nullptr, nullptr);
+        delete m_videoFrameBridge;
+        m_videoFrameBridge = nullptr;
+    }
 #endif
 }
 
@@ -635,11 +659,8 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
                             "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
                             kPlaybinVersion, nullptr);
         applyVideoFitModeToRenderer();
-        bindVideoSurfaceToRenderer();
         video_renderer_start();
-        bindVideoSurfaceToRenderer();
         video_renderer_choose_codec(false, false);
-        bindVideoSurfaceToRenderer();
         m_videoRendererStopped.store(false);
     };
 
@@ -673,18 +694,8 @@ void UxPlayReceiver::restartVideoPipelineForConnect() {
         return;
     }
     if (m_videoRendererStopped.exchange(false)) {
-        bindVideoSurfaceToRenderer();
         video_renderer_start();
-        bindVideoSurfaceToRenderer();
     }
-}
-
-void UxPlayReceiver::bindVideoSurfaceToRenderer() {
-    if (m_videoSurfaceId == 0) {
-        return;
-    }
-    applyVideoFitModeToRenderer();
-    video_renderer_set_window_handle(reinterpret_cast<void *>(static_cast<uintptr_t>(m_videoSurfaceId)));
 }
 
 void UxPlayReceiver::applyVideoFitModeToRenderer() {
@@ -1039,6 +1050,10 @@ void UxPlayReceiver::cleanupUxPlay() {
         raop_destroy(static_cast<raop_t *>(m_raop));
         m_raop = nullptr;
         m_raopHttpdInitialized = false;
+    }
+    if (m_videoFrameBridge) {
+        delete m_videoFrameBridge;
+        m_videoFrameBridge = nullptr;
     }
     if (m_renderersStarted.load()) {
         QMutexLocker rendererLocker(&m_rendererMutex);

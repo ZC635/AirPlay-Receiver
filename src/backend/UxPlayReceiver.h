@@ -9,6 +9,7 @@
 #include "backend/AirPlayReceiver.h"
 
 class MdnsPublisher;
+class VideoFrameBridge;
 
 struct UxPlayReceiverConfig {
     QString serverName = "AirPlay Receiver";
@@ -28,6 +29,7 @@ public:
     void stop() override;
     void setVolume(double volume) override;
     void setVideoSurface(WId id) override;
+    void setVideoFrameCallback(FrameCallback callback) override;
     void setVideoFitMode(bool enabled) override;
     ReceiverState state() const override;
     QString receiverName() const override;
@@ -63,7 +65,6 @@ private:
     void setError(QString error);
 #if AIRPLAY_WITH_UXPLAY
     void cleanupUxPlay();
-    void bindVideoSurfaceToRenderer();
     void applyVideoFitModeToRenderer();
     bool createDiscoveryBroadcast();
     bool registerDiscoveryBroadcast(unsigned short port);
@@ -77,9 +78,10 @@ private:
     UxPlayReceiverConfig m_config;
     ReceiverState m_state = ReceiverState::Idle;
     QString m_error;
-    WId m_videoSurfaceId = 0;
     std::atomic<double> m_volume = 1.0;
     std::atomic_bool m_videoFitMode = false;
+    AirPlayReceiver::FrameCallback m_frameCallback;
+    VideoFrameBridge *m_videoFrameBridge = nullptr;
 #if AIRPLAY_WITH_UXPLAY
     void *m_raop = nullptr;
     void *m_dnssd = nullptr;
