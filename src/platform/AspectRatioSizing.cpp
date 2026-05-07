@@ -218,3 +218,16 @@ bool adjustWindowRectForAspectRatio(
         return false;
     }
 }
+
+void updateWindowPosCopyBitsForResize(WINDOWPOS &windowPos, const RECT &currentRect) {
+    if ((windowPos.flags & SWP_NOSIZE) != 0) {
+        return;
+    }
+
+    if ((windowPos.flags & SWP_NOMOVE) != 0 || (windowPos.x == currentRect.left && windowPos.y == currentRect.top)) {
+        windowPos.flags |= SWP_NOCOPYBITS;
+        return;
+    }
+
+    windowPos.flags &= ~SWP_NOCOPYBITS;
+}

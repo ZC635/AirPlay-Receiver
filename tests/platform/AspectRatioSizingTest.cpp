@@ -14,6 +14,67 @@ class AspectRatioSizingTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void copyBitsPolicySetsNoCopyBitsWhenTopLeftUnchanged() {
+        WINDOWPOS pos{};
+        pos.x = 100;
+        pos.y = 200;
+        pos.flags = 0;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) != 0);
+    }
+
+    void copyBitsPolicySetsNoCopyBitsWhenNoMove() {
+        WINDOWPOS pos{};
+        pos.x = 80;
+        pos.y = 160;
+        pos.flags = SWP_NOMOVE;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) != 0);
+    }
+
+    void copyBitsPolicyClearsNoCopyBitsWhenLeftEdgeMoved() {
+        WINDOWPOS pos{};
+        pos.x = 90;
+        pos.y = 200;
+        pos.flags = SWP_NOCOPYBITS;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
+    }
+
+    void copyBitsPolicyClearsNoCopyBitsWhenTopEdgeMoved() {
+        WINDOWPOS pos{};
+        pos.x = 100;
+        pos.y = 190;
+        pos.flags = SWP_NOCOPYBITS;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
+    }
+
+    void copyBitsPolicyLeavesFlagsUnchangedWhenNoSize() {
+        WINDOWPOS pos{};
+        pos.x = 120;
+        pos.y = 220;
+        pos.flags = SWP_NOSIZE | SWP_NOCOPYBITS | SWP_NOZORDER;
+        const UINT originalFlags = pos.flags;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QCOMPARE(pos.flags, originalFlags);
+    }
+
     void rightEdgeUsesWidthAndKeepsHorizontalAnchor() {
         RECT rect{100, 100, 436, 400};
 

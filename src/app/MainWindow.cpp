@@ -448,10 +448,20 @@ void MainWindow::showSettingsDialog() {
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
     auto *msg = static_cast<MSG *>(message);
     if (msg != nullptr && msg->message == WM_WINDOWPOSCHANGING) {
+        const bool handled = QMainWindow::nativeEvent(eventType, message, result);
         auto *wp = reinterpret_cast<WINDOWPOS *>(msg->lParam);
-        if (wp != nullptr && (wp->flags & SWP_NOSIZE) == 0) {
-            wp->flags |= SWP_NOCOPYBITS;
+        if (wp != nullptr) {
+            if ((wp->flags & (SWP_NOMOVE | SWP_NOSIZE)) != 0) {
+                updateWindowPosCopyBitsForResize(*wp, RECT{});
+            } else {
+                const HWND hwnd = wp->hwnd != nullptr ? wp->hwnd : msg->hwnd;
+                RECT currentRect{};
+                if (hwnd != nullptr && GetWindowRect(hwnd, &currentRect)) {
+                    updateWindowPosCopyBitsForResize(*wp, currentRect);
+                }
+            }
         }
+        return handled;
     }
     if (msg != nullptr && msg->message == WM_SIZING && aspectRatioLock_ && videoWidth_ > 0 && videoHeight_ > 0) {
         auto *rect = reinterpret_cast<RECT *>(msg->lParam);
