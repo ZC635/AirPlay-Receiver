@@ -19,6 +19,10 @@ VideoSurfaceWidget::~VideoSurfaceWidget() = default;
 
 void VideoSurfaceWidget::resizeEvent(QResizeEvent *e) {
     QWidget::resizeEvent(e);
+    if (!m_cachedFrame.isNull() && isVisible()) {
+        repaint();
+        return;
+    }
     update();
 }
 

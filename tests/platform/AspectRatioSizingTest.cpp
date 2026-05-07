@@ -14,7 +14,7 @@ class AspectRatioSizingTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void copyBitsPolicySetsNoCopyBitsWhenTopLeftUnchanged() {
+    void copyBitsPolicyPreservesCopyBitsWhenTopLeftUnchanged() {
         WINDOWPOS pos{};
         pos.x = 100;
         pos.y = 200;
@@ -23,10 +23,10 @@ private slots:
 
         updateWindowPosCopyBitsForResize(pos, current);
 
-        QVERIFY((pos.flags & SWP_NOCOPYBITS) != 0);
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
     }
 
-    void copyBitsPolicySetsNoCopyBitsWhenNoMove() {
+    void copyBitsPolicyPreservesCopyBitsWhenNoMove() {
         WINDOWPOS pos{};
         pos.x = 80;
         pos.y = 160;
@@ -35,7 +35,7 @@ private slots:
 
         updateWindowPosCopyBitsForResize(pos, current);
 
-        QVERIFY((pos.flags & SWP_NOCOPYBITS) != 0);
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
     }
 
     void copyBitsPolicyClearsNoCopyBitsWhenLeftEdgeMoved() {
@@ -75,36 +75,36 @@ private slots:
         QCOMPARE(pos.flags, originalFlags);
     }
 
-    void rightEdgeUsesWidthAndKeepsHorizontalAnchor() {
+    void rightEdgeUsesWidthAndKeepsTopLeftStable() {
         RECT rect{100, 100, 436, 400};
 
         QVERIFY(adjustWindowRectForAspectRatio(rect, WMSZ_RIGHT, 16.0 / 9.0, margins()));
 
-        compareRect(rect, RECT{100, 140, 436, 360});
+        compareRect(rect, RECT{100, 100, 436, 320});
     }
 
-    void leftEdgeUsesWidthAndKeepsHorizontalAnchor() {
+    void leftEdgeUsesWidthAndKeepsTopRightStable() {
         RECT rect{64, 100, 400, 400};
 
         QVERIFY(adjustWindowRectForAspectRatio(rect, WMSZ_LEFT, 16.0 / 9.0, margins()));
 
-        compareRect(rect, RECT{64, 140, 400, 360});
+        compareRect(rect, RECT{64, 100, 400, 320});
     }
 
-    void bottomEdgeUsesHeightAndKeepsVerticalAnchor() {
+    void bottomEdgeUsesHeightAndKeepsTopLeftStable() {
         RECT rect{100, 100, 500, 320};
 
         QVERIFY(adjustWindowRectForAspectRatio(rect, WMSZ_BOTTOM, 16.0 / 9.0, margins()));
 
-        compareRect(rect, RECT{132, 100, 468, 320});
+        compareRect(rect, RECT{100, 100, 436, 320});
     }
 
-    void topEdgeUsesHeightAndKeepsVerticalAnchor() {
+    void topEdgeUsesHeightAndKeepsBottomLeftStable() {
         RECT rect{100, 80, 500, 300};
 
         QVERIFY(adjustWindowRectForAspectRatio(rect, WMSZ_TOP, 16.0 / 9.0, margins()));
 
-        compareRect(rect, RECT{132, 80, 468, 300});
+        compareRect(rect, RECT{100, 80, 436, 300});
     }
 
     void bottomRightCornerUsesWidthWhenRectIsTooWide() {
@@ -154,7 +154,7 @@ private slots:
 
         QVERIFY(adjustWindowRectForAspectRatio(rect, WMSZ_RIGHT, 16.0 / 9.0, margins(), constraints));
 
-        compareRect(rect, RECT{100, 120, 507, 380});
+        compareRect(rect, RECT{100, 100, 507, 360});
     }
 
     void invalidInputReturnsFalse() {

@@ -4,7 +4,6 @@
 
 #include <QMainWindow>
 #include <QPointer>
-#include <QResizeEvent>
 #include <QString>
 
 enum class ReceiverState;
@@ -41,7 +40,6 @@ private:
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
-    void resizeEvent(QResizeEvent *event) override;
     void applyAspectRatioLock(bool enabled);
     void applyVideoFitMode(bool enabled);
     void enforceAspectRatio();
@@ -63,5 +61,4 @@ private:
     bool aspectRatioLock_ = false;
     bool alwaysOnTopEnabled_ = false;
     bool videoFitMode_ = false;
-    bool resizing_ = false;
 };

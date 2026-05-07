@@ -981,7 +981,7 @@ private slots:
 
         const LONG originalLeft = rect.left;
         const LONG originalRight = rect.right;
-        const LONG originalCenterY = (rect.top + rect.bottom) / 2;
+        const LONG originalTop = rect.top;
         rect.right += 160;
 
         SendMessage(hwnd, WM_SIZING, WMSZ_RIGHT, reinterpret_cast<LPARAM>(&rect));
@@ -994,7 +994,7 @@ private slots:
 
         QCOMPARE(rect.left, originalLeft);
         QCOMPARE(rect.right, originalRight + 160);
-        QVERIFY(qAbs(((rect.top + rect.bottom) / 2) - originalCenterY) <= 1);
+        QCOMPARE(rect.top, originalTop);
         QVERIFY(qAbs(actualRatio - (16.0 / 9.0)) < 0.01);
     }
 
@@ -1009,6 +1009,22 @@ private slots:
 
         button->setChecked(false);
         QCOMPARE(window.size(), lockedSize);
+    }
+
+    void aspectRatioLockDoesNotCorrectOrdinaryResizeEvents() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        receiver.emitVideoSize(1920, 1080);
+
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+
+        window.resize(640, 640);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(window.size(), QSize(640, 640));
     }
 
     void loadsAspectRatioLockFromSettings() {

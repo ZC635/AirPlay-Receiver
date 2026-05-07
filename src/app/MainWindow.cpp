@@ -476,23 +476,6 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 
-void MainWindow::resizeEvent(QResizeEvent *event) {
-    QMainWindow::resizeEvent(event);
-    if (!aspectRatioLock_ || videoWidth_ <= 0 || videoHeight_ <= 0) return;
-    if (resizing_) return;
-
-    QSize newSize = event->size();
-    double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
-
-    int correctedWidth = static_cast<int>(std::lround(newSize.height() * targetRatio));
-    if (qAbs(newSize.width() - correctedWidth) <= 1) return;
-
-    if (correctedWidth < minimumWidth()) correctedWidth = minimumWidth();
-    resizing_ = true;
-    resize(correctedWidth, newSize.height());
-    resizing_ = false;
-}
-
 void MainWindow::applyAspectRatioLock(bool enabled) {
     const bool changed = (aspectRatioLock_ != enabled);
     aspectRatioLock_ = enabled;

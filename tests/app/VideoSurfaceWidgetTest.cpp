@@ -4,6 +4,19 @@
 
 #include <QGuiApplication>
 
+class PaintEventCounter final : public QObject {
+public:
+    int paintEvents = 0;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (event->type() == QEvent::Paint) {
+            ++paintEvents;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
 class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
@@ -121,6 +134,26 @@ private slots:
         }
 
         QVERIFY(widget.isVisible());
+    }
+
+    void resizeRepaintsCachedFrameSynchronously() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        PaintEventCounter counter;
+        widget.installEventFilter(&counter);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        counter.paintEvents = 0;
+        QImage frame(64, 64, QImage::Format_RGBA8888);
+        frame.fill(Qt::green);
+        widget.onFrameReady(frame);
+        QTRY_VERIFY_WITH_TIMEOUT(counter.paintEvents > 0, 1000);
+
+        counter.paintEvents = 0;
+        widget.resize(140, 140);
+
+        QVERIFY(counter.paintEvents > 0);
     }
 };
 

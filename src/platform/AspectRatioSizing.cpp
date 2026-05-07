@@ -161,24 +161,24 @@ bool adjustWindowRectForAspectRatio(
     case WMSZ_LEFT: {
         const OuterSize size = constrainedSizeDrivenByWidth(rectWidth(rect), targetRatio, margins, constraints);
         setWidthKeepingRight(rect, size.width);
-        setHeightAroundCenter(rect, size.height);
+        setHeightKeepingTop(rect, size.height);
         return true;
     }
     case WMSZ_RIGHT: {
         const OuterSize size = constrainedSizeDrivenByWidth(rectWidth(rect), targetRatio, margins, constraints);
         setWidthKeepingLeft(rect, size.width);
-        setHeightAroundCenter(rect, size.height);
+        setHeightKeepingTop(rect, size.height);
         return true;
     }
     case WMSZ_TOP: {
         const OuterSize size = constrainedSizeDrivenByHeight(rectHeight(rect), targetRatio, margins, constraints);
-        setWidthAroundCenter(rect, size.width);
+        setWidthKeepingLeft(rect, size.width);
         setHeightKeepingBottom(rect, size.height);
         return true;
     }
     case WMSZ_BOTTOM: {
         const OuterSize size = constrainedSizeDrivenByHeight(rectHeight(rect), targetRatio, margins, constraints);
-        setWidthAroundCenter(rect, size.width);
+        setWidthKeepingLeft(rect, size.width);
         setHeightKeepingTop(rect, size.height);
         return true;
     }
@@ -224,10 +224,6 @@ void updateWindowPosCopyBitsForResize(WINDOWPOS &windowPos, const RECT &currentR
         return;
     }
 
-    if ((windowPos.flags & SWP_NOMOVE) != 0 || (windowPos.x == currentRect.left && windowPos.y == currentRect.top)) {
-        windowPos.flags |= SWP_NOCOPYBITS;
-        return;
-    }
-
+    (void)currentRect;
     windowPos.flags &= ~SWP_NOCOPYBITS;
 }
