@@ -30,8 +30,8 @@ public:
     }
 
     void setVideoFrameCallback(FrameCallback callback) override {
+        AirPlayReceiver::setVideoFrameCallback(callback);
         m_frameCallback = std::move(callback);
-        AirPlayReceiver::setVideoFrameCallback(std::move(callback));
     }
 
     FrameCallback frameCallback() const { return m_frameCallback; }
