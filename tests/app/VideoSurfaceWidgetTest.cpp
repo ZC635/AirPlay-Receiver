@@ -16,10 +16,32 @@ class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void init() {
+        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
+    }
+
+    void cleanup() {
+        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
+    }
+
     void isPlainQWidgetVideoSurface() {
         VideoSurfaceWidget widget;
         QVERIFY(!widget.inherits("QOpenGLWidget"));
         QVERIFY(widget.inherits("QWidget"));
+    }
+
+    void defaultsToPainterSurfaceWithoutNativeD3DChild() {
+        VideoSurfaceWidget widget;
+
+        QVERIFY(!widget.testAttribute(Qt::WA_NativeWindow));
+    }
+
+    void d3dSurfaceIsExplicitOptIn() {
+        qputenv("AIRPLAY_ENABLE_D3D_VIDEO", "1");
+
+        VideoSurfaceWidget widget;
+
+        QVERIFY(widget.testAttribute(Qt::WA_NativeWindow));
     }
 
     void hasExpandingSizePolicy() {
@@ -87,6 +109,7 @@ private slots:
         if (QGuiApplication::platformName() != QStringLiteral("windows")) {
             QSKIP("Native HWND test requires the Windows QPA platform");
         }
+        qputenv("AIRPLAY_ENABLE_D3D_VIDEO", "1");
 
         VideoSurfaceWidget widget;
         widget.resize(100, 100);

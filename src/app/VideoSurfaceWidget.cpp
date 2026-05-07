@@ -10,11 +10,17 @@
 
 #include <windows.h>
 
+namespace {
+bool d3dVideoEnabledByEnvironment() {
+    return !qgetenv("AIRPLAY_ENABLE_D3D_VIDEO").isEmpty();
+}
+}
+
 VideoSurfaceWidget::VideoSurfaceWidget(QWidget *parent)
     : QWidget(parent) {
     setObjectName("videoSurface");
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    setAttribute(Qt::WA_NativeWindow, true);
+    setAttribute(Qt::WA_NativeWindow, d3dVideoEnabledByEnvironment());
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setAttribute(Qt::WA_NoSystemBackground, true);
 }
@@ -31,7 +37,7 @@ void VideoSurfaceWidget::resizeEvent(QResizeEvent *e) {
 }
 
 void VideoSurfaceWidget::paintEvent(QPaintEvent *) {
-    if (!m_d3dDisabled && !m_cachedFrame.isNull() && ensureRenderer()) {
+    if (d3dVideoEnabledByEnvironment() && !m_d3dDisabled && !m_cachedFrame.isNull() && ensureRenderer()) {
         renderCurrentFrame();
         return;
     }
@@ -94,6 +100,9 @@ void VideoSurfaceWidget::setVideoFitMode(bool fit) {
 }
 
 bool VideoSurfaceWidget::ensureRenderer() {
+    if (!d3dVideoEnabledByEnvironment()) {
+        return false;
+    }
     if (m_d3dDisabled) {
         return false;
     }
@@ -126,6 +135,10 @@ bool VideoSurfaceWidget::ensureRenderer() {
 }
 
 void VideoSurfaceWidget::renderCurrentFrame() {
+    if (!d3dVideoEnabledByEnvironment()) {
+        update();
+        return;
+    }
     if (m_d3dDisabled) {
         update();
         return;
