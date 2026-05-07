@@ -114,7 +114,7 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 ## Features
 
 - Native iPhone AirPlay Screen Mirroring discovery and connection via UxPlay/GStreamer
-- Mirrored video display through a Qt `QOpenGLWidget` fed by a GStreamer appsink frame bridge
+- Mirrored video display through a native D3D11-backed Qt `QWidget`, with a `QPainter` fallback when D3D11 is unavailable
 - Synchronized audio playback
 - Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, and settings button
 - Settings dialog for receiver name and configurable shortcuts:
