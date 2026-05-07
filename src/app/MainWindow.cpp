@@ -193,7 +193,7 @@ bool MainWindow::isToolbarVisible() const {
 void MainWindow::toggleToolbarVisibility() {
     const bool showToolbar = !isToolbarVisible();
     toolbar_->setVisible(showToolbar);
-    statusLabel_->setVisible(receiverConnected_ ? showToolbar : true);
+    statusLabel_->setVisible(!receiverConnected_);
     if (!statusLabel_->isHidden()) {
         raiseNativeOverlay(statusLabel_);
     }

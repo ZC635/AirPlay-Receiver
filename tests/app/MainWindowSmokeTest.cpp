@@ -207,7 +207,7 @@ private slots:
         QCoreApplication::processEvents();
 
         QVERIFY(window.isToolbarVisible());
-        QVERIFY(status->isVisible());
+        QVERIFY(status->isHidden());
         QVERIFY(settings->isVisible());
 
         const HWND surfaceHwnd = reinterpret_cast<HWND>(surface->winId());
@@ -215,11 +215,8 @@ private slots:
         QVERIFY(IsWindow(surfaceHwnd));
 
         const HWND toolbarTop = windowFromWidgetCenter(*settings);
-        const HWND statusTop = windowFromWidgetCenter(*status);
         QVERIFY(toolbarTop != nullptr);
-        QVERIFY(statusTop != nullptr);
         QVERIFY(toolbarTop != surfaceHwnd);
-        QVERIFY(statusTop != surfaceHwnd);
     }
 
     void shortcutShowsToolbarWhileConnected() {
@@ -251,7 +248,7 @@ private slots:
         emit hotkeys.activated(ShortcutAction::ToggleToolbar);
 
         QVERIFY(window.isToolbarVisible());
-        QVERIFY(!label->isHidden());
+        QVERIFY(label->isHidden());
     }
 
     void nonConnectedStatusLabelStaysVisibleWhenToolbarToggles() {
