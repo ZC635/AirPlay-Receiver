@@ -4,44 +4,20 @@
 
 #include <QGuiApplication>
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-
 class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void init() {
-        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
-    }
-
-    void cleanup() {
-        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
-    }
-
     void isPlainQWidgetVideoSurface() {
         VideoSurfaceWidget widget;
         QVERIFY(!widget.inherits("QOpenGLWidget"));
         QVERIFY(widget.inherits("QWidget"));
     }
 
-    void defaultsToPainterSurfaceWithoutNativeD3DChild() {
+    void defaultsToPainterSurfaceWithoutNativeChild() {
         VideoSurfaceWidget widget;
 
         QVERIFY(!widget.testAttribute(Qt::WA_NativeWindow));
-    }
-
-    void d3dSurfaceIsExplicitOptIn() {
-        qputenv("AIRPLAY_ENABLE_D3D_VIDEO", "1");
-
-        VideoSurfaceWidget widget;
-
-        QVERIFY(widget.testAttribute(Qt::WA_NativeWindow));
     }
 
     void hasExpandingSizePolicy() {
@@ -105,22 +81,6 @@ private slots:
         QTest::qWait(50);
     }
 
-    void hasNativeWindowHandleOnWindowsQpa() {
-        if (QGuiApplication::platformName() != QStringLiteral("windows")) {
-            QSKIP("Native HWND test requires the Windows QPA platform");
-        }
-        qputenv("AIRPLAY_ENABLE_D3D_VIDEO", "1");
-
-        VideoSurfaceWidget widget;
-        widget.resize(100, 100);
-        widget.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&widget));
-
-        HWND hwnd = reinterpret_cast<HWND>(widget.winId());
-        QVERIFY(hwnd != nullptr);
-        QVERIFY(IsWindow(hwnd));
-    }
-
     void crossThreadFrameDeliveryDoesNotCrashAndResultsInValidPaint() {
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
@@ -147,7 +107,7 @@ private slots:
         QVERIFY(widget.isVisible());
     }
 
-    void rapidFrameDeliveryWhereD3DCannotInitDoesNotHang() {
+    void rapidFrameDeliveryDoesNotCrash() {
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
         widget.show();

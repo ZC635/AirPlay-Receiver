@@ -167,7 +167,7 @@ private slots:
 
         QImage frameCapture = surface->grab().toImage();
         if (frameCapture.isNull())
-            QSKIP("Native video surface capture unavailable");
+            QSKIP("Video surface capture unavailable");
         QCOMPARE(frameCapture.pixelColor(frameCapture.width() / 2, frameCapture.height() / 2), QColor(Qt::red));
 
         emit receiver.stateChanged(ReceiverState::Discoverable);
@@ -176,7 +176,7 @@ private slots:
 
         QImage resetCapture = surface->grab().toImage();
         if (resetCapture.isNull())
-            QSKIP("Native video surface capture unavailable");
+            QSKIP("Video surface capture unavailable");
 
         QVERIFY(window.isVisible());
         QVERIFY(surface->isVisible());
@@ -184,7 +184,7 @@ private slots:
         QCOMPARE(resetCapture.pixelColor(resetCapture.width() / 2, resetCapture.height() / 2), QColor(Qt::white));
     }
 
-    void nativeVideoSurfaceDoesNotCoverVisibleOverlays() {
+    void videoSurfaceDoesNotCoverVisibleOverlays() {
         if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
             QSKIP("Requires the Windows QPA platform");
         }
