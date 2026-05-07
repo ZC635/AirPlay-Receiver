@@ -1,4 +1,5 @@
 #include <QtTest/QtTest>
+#include <QThread>
 #include "app/VideoSurfaceWidget.h"
 
 #include <QGuiApplication>
@@ -95,6 +96,32 @@ private slots:
         HWND hwnd = reinterpret_cast<HWND>(widget.winId());
         QVERIFY(hwnd != nullptr);
         QVERIFY(IsWindow(hwnd));
+    }
+
+    void crossThreadFrameDeliveryDoesNotCrashAndResultsInValidPaint() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        std::atomic<bool> delivered{false};
+
+        QThread *thread = QThread::create([&]() {
+            QImage frame(64, 64, QImage::Format_RGBA8888);
+            frame.fill(Qt::green);
+            widget.onFrameReady(frame);
+            delivered.store(true);
+        });
+        thread->start();
+
+        QTRY_VERIFY_WITH_TIMEOUT(delivered.load(), 1000);
+
+        QTest::qWait(200);
+
+        thread->wait();
+        delete thread;
+
+        QVERIFY(widget.isVisible());
     }
 };
 

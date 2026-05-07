@@ -48,7 +48,8 @@ Texture2D frameTexture : register(t0);
 SamplerState frameSampler : register(s0);
 
 float4 psMain(PSInput input) : SV_TARGET {
-    return frameTexture.Sample(frameSampler, input.texcoord);
+    float4 color = frameTexture.Sample(frameSampler, input.texcoord);
+    return float4(color.rgb, 1.0f);
 }
 )";
 }
@@ -162,48 +163,50 @@ bool D3D11VideoRenderer::uploadFrame(const QImage &frame) {
     }
 
     const QImage rgba = frame.convertToFormat(QImage::Format_RGBA8888);
-    D3D11_TEXTURE2D_DESC textureDesc{};
-    textureDesc.Width = static_cast<UINT>(rgba.width());
-    textureDesc.Height = static_cast<UINT>(rgba.height());
-    textureDesc.MipLevels = 1;
-    textureDesc.ArraySize = 1;
-    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    textureDesc.SampleDesc.Count = 1;
-    textureDesc.Usage = D3D11_USAGE_DYNAMIC;
-    textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    const int frameW = rgba.width();
+    const int frameH = rgba.height();
 
-    ID3D11Texture2D *texture = nullptr;
-    HRESULT hr = m_device->CreateTexture2D(&textureDesc, nullptr, &texture);
-    if (FAILED(hr)) {
-        return false;
+    if (!m_frameTexture || m_frameWidth != frameW || m_frameHeight != frameH) {
+        releaseFrame();
+
+        D3D11_TEXTURE2D_DESC textureDesc{};
+        textureDesc.Width = static_cast<UINT>(frameW);
+        textureDesc.Height = static_cast<UINT>(frameH);
+        textureDesc.MipLevels = 1;
+        textureDesc.ArraySize = 1;
+        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.SampleDesc.Count = 1;
+        textureDesc.Usage = D3D11_USAGE_DYNAMIC;
+        textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        textureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+        HRESULT hr = m_device->CreateTexture2D(&textureDesc, nullptr, &m_frameTexture);
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        hr = m_device->CreateShaderResourceView(m_frameTexture, nullptr, &m_frameView);
+        if (FAILED(hr)) {
+            releaseFrame();
+            return false;
+        }
+
+        m_frameWidth = frameW;
+        m_frameHeight = frameH;
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr = m_context->Map(texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    HRESULT hr = m_context->Map(m_frameTexture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
     if (FAILED(hr)) {
-        releaseCom(texture);
         return false;
     }
 
-    for (int y = 0; y < rgba.height(); ++y) {
+    for (int y = 0; y < frameH; ++y) {
         std::memcpy(static_cast<unsigned char *>(mapped.pData) + y * mapped.RowPitch,
                     rgba.constScanLine(y), static_cast<size_t>(rgba.bytesPerLine()));
     }
-    m_context->Unmap(texture, 0);
+    m_context->Unmap(m_frameTexture, 0);
 
-    ID3D11ShaderResourceView *view = nullptr;
-    hr = m_device->CreateShaderResourceView(texture, nullptr, &view);
-    if (FAILED(hr)) {
-        releaseCom(texture);
-        return false;
-    }
-
-    releaseFrame();
-    m_frameTexture = texture;
-    m_frameView = view;
-    m_frameWidth = rgba.width();
-    m_frameHeight = rgba.height();
     return true;
 }
 

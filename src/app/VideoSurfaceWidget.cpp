@@ -6,6 +6,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QResizeEvent>
+#include <QShowEvent>
 
 #include <windows.h>
 
@@ -30,7 +31,7 @@ void VideoSurfaceWidget::resizeEvent(QResizeEvent *e) {
 }
 
 void VideoSurfaceWidget::paintEvent(QPaintEvent *) {
-    if (!m_cachedFrame.isNull() && ensureRenderer()) {
+    if (!m_d3dDisabled && !m_cachedFrame.isNull() && ensureRenderer()) {
         renderCurrentFrame();
         return;
     }
@@ -39,13 +40,45 @@ void VideoSurfaceWidget::paintEvent(QPaintEvent *) {
     paintFallback(painter);
 }
 
+void VideoSurfaceWidget::showEvent(QShowEvent *e) {
+    QWidget::showEvent(e);
+    m_d3dDisabled = false;
+    m_consecutiveFailures = 0;
+}
+
 void VideoSurfaceWidget::onFrameReady(QImage frame) {
-    m_cachedFrame = frame.convertToFormat(QImage::Format_RGBA8888);
+    QImage converted = frame.convertToFormat(QImage::Format_RGBA8888);
+    {
+        QMutexLocker locker(&m_frameMutex);
+        m_pendingFrame = converted;
+    }
+    QMetaObject::invokeMethod(this, &VideoSurfaceWidget::processPendingFrame, Qt::QueuedConnection);
+}
+
+void VideoSurfaceWidget::processPendingFrame() {
+    {
+        QMutexLocker locker(&m_frameMutex);
+        if (m_pendingFrame.isNull()) {
+            return;
+        }
+        m_cachedFrame = m_pendingFrame;
+        m_pendingFrame = QImage();
+    }
+    m_textureDirty = true;
+    m_d3dDisabled = false;
+    m_consecutiveFailures = 0;
     renderCurrentFrame();
 }
 
 void VideoSurfaceWidget::reset() {
+    {
+        QMutexLocker locker(&m_frameMutex);
+        m_pendingFrame = QImage();
+    }
     m_cachedFrame = QImage();
+    m_textureDirty = false;
+    m_consecutiveFailures = 0;
+    m_d3dDisabled = false;
     if (m_renderer) {
         m_renderer->resetFrame();
         m_renderer.reset();
@@ -63,6 +96,9 @@ void VideoSurfaceWidget::setVideoFitMode(bool fit) {
 }
 
 bool VideoSurfaceWidget::ensureRenderer() {
+    if (m_d3dDisabled) {
+        return false;
+    }
     if (m_renderer && m_renderer->isInitialized()) {
         return true;
     }
@@ -77,20 +113,27 @@ bool VideoSurfaceWidget::ensureRenderer() {
 
     auto renderer = std::make_unique<D3D11VideoRenderer>();
     if (!renderer->initialize(reinterpret_cast<HWND>(id))) {
+        m_consecutiveFailures++;
         return false;
     }
 
     renderer->resize(width(), height());
     m_renderer = std::move(renderer);
+    m_textureDirty = true;
+    m_consecutiveFailures = 0;
     return true;
 }
 
 void VideoSurfaceWidget::renderCurrentFrame() {
+    if (m_d3dDisabled) {
+        update();
+        return;
+    }
+
     if (m_cachedFrame.isNull()) {
         if (m_renderer && m_renderer->isInitialized()) {
             if (!m_renderer->render(m_videoFitMode)) {
-                m_renderer.reset();
-                update();
+                handleRenderFailure();
             }
         } else {
             update();
@@ -103,10 +146,30 @@ void VideoSurfaceWidget::renderCurrentFrame() {
         return;
     }
 
-    if (!m_renderer->uploadFrame(m_cachedFrame) || !m_renderer->render(m_videoFitMode)) {
-        m_renderer.reset();
-        update();
+    if (m_textureDirty) {
+        if (!m_renderer->uploadFrame(m_cachedFrame)) {
+            handleRenderFailure();
+            return;
+        }
+        m_textureDirty = false;
     }
+
+    if (!m_renderer->render(m_videoFitMode)) {
+        handleRenderFailure();
+        return;
+    }
+
+    m_consecutiveFailures = 0;
+}
+
+void VideoSurfaceWidget::handleRenderFailure() {
+    m_consecutiveFailures++;
+    m_renderer.reset();
+    m_textureDirty = true;
+    if (m_consecutiveFailures >= kMaxConsecutiveFailures) {
+        m_d3dDisabled = true;
+    }
+    update();
 }
 
 void VideoSurfaceWidget::paintFallback(QPainter &painter) {
