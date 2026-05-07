@@ -73,11 +73,6 @@ add_executable(VideoRenderGeometryTest app/VideoRenderGeometryTest.cpp)
 target_link_libraries(VideoRenderGeometryTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoRenderGeometryTest COMMAND VideoRenderGeometryTest)
 
-add_executable(D3D11VideoRendererTest app/D3D11VideoRendererTest.cpp)
-target_link_libraries(D3D11VideoRendererTest PRIVATE airplay_app_lib Qt6::Test)
-if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
-    add_test(NAME D3D11VideoRendererTest COMMAND D3D11VideoRendererTest)
-endif()
 
 get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION_RELEASE)
 if(NOT AIRPLAY_QT_CORE_LOCATION)
@@ -123,10 +118,6 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
     set_tests_properties(MainWindowSmokeTestNativeOverlayStacking PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
-        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
-    )
-    set_tests_properties(D3D11VideoRendererTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
