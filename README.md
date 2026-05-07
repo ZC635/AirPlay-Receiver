@@ -4,6 +4,10 @@ AirPlay Receiver is a Windows desktop receiver for native iPhone AirPlay Screen 
 
 This project was developed with assistance from OpenCode, Codex, and DeepSeek. It builds on UxPlay and GStreamer for AirPlay protocol handling and media playback, with a Qt-based Windows desktop interface around the receiver experience.
 
+## Platform Scope
+
+This project is Windows-only. The application, build scripts, tests, and runtime packaging intentionally target Windows 10/11 and may use Windows-native APIs when they produce a better receiver experience. Cross-platform compatibility is not a project goal.
+
 ## Usage
 
 ### Prerequisites
@@ -44,6 +48,7 @@ Quick build with UxPlay enabled and dependency bootstrap:
 .\scripts\build.ps1 -Test     # Build + run tests
 .\scripts\build.ps1 -Clean    # Wipe build dir first
 .\scripts\build.ps1 -Deploy   # Build + bundle local runtime files
+.\scripts\build.ps1 -All      # Build deployed and portable variants
 ```
 
 Bootstrap options:
@@ -109,17 +114,21 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 ## Features
 
 - Native iPhone AirPlay Screen Mirroring discovery and connection via UxPlay/GStreamer
-- Mirrored video display through the UxPlay-managed GStreamer window
+- Mirrored video display through a Qt `QOpenGLWidget` fed by a GStreamer appsink frame bridge
 - Synchronized audio playback
-- Overlay toolbar with volume slider, always-on-top toggle, and settings button
+- Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, and settings button
 - Settings dialog for receiver name and configurable shortcuts:
   - Receiver name shown in the iPhone Screen Mirroring list
   - Toggle always on top (`Ctrl+Alt+T`)
   - Volume up (`Ctrl+Alt+Up`)
   - Volume down (`Ctrl+Alt+Down`)
   - Toggle toolbar visibility (`Ctrl+Alt+B`)
+  - Toggle aspect-ratio lock (`Ctrl+Alt+A`)
+  - Toggle video fit (`Ctrl+Alt+F`)
   - Reset hotkey bindings to defaults
 - Global hotkey registration via the Windows hotkey API
+- Windows-native window handling for always-on-top state, aspect-ratio resizing, and reduced resize flicker
+- Portable Windows bundle with Qt, GStreamer plugins, QMdnsEngine, and a pre-built GStreamer registry
 - Dependency diagnostics for missing runtimes
 
 ## Project Structure
@@ -129,6 +138,9 @@ src/
   app/          Qt UI (MainWindow, ToolbarWidget, VideoSurfaceWidget, SettingsDialog)
   backend/      AirPlay receiver facade (AirPlayReceiver, UxPlayReceiver, FakeAirPlayReceiver)
   platform/     Windows-specific hotkey, diagnostics
+cmake/          UxPlay dependency integration
+scripts/        PowerShell build, deploy, portable packaging, and run helpers
+docs/           AI-oriented project overview and maintenance notes
 third_party/
   uxplay/       UxPlay submodule
 tests/
