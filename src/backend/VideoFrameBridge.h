@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QImage>
+#include <QPointer>
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
 
@@ -18,5 +19,6 @@ signals:
 
 private:
     static GstFlowReturn onNewSample(GstAppSink *appsink, gpointer userData);
-    GstElement *appsink_ = nullptr;
+    GstElement *m_appsink = nullptr;
+    bool m_started = false;
 };
