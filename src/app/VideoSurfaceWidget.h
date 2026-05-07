@@ -33,5 +33,4 @@ private:
     std::unique_ptr<D3D11VideoRenderer> m_renderer;
     QImage m_cachedFrame;
     bool m_videoFitMode = false;
-    bool m_rendererUnavailable = false;
 };

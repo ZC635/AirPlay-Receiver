@@ -46,7 +46,6 @@ void VideoSurfaceWidget::onFrameReady(QImage frame) {
 
 void VideoSurfaceWidget::reset() {
     m_cachedFrame = QImage();
-    m_rendererUnavailable = false;
     if (m_renderer) {
         m_renderer->resetFrame();
         m_renderer.reset();
@@ -70,9 +69,6 @@ bool VideoSurfaceWidget::ensureRenderer() {
     if (!isVisible() || width() <= 0 || height() <= 0) {
         return false;
     }
-    if (m_rendererUnavailable) {
-        return false;
-    }
 
     WId id = winId();
     if (!id) {
@@ -81,7 +77,6 @@ bool VideoSurfaceWidget::ensureRenderer() {
 
     auto renderer = std::make_unique<D3D11VideoRenderer>();
     if (!renderer->initialize(reinterpret_cast<HWND>(id))) {
-        m_rendererUnavailable = true;
         return false;
     }
 
@@ -93,7 +88,10 @@ bool VideoSurfaceWidget::ensureRenderer() {
 void VideoSurfaceWidget::renderCurrentFrame() {
     if (m_cachedFrame.isNull()) {
         if (m_renderer && m_renderer->isInitialized()) {
-            m_renderer->render(m_videoFitMode);
+            if (!m_renderer->render(m_videoFitMode)) {
+                m_renderer.reset();
+                update();
+            }
         } else {
             update();
         }
@@ -105,8 +103,10 @@ void VideoSurfaceWidget::renderCurrentFrame() {
         return;
     }
 
-    m_renderer->uploadFrame(m_cachedFrame);
-    m_renderer->render(m_videoFitMode);
+    if (!m_renderer->uploadFrame(m_cachedFrame) || !m_renderer->render(m_videoFitMode)) {
+        m_renderer.reset();
+        update();
+    }
 }
 
 void VideoSurfaceWidget::paintFallback(QPainter &painter) {
