@@ -30,7 +30,7 @@ void VideoSurfaceWidget::resizeEvent(QResizeEvent *e) {
 }
 
 void VideoSurfaceWidget::paintEvent(QPaintEvent *) {
-    if (ensureRenderer()) {
+    if (!m_cachedFrame.isNull() && ensureRenderer()) {
         renderCurrentFrame();
         return;
     }
@@ -46,10 +46,11 @@ void VideoSurfaceWidget::onFrameReady(QImage frame) {
 
 void VideoSurfaceWidget::reset() {
     m_cachedFrame = QImage();
-    if (ensureRenderer()) {
+    if (m_renderer) {
         m_renderer->resetFrame();
+        m_renderer.reset();
     }
-    renderCurrentFrame();
+    update();
 }
 
 void VideoSurfaceWidget::setVideoFitMode(bool fit) {
@@ -86,14 +87,21 @@ bool VideoSurfaceWidget::ensureRenderer() {
 }
 
 void VideoSurfaceWidget::renderCurrentFrame() {
+    if (m_cachedFrame.isNull()) {
+        if (m_renderer && m_renderer->isInitialized()) {
+            m_renderer->render(m_videoFitMode);
+        } else {
+            update();
+        }
+        return;
+    }
+
     if (!ensureRenderer()) {
         update();
         return;
     }
 
-    if (!m_cachedFrame.isNull()) {
-        m_renderer->uploadFrame(m_cachedFrame);
-    }
+    m_renderer->uploadFrame(m_cachedFrame);
     m_renderer->render(m_videoFitMode);
 }
 

@@ -3,6 +3,12 @@
 
 #include <QGuiApplication>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 
 class VideoSurfaceWidgetTest : public QObject {
@@ -36,6 +42,15 @@ private slots:
         QTest::qWait(50);
     }
 
+    void resetBeforeShowDoesNotCreateNativeWindow() {
+        VideoSurfaceWidget widget;
+        QVERIFY(!widget.internalWinId());
+
+        widget.reset();
+
+        QVERIFY(!widget.internalWinId());
+    }
+
     void acceptsFrameDeliveryWithoutCrashing() {
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
@@ -58,7 +73,9 @@ private slots:
         widget.show();
         QVERIFY(QTest::qWaitForWindowExposed(&widget));
 
-        QVERIFY(reinterpret_cast<HWND>(widget.winId()) != nullptr);
+        HWND hwnd = reinterpret_cast<HWND>(widget.winId());
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(IsWindow(hwnd));
     }
 };
 

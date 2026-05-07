@@ -154,7 +154,9 @@ private slots:
         emit receiver.stateChanged(ReceiverState::Connected);
         emit receiver.stateChanged(ReceiverState::Discoverable);
 
-        QSKIP("Native video surface has no OpenGL framebuffer");
+        QVERIFY(window.isVisible());
+        QVERIFY(surface->isVisible());
+        QVERIFY(window.isToolbarVisible());
     }
 
     void shortcutShowsToolbarWhileConnected() {
