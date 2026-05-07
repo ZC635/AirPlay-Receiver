@@ -68,6 +68,10 @@ add_executable(VideoSurfaceWidgetTest app/VideoSurfaceWidgetTest.cpp)
 target_link_libraries(VideoSurfaceWidgetTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoSurfaceWidgetTest COMMAND VideoSurfaceWidgetTest)
 
+add_executable(VideoRenderGeometryTest app/VideoRenderGeometryTest.cpp)
+target_link_libraries(VideoRenderGeometryTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME VideoRenderGeometryTest COMMAND VideoRenderGeometryTest)
+
 get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION_RELEASE)
 if(NOT AIRPLAY_QT_CORE_LOCATION)
     get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION)
@@ -93,6 +97,7 @@ set(AIRPLAY_QT_TESTS
     UxPlayReceiverConfigTest
     VideoRendererLifecycleTest
     VideoSurfaceWidgetTest
+    VideoRenderGeometryTest
 )
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
