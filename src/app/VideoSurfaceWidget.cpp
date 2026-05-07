@@ -59,6 +59,12 @@ void VideoSurfaceWidget::paintGL() {
     float x = (widgetW - drawW) * 0.5f;
     float y = (widgetH - drawH) * 0.5f;
 
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, widgetW, widgetH, 0, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
     glEnable(GL_TEXTURE_2D);
     glBegin(GL_QUADS);
     glTexCoord2f(0.0f, 1.0f); glVertex2f(x, y);
