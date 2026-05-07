@@ -61,7 +61,7 @@ if(AIRPLAY_WITH_UXPLAY)
     endif()
 endif()
 if(WIN32)
-    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi)
+    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi opengl32)
 endif()
 
 add_executable(airplay_receiver src/app/main.cpp)
