@@ -96,6 +96,71 @@ private slots:
         compareRect(rect, RECT{100, 120, 507, 380});
     }
 
+    void resizeCopyBitsDiscardedWhenTopLeftIsUnchanged() {
+        WINDOWPOS windowPos{};
+        windowPos.x = 100;
+        windowPos.y = 100;
+        windowPos.cx = 360;
+        windowPos.cy = 240;
+        windowPos.flags = 0;
+
+        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
+
+        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) != 0);
+    }
+
+    void resizeCopyBitsDiscardedWhenMoveFlagSaysTopLeftIsUnchanged() {
+        WINDOWPOS windowPos{};
+        windowPos.x = 80;
+        windowPos.y = 80;
+        windowPos.cx = 360;
+        windowPos.cy = 240;
+        windowPos.flags = SWP_NOMOVE;
+
+        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
+
+        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) != 0);
+    }
+
+    void resizeCopyBitsUnchangedWhenWindowIsNotResizing() {
+        WINDOWPOS windowPos{};
+        windowPos.x = 80;
+        windowPos.y = 80;
+        windowPos.cx = 320;
+        windowPos.cy = 200;
+        windowPos.flags = SWP_NOSIZE | SWP_NOCOPYBITS;
+
+        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
+
+        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) != 0);
+    }
+
+    void resizeCopyBitsPreservedWhenLeftEdgeMoves() {
+        WINDOWPOS windowPos{};
+        windowPos.x = 80;
+        windowPos.y = 100;
+        windowPos.cx = 340;
+        windowPos.cy = 200;
+        windowPos.flags = SWP_NOCOPYBITS;
+
+        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
+
+        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) == 0);
+    }
+
+    void resizeCopyBitsPreservedWhenTopEdgeMoves() {
+        WINDOWPOS windowPos{};
+        windowPos.x = 100;
+        windowPos.y = 80;
+        windowPos.cx = 320;
+        windowPos.cy = 220;
+        windowPos.flags = SWP_NOCOPYBITS;
+
+        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
+
+        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) == 0);
+    }
+
     void invalidInputReturnsFalse() {
         RECT rect{0, 0, 100, 100};
         QVERIFY(!adjustWindowRectForAspectRatio(rect, WMSZ_RIGHT, 0.0, margins()));

@@ -4,6 +4,15 @@
 #include <QOpenGLWidget>
 #include <QSurfaceFormat>
 
+namespace {
+bool hasOpenGLContext() {
+    QSurfaceFormat format;
+    QOpenGLContext ctx;
+    ctx.setFormat(format);
+    return ctx.create();
+}
+}
+
 class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
@@ -20,10 +29,7 @@ private slots:
     }
 
     void resetClearsFrame() {
-        QSurfaceFormat format;
-        QOpenGLContext ctx;
-        ctx.setFormat(format);
-        if (!ctx.create()) {
+        if (!hasOpenGLContext()) {
             QSKIP("OpenGL not available in test environment");
         }
 
@@ -42,6 +48,28 @@ private slots:
 
         QImage screen = widget.grabFramebuffer();
         QVERIFY(!screen.isNull());
+    }
+
+    void fitModeClearsLetterboxAreaToWhite() {
+        if (!hasOpenGLContext()) {
+            QSKIP("OpenGL not available in test environment");
+        }
+
+        VideoSurfaceWidget widget;
+        widget.resize(120, 60);
+        widget.setVideoFitMode(true);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QImage testImage(64, 64, QImage::Format_RGBA8888);
+        testImage.fill(Qt::red);
+        widget.onFrameReady(testImage);
+        QTest::qWait(50);
+
+        const QImage screen = widget.grabFramebuffer();
+        QVERIFY(!screen.isNull());
+        QCOMPARE(screen.pixelColor(4, screen.height() / 2), QColor(Qt::white));
+        QCOMPARE(screen.pixelColor(screen.width() - 5, screen.height() / 2), QColor(Qt::white));
     }
 };
 

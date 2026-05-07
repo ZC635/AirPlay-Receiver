@@ -2,6 +2,31 @@
 
 #include <QPainter>
 
+namespace {
+const QColor kBackgroundColor = Qt::white;
+
+QRectF targetRectFor(const QSizeF &sourceSize, const QSizeF &boundsSize, bool fit) {
+    if (!fit || sourceSize.isEmpty() || boundsSize.isEmpty()) {
+        return QRectF(QPointF(0.0, 0.0), boundsSize);
+    }
+
+    QSizeF drawSize = boundsSize;
+    const qreal sourceAspect = sourceSize.width() / sourceSize.height();
+    const qreal boundsAspect = boundsSize.width() / boundsSize.height();
+    if (sourceAspect > boundsAspect) {
+        drawSize.setHeight(boundsSize.width() / sourceAspect);
+    } else {
+        drawSize.setWidth(boundsSize.height() * sourceAspect);
+    }
+
+    return QRectF(
+        (boundsSize.width() - drawSize.width()) * 0.5,
+        (boundsSize.height() - drawSize.height()) * 0.5,
+        drawSize.width(),
+        drawSize.height());
+}
+}
+
 VideoSurfaceWidget::VideoSurfaceWidget(QWidget *parent)
     : QOpenGLWidget(parent) {
     setObjectName("videoSurface");
@@ -23,10 +48,13 @@ void VideoSurfaceWidget::resizeGL(int, int) {
 }
 
 void VideoSurfaceWidget::paintEvent(QPaintEvent *e) {
+    QPainter p(this);
+    p.fillRect(rect(), kBackgroundColor);
     if (!m_paintCache.isNull()) {
-        QPainter p(this);
-        p.drawImage(rect(), m_paintCache.scaled(size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        p.drawImage(targetRectFor(m_paintCache.size(), size(), m_videoFitMode), m_paintCache);
     }
+    p.end();
     QOpenGLWidget::paintEvent(e);
 }
 
@@ -42,7 +70,7 @@ void VideoSurfaceWidget::paintGL() {
 }
 
 void VideoSurfaceWidget::renderTexture() {
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (!m_texture || !m_texture->isCreated()) return;
@@ -53,23 +81,11 @@ void VideoSurfaceWidget::renderTexture() {
     float texH = static_cast<float>(m_texture->height());
     float widgetW = static_cast<float>(width());
     float widgetH = static_cast<float>(height());
-    float drawW = widgetW;
-    float drawH = widgetH;
-
-    if (texW > 0.0f && texH > 0.0f) {
-        float videoAspect = texW / texH;
-        float widgetAspect = widgetW / widgetH;
-
-        if (m_videoFitMode) {
-            if (videoAspect > widgetAspect)
-                drawH = widgetW / videoAspect;
-            else
-                drawW = widgetH * videoAspect;
-        }
-    }
-
-    float x = (widgetW - drawW) * 0.5f;
-    float y = (widgetH - drawH) * 0.5f;
+    const QRectF target = targetRectFor(QSizeF(texW, texH), QSizeF(widgetW, widgetH), m_videoFitMode);
+    const float x = static_cast<float>(target.x());
+    const float y = static_cast<float>(target.y());
+    const float drawW = static_cast<float>(target.width());
+    const float drawH = static_cast<float>(target.height());
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
