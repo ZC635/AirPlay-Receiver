@@ -136,6 +136,9 @@ bool D3D11VideoRenderer::resize(int width, int height) {
         return true;
     }
 
+    m_context->OMSetRenderTargets(0, nullptr, nullptr);
+    m_context->ClearState();
+    m_context->Flush();
     releaseRenderTarget();
     HRESULT hr = m_swapChain->ResizeBuffers(2, static_cast<UINT>(width), static_cast<UINT>(height),
                                             DXGI_FORMAT_R8G8B8A8_UNORM, 0);

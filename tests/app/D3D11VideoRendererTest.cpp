@@ -31,7 +31,10 @@ private slots:
         frame.fill(Qt::red);
 
         QVERIFY(renderer.uploadFrame(frame));
-        QVERIFY(renderer.resize(160, 90));
+        QVERIFY(renderer.render(true));
+
+        widget.resize(200, 120);
+        QVERIFY(renderer.resize(200, 120));
         QVERIFY(renderer.render(true));
         QVERIFY(renderer.isInitialized());
     }
