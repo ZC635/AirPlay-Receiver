@@ -11,7 +11,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Test)
 
 include(cmake/UxPlayDependency.cmake)
 
@@ -48,7 +48,7 @@ add_library(airplay_app_lib
 )
 target_include_directories(airplay_app_lib PUBLIC src)
 target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>)
-target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
+target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::OpenGLWidgets)
 if(AIRPLAY_WITH_UXPLAY)
     target_link_libraries(airplay_app_lib PRIVATE uxplay_dependency)
     if(TARGET qmdnsengine)

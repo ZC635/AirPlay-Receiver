@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
 #if AIRPLAY_WITH_UXPLAY
     UxPlayReceiverConfig config;
     config.serverName = settings.receiverName();
-    config.videoSink = "d3d11videosink";
+    config.videoSink = "appsink";
     config.audioSink = "wasapisink";
     UxPlayReceiver receiver(config);
     QObject::connect(&app, &QApplication::aboutToQuit, &receiver, [&receiver] {

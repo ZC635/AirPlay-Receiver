@@ -2,7 +2,9 @@
 
 #include "backend/AirPlayReceiver.h"
 
+#include <QImage>
 #include <QStringList>
+#include <functional>
 
 class FakeAirPlayReceiver : public AirPlayReceiver {
     Q_OBJECT
@@ -26,6 +28,13 @@ public:
         m_videoSurfaceId = id;
         AirPlayReceiver::setVideoSurface(id);
     }
+
+    void setVideoFrameCallback(FrameCallback callback) override {
+        m_frameCallback = std::move(callback);
+        AirPlayReceiver::setVideoFrameCallback(std::move(callback));
+    }
+
+    FrameCallback frameCallback() const { return m_frameCallback; }
 
     void setVideoFitMode(bool enabled) override { m_videoFitMode = enabled; }
 
@@ -90,5 +99,6 @@ private:
     QString m_receiverName = "AirPlay Receiver";
     double m_volume = 1.0;
     WId m_videoSurfaceId = 0;
+    FrameCallback m_frameCallback;
     bool m_videoFitMode = false;
 };
