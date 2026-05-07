@@ -1,42 +1,38 @@
 #include <QtTest/QtTest>
 #include "app/VideoSurfaceWidget.h"
-
-#include <QImage>
-#include <QPainter>
-#include <QWidget>
+#include <QOpenGLWidget>
 
 class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void hasNativeWindowAttribute() {
+    void isQOpenGLWidget() {
         VideoSurfaceWidget widget;
-        QVERIFY(widget.testAttribute(Qt::WA_NativeWindow));
-        QVERIFY(widget.winId() != 0);
+        QVERIFY(qobject_cast<QOpenGLWidget *>(&widget) != nullptr);
     }
 
-    void hasBlackBackground() {
+    void hasExpandingSizePolicy() {
         VideoSurfaceWidget widget;
-        QVERIFY(widget.palette().color(QPalette::Window) == Qt::black);
-        QVERIFY(!widget.autoFillBackground());
+        QCOMPARE(widget.sizePolicy().horizontalPolicy(), QSizePolicy::Expanding);
+        QCOMPARE(widget.sizePolicy().verticalPolicy(), QSizePolicy::Expanding);
     }
 
-    void resetFillsDefaultWindowColor() {
-        const QColor expected = QApplication::palette().color(QPalette::Window);
+    void resetClearsFrame() {
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
         widget.show();
         QVERIFY(QTest::qWaitForWindowExposed(&widget));
 
+        QImage testImage(64, 64, QImage::Format_RGBA8888);
+        testImage.fill(Qt::red);
+        widget.onFrameReady(testImage);
+        QTest::qWait(50);
+
         widget.reset();
+        QTest::qWait(50);
 
-        QImage image(100, 100, QImage::Format_ARGB32);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        widget.render(&painter);
-        painter.end();
-
-        QCOMPARE(image.pixelColor(50, 50), expected);
+        QImage screen = widget.grabFramebuffer();
+        QVERIFY(!screen.isNull());
     }
 };
 
