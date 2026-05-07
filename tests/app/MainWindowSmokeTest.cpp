@@ -58,6 +58,11 @@ bool windowHasNativeTopmostState(const QWidget &widget) {
     return (GetWindowLongPtr(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 }
 
+HWND windowFromWidgetCenter(const QWidget &widget) {
+    const QPoint globalCenter = widget.mapToGlobal(widget.rect().center());
+    return WindowFromPoint(POINT{globalCenter.x(), globalCenter.y()});
+}
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -177,6 +182,44 @@ private slots:
         QVERIFY(surface->isVisible());
         QVERIFY(window.isToolbarVisible());
         QCOMPARE(resetCapture.pixelColor(resetCapture.width() / 2, resetCapture.height() / 2), QColor(Qt::white));
+    }
+
+    void nativeVideoSurfaceDoesNotCoverVisibleOverlays() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.resize(320, 180);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        auto *status = window.findChild<QLabel *>("receiverStatusLabel");
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(surface != nullptr);
+        QVERIFY(status != nullptr);
+        QVERIFY(settings != nullptr);
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+        window.toggleToolbarVisibility();
+        QCoreApplication::processEvents();
+
+        QVERIFY(window.isToolbarVisible());
+        QVERIFY(status->isVisible());
+        QVERIFY(settings->isVisible());
+
+        const HWND surfaceHwnd = reinterpret_cast<HWND>(surface->winId());
+        QVERIFY(surfaceHwnd != nullptr);
+        QVERIFY(IsWindow(surfaceHwnd));
+
+        const HWND toolbarTop = windowFromWidgetCenter(*settings);
+        const HWND statusTop = windowFromWidgetCenter(*status);
+        QVERIFY(toolbarTop != nullptr);
+        QVERIFY(statusTop != nullptr);
+        QVERIFY(toolbarTop != surfaceHwnd);
+        QVERIFY(statusTop != surfaceHwnd);
     }
 
     void shortcutShowsToolbarWhileConnected() {

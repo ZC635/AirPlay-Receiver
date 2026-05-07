@@ -46,6 +46,7 @@ void VideoSurfaceWidget::onFrameReady(QImage frame) {
 
 void VideoSurfaceWidget::reset() {
     m_cachedFrame = QImage();
+    m_rendererUnavailable = false;
     if (m_renderer) {
         m_renderer->resetFrame();
         m_renderer.reset();
@@ -65,6 +66,9 @@ void VideoSurfaceWidget::setVideoFitMode(bool fit) {
 bool VideoSurfaceWidget::ensureRenderer() {
     if (m_renderer && m_renderer->isInitialized()) {
         return true;
+    }
+    if (!isVisible() || width() <= 0 || height() <= 0) {
+        return false;
     }
     if (m_rendererUnavailable) {
         return false;

@@ -63,6 +63,25 @@ private slots:
         QTest::qWait(50);
     }
 
+    void hiddenFrameDeliveryDoesNotCreateNativeWindowOrBlockLaterRender() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+
+        QImage hiddenFrame(64, 64, QImage::Format_RGB32);
+        hiddenFrame.fill(Qt::green);
+        widget.onFrameReady(hiddenFrame);
+
+        QVERIFY(!widget.internalWinId());
+
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QImage visibleFrame(64, 64, QImage::Format_RGB32);
+        visibleFrame.fill(Qt::blue);
+        widget.onFrameReady(visibleFrame);
+        QTest::qWait(50);
+    }
+
     void hasNativeWindowHandleOnWindowsQpa() {
         if (QGuiApplication::platformName() != QStringLiteral("windows")) {
             QSKIP("Native HWND test requires the Windows QPA platform");
