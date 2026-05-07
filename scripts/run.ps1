@@ -58,7 +58,7 @@ function Get-StandaloneMissingRequirements {
         "gstreamer-plugins\libgstlibav.dll",
         "gstreamer-plugins\libgstd3d11.dll",
         "gstreamer-plugins\libgstwasapi.dll",
-        "dnssd.dll"
+        "libqmdnsengine.dll"
     )
 
     $missing = @()

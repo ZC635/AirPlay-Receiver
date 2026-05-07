@@ -41,6 +41,8 @@ add_library(airplay_app_lib
     src/platform/AspectRatioSizing.h
     src/platform/FakeHotkeyService.h
     src/platform/HotkeyService.h
+    src/platform/MdnsPublisher.cpp
+    src/platform/MdnsPublisher.h
     src/platform/WindowsHotkeyService.cpp
     src/platform/WindowsHotkeyService.h
 )
@@ -49,6 +51,12 @@ target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${A
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
 if(AIRPLAY_WITH_UXPLAY)
     target_link_libraries(airplay_app_lib PRIVATE uxplay_dependency)
+    if(TARGET qmdnsengine)
+        get_target_property(_qmdns_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
+        if(_qmdns_inc)
+            target_include_directories(airplay_app_lib PRIVATE ${_qmdns_inc})
+        endif()
+    endif()
 endif()
 if(WIN32)
     target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi)

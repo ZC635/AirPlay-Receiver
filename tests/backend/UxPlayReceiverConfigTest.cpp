@@ -17,6 +17,26 @@
 
 #if AIRPLAY_WITH_UXPLAY
 #include "lib/raop.h"
+#include "lib/dnssd.h"
+#include "platform/MdnsPublisher.h"
+
+static bool txtRecordContainsKey(const char *data, int length, const char *key) {
+    const char *end = data + length;
+    const char *pos = data;
+    size_t key_len = strlen(key);
+    while (pos < end) {
+        int entry_len = (unsigned char)*pos;
+        if (entry_len == 0 || pos + 1 + entry_len > end) break;
+        const char *entry = pos + 1;
+        if ((size_t)entry_len >= key_len + 1 &&
+            memcmp(entry, key, key_len) == 0 &&
+            entry[key_len] == '=') {
+            return true;
+        }
+        pos += 1 + entry_len;
+    }
+    return false;
+}
 
 extern "C" int video_renderer_choose_codec(bool video_is_jpeg, bool video_is_h265);
 extern "C" void video_renderer_set_force_aspect_ratio(bool enabled);
@@ -111,6 +131,8 @@ private slots:
         }
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         QVERIFY(stateSpy.count() >= 1);
+
+        QVERIFY(receiver.m_mdnsPublisher != nullptr);
 
         receiver.stop();
         QCOMPARE(receiver.state(), ReceiverState::Idle);
@@ -557,6 +579,55 @@ private slots:
         QVERIFY(video_renderer_get_force_aspect_ratio());
 
         receiver.stop();
+#endif
+    }
+
+    void dnssdDoesNotRequireExternalRuntimeOnWindows() {
+#if AIRPLAY_WITH_UXPLAY
+        const int runtime = dnssd_uses_external_runtime();
+#ifdef _WIN32
+        QCOMPARE(runtime, 0);
+#else
+        QCOMPARE(runtime, 1);
+#endif
+#endif
+    }
+
+    void dnssdProducesValidTxtRecordsOnWindows() {
+#if AIRPLAY_WITH_UXPLAY && defined(_WIN32)
+        const char hw_addr[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+        int error = -1;
+        dnssd_t *dnssd = dnssd_init("TestReceiver", 12, hw_addr, sizeof(hw_addr), &error, 0);
+        QVERIFY2(dnssd != NULL, "dnssd_init returned NULL");
+        QCOMPARE(error, 0);
+
+        static char test_pk[] = "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7";
+        dnssd_set_pk(dnssd, test_pk);
+
+        int raop_ret = dnssd_register_raop(dnssd, 5000);
+        QCOMPARE(raop_ret, 0);
+
+        int airplay_ret = dnssd_register_airplay(dnssd, 7000);
+        QCOMPARE(airplay_ret, 0);
+
+        int raop_len = 0;
+        const char *raop_txt = dnssd_get_raop_txt(dnssd, &raop_len);
+        QVERIFY(raop_len > 0);
+        QVERIFY(raop_txt != NULL);
+        QVERIFY(txtRecordContainsKey(raop_txt, raop_len, "pk"));
+        QVERIFY(txtRecordContainsKey(raop_txt, raop_len, "txtvers"));
+
+        int airplay_len = 0;
+        const char *airplay_txt = dnssd_get_airplay_txt(dnssd, &airplay_len);
+        QVERIFY(airplay_len > 0);
+        QVERIFY(airplay_txt != NULL);
+        QVERIFY(txtRecordContainsKey(airplay_txt, airplay_len, "deviceid"));
+        QVERIFY(txtRecordContainsKey(airplay_txt, airplay_len, "srcvers"));
+        QVERIFY(txtRecordContainsKey(airplay_txt, airplay_len, "pk"));
+
+        dnssd_unregister_raop(dnssd);
+        dnssd_unregister_airplay(dnssd);
+        dnssd_destroy(dnssd);
 #endif
     }
 };

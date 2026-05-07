@@ -22,7 +22,7 @@ DiagnosticResult DependencyDiagnostics::checkEnvironmentVariable(const QString &
 QStringList DependencyDiagnostics::checkRuntimeBasics() {
     return {
         "GStreamer: install runtime plugins and ensure binaries are on PATH.",
-        "Bonjour: install Apple Bonjour or compatible mDNS service for discovery.",
+        "QMdnsEngine: install qmdnsengine runtime for mDNS discovery.",
         "UxPlay: build/runtime dependencies must be available for AirPlay receiver support."
     };
 }
@@ -45,7 +45,7 @@ QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directo
         "gstreamer-plugins/libgstlibav.dll",
         "gstreamer-plugins/libgstd3d11.dll",
         "gstreamer-plugins/libgstwasapi.dll",
-        "dnssd.dll"
+        "libqmdnsengine.dll"
     };
 
     QStringList missing;

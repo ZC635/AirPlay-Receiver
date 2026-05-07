@@ -19,6 +19,7 @@
 #include "lib/dnssd.h"
 #include "lib/logger.h"
 #include "lib/raop.h"
+#include "platform/MdnsPublisher.h"
 #include <glib.h>
 #include "renderers/audio_renderer.h"
 #include "renderers/video_renderer.h"
@@ -811,11 +812,30 @@ bool UxPlayReceiver::registerDiscoveryBroadcast(unsigned short port) {
         return false;
     }
 
+    int raopTxtLength = 0;
+    const char *raopTxt = dnssd_get_raop_txt(dnssd, &raopTxtLength);
+    int airplayTxtLength = 0;
+    const char *airplayTxt = dnssd_get_airplay_txt(dnssd, &airplayTxtLength);
+
+    if (!m_mdnsPublisher) {
+        m_mdnsPublisher = new MdnsPublisher(this);
+    }
+    const QByteArray hwAddress = defaultHardwareAddress();
+    if (!m_mdnsPublisher->publish(m_config.serverName, hwAddress, port,
+                                  raopTxt, raopTxtLength,
+                                  airplayTxt, airplayTxtLength)) {
+        debugLog("registerDiscoveryBroadcast: MdnsPublisher::publish failed");
+    }
+
     debugLog("registerDiscoveryBroadcast: success");
     return true;
 }
 
 void UxPlayReceiver::stopDiscoveryBroadcast() {
+    if (m_mdnsPublisher) {
+        m_mdnsPublisher->stop();
+    }
+
     if (!m_dnssd) {
         return;
     }
@@ -829,6 +849,10 @@ void UxPlayReceiver::stopDiscoveryBroadcast() {
 }
 
 void UxPlayReceiver::unregisterDiscoveryBroadcast() {
+    if (m_mdnsPublisher) {
+        m_mdnsPublisher->stop();
+    }
+
     if (!m_dnssd) {
         return;
     }
@@ -840,6 +864,12 @@ void UxPlayReceiver::unregisterDiscoveryBroadcast() {
 }
 
 void UxPlayReceiver::destroyDiscoveryBroadcast() {
+    if (m_mdnsPublisher) {
+        m_mdnsPublisher->stop();
+        delete m_mdnsPublisher;
+        m_mdnsPublisher = nullptr;
+    }
+
     if (!m_dnssd) {
         return;
     }

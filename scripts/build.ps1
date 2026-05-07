@@ -67,7 +67,8 @@ $RequiredPackageSuffixes = @(
     "gst-plugins-base",
     "gst-plugins-good",
     "gst-plugins-bad",
-    "gst-libav"
+    "gst-libav",
+    "qmdnsengine"
 )
 
 function Resolve-MSys2Root {
@@ -239,62 +240,6 @@ function Ensure-MSys2Requirements {
     }
 }
 
-function Resolve-BonjourSdkRoot {
-    $candidates = @(
-        $env:BONJOUR_SDK_HOME,
-        "C:\Program Files\Bonjour SDK",
-        "C:\Program Files (x86)\Bonjour SDK"
-    ) | Where-Object { $_ }
-
-    foreach ($rawCandidate in $candidates) {
-        $candidate = [Environment]::ExpandEnvironmentVariables($rawCandidate.Trim('"').TrimEnd('\'))
-        $header = Join-Path $candidate "Include\dns_sd.h"
-        $library = Join-Path $candidate "Lib\x64\dnssd.lib"
-        if ((Test-Path $header) -and (Test-Path $library)) {
-            return (Resolve-Path $candidate).Path
-        }
-    }
-
-    return $null
-}
-
-function Ensure-BonjourSdk {
-    $sdkRoot = Resolve-BonjourSdkRoot
-    if (-not $sdkRoot) {
-        throw @"
-Bonjour SDK was not found. Install Bonjour SDK 3.0 so these files exist:
-  C:\Program Files\Bonjour SDK\Include\dns_sd.h
-  C:\Program Files\Bonjour SDK\Lib\x64\dnssd.lib
-
-If the SDK is installed elsewhere, set BONJOUR_SDK_HOME to that directory before running build.ps1.
-See README.md for Bonjour SDK/runtime installation notes.
-"@
-    }
-
-    $env:BONJOUR_SDK_HOME = $sdkRoot
-    Write-Host "Bonjour SDK found at $sdkRoot" -ForegroundColor Green
-}
-
-function Write-BonjourRuntimeStatus {
-    try {
-        $service = Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue
-    } catch {
-        $service = $null
-    }
-
-    if (-not $service) {
-        Write-Warning "Bonjour runtime service was not found. Build can continue, but AirPlay discovery needs Bonjour Print Services, iTunes, or another compatible mDNS service."
-        return
-    }
-
-    if ($service.Status -ne "Running") {
-        Write-Warning "Bonjour runtime service is $($service.Status). Build can continue, but start the service before using AirPlay discovery."
-        return
-    }
-
-    Write-Host "Bonjour runtime service is running" -ForegroundColor Green
-}
-
 function Get-StandaloneMissingRequirements {
     param([string]$Directory)
 
@@ -315,7 +260,7 @@ function Get-StandaloneMissingRequirements {
         "gstreamer-plugins\libgstlibav.dll",
         "gstreamer-plugins\libgstd3d11.dll",
         "gstreamer-plugins\libgstwasapi.dll",
-        "dnssd.dll"
+        "libqmdnsengine.dll"
     )
 
     $missing = @()
@@ -460,18 +405,13 @@ function Invoke-Build {
             exit $windeployqtExit
         }
 
-        Write-Host "  Bundling dnssd.dll..." -ForegroundColor Gray
-        $dnssdSources = @(
-            $(if ($env:BONJOUR_SDK_HOME) { Join-Path $env:BONJOUR_SDK_HOME "Lib\x64\dnssd.dll" } else { $null }),
-            (Join-Path $MSys2Bin "dnssd.dll"),
-            (Join-Path $env:SystemRoot "System32\dnssd.dll")
-        ) | Where-Object { $_ -and (Test-Path $_) }
-        $dnssdSource = $dnssdSources | Select-Object -First 1
-        if ($dnssdSource) {
-            Copy-Item $dnssdSource $VariantBuildDir -Force
-            Write-Host "    Copied dnssd.dll from $dnssdSource" -ForegroundColor Gray
+        Write-Host "  Bundling libqmdnsengine.dll..." -ForegroundColor Gray
+        $qmdnsSource = Join-Path $MSys2Bin "libqmdnsengine.dll"
+        if (Test-Path $qmdnsSource) {
+            Copy-Item $qmdnsSource $VariantBuildDir -Force
+            Write-Host "    Copied libqmdnsengine.dll from $qmdnsSource" -ForegroundColor Gray
         } else {
-            throw "dnssd.dll was not found. Install Apple Bonjour Print Services or place dnssd.dll in MSYS2 bin or System32 before building."
+            throw "libqmdnsengine.dll was not found. Install qmdnsengine MSYS2 package before building."
         }
 
         if ($IsPortable) {
@@ -569,8 +509,6 @@ $PluginDir = Join-Path $MSys2Lib "gstreamer-1.0"
 $env:PATH = "$MSys2Bin;$env:PATH"
 
 Ensure-MSys2Requirements $MSys2Root $MSys2Bin $MSys2Lib $PluginDir -AssumeYes:$AssumeYes -SkipInstall:$SkipInstall
-Ensure-BonjourSdk
-Write-BonjourRuntimeStatus
 
 if ($All) {
     $deployResult = Invoke-Build -VariantBuildDir (Join-Path $ProjectRoot "build-uxplay") -IsPortable:$false -ShouldDeploy:$true

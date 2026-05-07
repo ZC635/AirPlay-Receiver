@@ -9,8 +9,7 @@ This project was developed with assistance from OpenCode, Codex, and DeepSeek. I
 ### Prerequisites
 
 - Windows 10 or 11
-- MSYS2 installed; the build script detects the UCRT64 prefix and can install missing MSYS2 packages after confirmation
-- Bonjour SDK 3.0 and Bonjour runtime service
+- MSYS2 installed; the build script detects the UCRT64 prefix and can install missing MSYS2 packages (including QMdnsEngine for in-process mDNS discovery) after confirmation
 
 
 ### Clone
@@ -34,26 +33,7 @@ Install MSYS2 first. The default location `C:\msys64` works out of the box; if y
 winget install MSYS2.MSYS2
 ```
 
-Install Bonjour runtime support so iPhones can discover the receiver. Use Bonjour Print Services for Windows from Apple, or install iTunes if that is your preferred Apple runtime package:
-
-```powershell
-# Install Bonjour Print Services for Windows or iTunes, then verify the service.
-Get-Service "Bonjour Service"
-Start-Service "Bonjour Service"   # if installed but stopped
-```
-
-Install Bonjour SDK 3.0 so UxPlay can link against DNS-SD during the build. Download `Bonjour SDK for Windows 3.0` from Apple Developer Downloads at `https://developer.apple.com/download/all/?q=Bonjour%20SDK%20for%20Windows`. Apple Developer sign-in may be required. The default SDK install should provide these files:
-
-```text
-C:\Program Files\Bonjour SDK\Include\dns_sd.h
-C:\Program Files\Bonjour SDK\Lib\x64\dnssd.lib
-```
-
-If the SDK is installed elsewhere, set `BONJOUR_SDK_HOME` before building:
-
-```powershell
-$env:BONJOUR_SDK_HOME = "D:\Tools\Bonjour SDK"
-```
+The build script installs QMdnsEngine for in-process mDNS discovery. No Bonjour Print Services, iTunes, or Bonjour SDK is required. iPhones discover the receiver over mDNS directly.
 
 ### Build And Test
 
@@ -124,7 +104,7 @@ $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 .\build-uxplay\airplay_receiver.exe
 ```
 
-After the receiver starts, open Control Center on an iPhone, choose Screen Mirroring, and select the advertised receiver name. Keep the Windows host and iPhone on the same network, and allow Bonjour/mDNS and receiver traffic through the firewall.
+After the receiver starts, open Control Center on an iPhone, choose Screen Mirroring, and select the advertised receiver name. Keep the Windows host and iPhone on the same network, and allow mDNS and receiver traffic through the firewall.
 
 ## Features
 

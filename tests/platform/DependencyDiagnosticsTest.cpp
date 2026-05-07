@@ -30,7 +30,7 @@ private slots:
     void reportsRuntimeBasicsHints() {
         const auto messages = DependencyDiagnostics::checkRuntimeBasics();
         QVERIFY(messages.join('\n').contains("GStreamer"));
-        QVERIFY(messages.join('\n').contains("Bonjour"));
+        QVERIFY(messages.join('\n').contains("QMdnsEngine"));
         QVERIFY(messages.join('\n').contains("UxPlay"));
     }
 
@@ -43,7 +43,7 @@ private slots:
         QVERIFY(missing.contains("airplay_receiver.exe"));
         QVERIFY(missing.contains("Qt6Core.dll"));
         QVERIFY(missing.contains("gstreamer-plugins/libgstapp.dll"));
-        QVERIFY(missing.contains("dnssd.dll"));
+        QVERIFY(missing.contains("libqmdnsengine.dll"));
     }
 
     void acceptsCompleteStandaloneRuntimeFiles() {
@@ -67,7 +67,7 @@ private slots:
             "gstreamer-plugins/libgstlibav.dll",
             "gstreamer-plugins/libgstd3d11.dll",
             "gstreamer-plugins/libgstwasapi.dll",
-            "dnssd.dll"
+            "libqmdnsengine.dll"
         };
 
         for (const QString &relativePath : requiredPaths) {
@@ -81,5 +81,5 @@ private slots:
     }
 };
 
-QTEST_MAIN(DependencyDiagnosticsTest)
+QTEST_GUILESS_MAIN(DependencyDiagnosticsTest)
 #include "DependencyDiagnosticsTest.moc"

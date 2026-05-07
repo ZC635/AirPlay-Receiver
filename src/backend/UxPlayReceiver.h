@@ -8,6 +8,8 @@
 
 #include "backend/AirPlayReceiver.h"
 
+class MdnsPublisher;
+
 struct UxPlayReceiverConfig {
     QString serverName = "AirPlay Receiver";
     QString videoSink = "autovideosink";
@@ -95,5 +97,6 @@ private:
     QTimer *m_discoveryRestartTimer = nullptr;
     QRecursiveMutex m_rendererMutex;
     QString m_pendingDiscoveryRecoveryName; // last stable advertised name, used for async rollback if rename restart fails
+    MdnsPublisher *m_mdnsPublisher = nullptr;
 #endif
 };

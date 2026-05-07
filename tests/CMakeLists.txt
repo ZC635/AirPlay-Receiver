@@ -41,6 +41,10 @@ add_executable(DependencyDiagnosticsTest platform/DependencyDiagnosticsTest.cpp)
 target_link_libraries(DependencyDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME DependencyDiagnosticsTest COMMAND DependencyDiagnosticsTest)
 
+add_executable(MdnsPublisherTest platform/MdnsPublisherTest.cpp)
+target_link_libraries(MdnsPublisherTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
+
 add_executable(AirPlayReceiverTest backend/AirPlayReceiverTest.cpp)
 target_link_libraries(AirPlayReceiverTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)
@@ -84,6 +88,7 @@ set(AIRPLAY_QT_TESTS
     HotkeyServiceTest
     AspectRatioSizingTest
     DependencyDiagnosticsTest
+    MdnsPublisherTest
     AirPlayReceiverTest
     UxPlayReceiverConfigTest
     VideoRendererLifecycleTest
