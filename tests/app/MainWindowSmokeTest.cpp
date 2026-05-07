@@ -152,11 +152,31 @@ private slots:
         QVERIFY(surface != nullptr);
 
         emit receiver.stateChanged(ReceiverState::Connected);
+        QVERIFY(receiver.frameCallback() != nullptr);
+
+        QImage redFrame(32, 32, QImage::Format_RGBA8888);
+        redFrame.fill(Qt::red);
+        receiver.frameCallback()(redFrame);
+        QCoreApplication::processEvents();
+        surface->repaint();
+
+        QImage frameCapture = surface->grab().toImage();
+        if (frameCapture.isNull())
+            QSKIP("Native video surface capture unavailable");
+        QCOMPARE(frameCapture.pixelColor(frameCapture.width() / 2, frameCapture.height() / 2), QColor(Qt::red));
+
         emit receiver.stateChanged(ReceiverState::Discoverable);
+        QCoreApplication::processEvents();
+        surface->repaint();
+
+        QImage resetCapture = surface->grab().toImage();
+        if (resetCapture.isNull())
+            QSKIP("Native video surface capture unavailable");
 
         QVERIFY(window.isVisible());
         QVERIFY(surface->isVisible());
         QVERIFY(window.isToolbarVisible());
+        QCOMPARE(resetCapture.pixelColor(resetCapture.width() / 2, resetCapture.height() / 2), QColor(Qt::white));
     }
 
     void shortcutShowsToolbarWhileConnected() {
