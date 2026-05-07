@@ -1,133 +1,79 @@
 #include "app/VideoSurfaceWidget.h"
 
+#include "app/D3D11VideoRenderer.h"
+#include "app/VideoRenderGeometry.h"
+
 #include <QPainter>
+#include <QPaintEvent>
+#include <QMetaObject>
+#include <QResizeEvent>
+#include <QShowEvent>
+
+#include <windows.h>
 
 namespace {
-const QColor kBackgroundColor = Qt::white;
-
-QRectF targetRectFor(const QSizeF &sourceSize, const QSizeF &boundsSize, bool fit) {
-    if (!fit || sourceSize.isEmpty() || boundsSize.isEmpty()) {
-        return QRectF(QPointF(0.0, 0.0), boundsSize);
-    }
-
-    QSizeF drawSize = boundsSize;
-    const qreal sourceAspect = sourceSize.width() / sourceSize.height();
-    const qreal boundsAspect = boundsSize.width() / boundsSize.height();
-    if (sourceAspect > boundsAspect) {
-        drawSize.setHeight(boundsSize.width() / sourceAspect);
-    } else {
-        drawSize.setWidth(boundsSize.height() * sourceAspect);
-    }
-
-    return QRectF(
-        (boundsSize.width() - drawSize.width()) * 0.5,
-        (boundsSize.height() - drawSize.height()) * 0.5,
-        drawSize.width(),
-        drawSize.height());
+bool d3dVideoEnabledByEnvironment() {
+    return !qgetenv("AIRPLAY_ENABLE_D3D_VIDEO").isEmpty();
 }
 }
 
 VideoSurfaceWidget::VideoSurfaceWidget(QWidget *parent)
-    : QOpenGLWidget(parent) {
+    : QWidget(parent) {
     setObjectName("videoSurface");
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setAttribute(Qt::WA_NativeWindow, d3dVideoEnabledByEnvironment());
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+    setAttribute(Qt::WA_NoSystemBackground, true);
 }
 
-VideoSurfaceWidget::~VideoSurfaceWidget() {
-    makeCurrent();
-    m_texture.reset();
-    doneCurrent();
-}
+VideoSurfaceWidget::~VideoSurfaceWidget() = default;
 
-void VideoSurfaceWidget::initializeGL() {
-    initializeOpenGLFunctions();
-}
+void VideoSurfaceWidget::resizeEvent(QResizeEvent *e) {
+    QWidget::resizeEvent(e);
 
-void VideoSurfaceWidget::resizeGL(int, int) {
-    renderTexture();
-}
-
-void VideoSurfaceWidget::paintEvent(QPaintEvent *e) {
-    QPainter p(this);
-    p.fillRect(rect(), kBackgroundColor);
-    if (!m_paintCache.isNull()) {
-        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        p.drawImage(targetRectFor(m_paintCache.size(), size(), m_videoFitMode), m_paintCache);
+    if (ensureRenderer()) {
+        m_renderer->resize(e->size().width(), e->size().height());
     }
-    p.end();
-    QOpenGLWidget::paintEvent(e);
+    renderCurrentFrame();
 }
 
-void VideoSurfaceWidget::paintGL() {
-    {
-        QMutexLocker locker(&m_frameMutex);
-        if (!m_pendingFrame.isNull()) {
-            updateTexture(m_pendingFrame);
-            m_pendingFrame = QImage();
+void VideoSurfaceWidget::paintEvent(QPaintEvent *) {
+    if (d3dVideoEnabledByEnvironment() && !m_d3dDisabled && !m_cachedFrame.isNull() && ensureRenderer()) {
+        if (renderCurrentFrame()) {
+            return;
         }
     }
-    renderTexture();
+
+    QPainter painter(this);
+    paintFallback(painter);
 }
 
-void VideoSurfaceWidget::renderTexture() {
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    if (!m_texture || !m_texture->isCreated()) return;
-
-    m_texture->bind();
-
-    float texW = static_cast<float>(m_texture->width());
-    float texH = static_cast<float>(m_texture->height());
-    float widgetW = static_cast<float>(width());
-    float widgetH = static_cast<float>(height());
-    const QRectF target = targetRectFor(QSizeF(texW, texH), QSizeF(widgetW, widgetH), m_videoFitMode);
-    const float x = static_cast<float>(target.x());
-    const float y = static_cast<float>(target.y());
-    const float drawW = static_cast<float>(target.width());
-    const float drawH = static_cast<float>(target.height());
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0, widgetW, widgetH, 0, -1, 1);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-
-    glEnable(GL_TEXTURE_2D);
-    glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 0.0f); glVertex2f(x, y);
-    glTexCoord2f(1.0f, 0.0f); glVertex2f(x + drawW, y);
-    glTexCoord2f(1.0f, 1.0f); glVertex2f(x + drawW, y + drawH);
-    glTexCoord2f(0.0f, 1.0f); glVertex2f(x, y + drawH);
-    glEnd();
-    glDisable(GL_TEXTURE_2D);
-
-    m_texture->release();
-}
-
-void VideoSurfaceWidget::updateTexture(const QImage &frame) {
-    QImage gl = frame.convertToFormat(QImage::Format_RGBA8888);
-    m_paintCache = gl;
-    bool recreate = !m_texture ||
-                    m_texture->width() != gl.width() ||
-                    m_texture->height() != gl.height();
-    if (recreate) {
-        m_texture = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
-        m_texture->setFormat(QOpenGLTexture::RGBA8_UNorm);
-        m_texture->setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
-        m_texture->setSize(gl.width(), gl.height());
-        m_texture->allocateStorage();
-    }
-    m_texture->setData(0, QOpenGLTexture::RGBA, QOpenGLTexture::UInt8,
-                       gl.constBits());
+void VideoSurfaceWidget::showEvent(QShowEvent *e) {
+    QWidget::showEvent(e);
+    m_d3dDisabled = false;
+    m_consecutiveFailures = 0;
 }
 
 void VideoSurfaceWidget::onFrameReady(QImage frame) {
+    QImage converted = frame.format() == QImage::Format_RGBA8888 ? frame : frame.convertToFormat(QImage::Format_RGBA8888);
     {
         QMutexLocker locker(&m_frameMutex);
-        m_pendingFrame = std::move(frame);
+        m_pendingFrame = converted;
     }
-    update();
+    QMetaObject::invokeMethod(this, &VideoSurfaceWidget::processPendingFrame, Qt::QueuedConnection);
+}
+
+void VideoSurfaceWidget::processPendingFrame() {
+    {
+        QMutexLocker locker(&m_frameMutex);
+        if (m_pendingFrame.isNull()) {
+            return;
+        }
+        m_cachedFrame = m_pendingFrame;
+        m_pendingFrame = QImage();
+    }
+    m_textureDirty = true;
+    renderCurrentFrame();
 }
 
 void VideoSurfaceWidget::reset() {
@@ -135,10 +81,122 @@ void VideoSurfaceWidget::reset() {
         QMutexLocker locker(&m_frameMutex);
         m_pendingFrame = QImage();
     }
+    m_cachedFrame = QImage();
+    m_textureDirty = false;
+    m_consecutiveFailures = 0;
+    m_d3dDisabled = false;
+    if (m_renderer) {
+        m_renderer->resetFrame();
+        m_renderer.reset();
+    }
     update();
 }
 
 void VideoSurfaceWidget::setVideoFitMode(bool fit) {
+    if (m_videoFitMode == fit) {
+        return;
+    }
+
     m_videoFitMode = fit;
+    renderCurrentFrame();
+}
+
+bool VideoSurfaceWidget::ensureRenderer() {
+    if (!d3dVideoEnabledByEnvironment()) {
+        return false;
+    }
+    if (m_d3dDisabled) {
+        return false;
+    }
+    if (m_renderer && m_renderer->isInitialized()) {
+        return true;
+    }
+    if (!isVisible() || width() <= 0 || height() <= 0) {
+        return false;
+    }
+
+    WId id = winId();
+    if (!id) {
+        return false;
+    }
+
+    auto renderer = std::make_unique<D3D11VideoRenderer>();
+    if (!renderer->initialize(reinterpret_cast<HWND>(id))) {
+        m_consecutiveFailures++;
+        if (m_consecutiveFailures >= kMaxConsecutiveFailures) {
+            m_d3dDisabled = true;
+        }
+        return false;
+    }
+
+    renderer->resize(width(), height());
+    m_renderer = std::move(renderer);
+    m_textureDirty = true;
+    m_consecutiveFailures = 0;
+    return true;
+}
+
+bool VideoSurfaceWidget::renderCurrentFrame() {
+    if (!d3dVideoEnabledByEnvironment()) {
+        update();
+        return false;
+    }
+    if (m_d3dDisabled) {
+        update();
+        return false;
+    }
+
+    if (m_cachedFrame.isNull()) {
+        if (m_renderer && m_renderer->isInitialized()) {
+            if (!m_renderer->render(m_videoFitMode)) {
+                handleRenderFailure();
+                return false;
+            }
+            return true;
+        } else {
+            update();
+            return false;
+        }
+    }
+
+    if (!ensureRenderer()) {
+        update();
+        return false;
+    }
+
+    if (m_textureDirty) {
+        if (!m_renderer->uploadFrame(m_cachedFrame)) {
+            handleRenderFailure();
+            return false;
+        }
+        m_textureDirty = false;
+    }
+
+    if (!m_renderer->render(m_videoFitMode)) {
+        handleRenderFailure();
+        return false;
+    }
+
+    m_consecutiveFailures = 0;
+    return true;
+}
+
+void VideoSurfaceWidget::handleRenderFailure() {
+    m_consecutiveFailures++;
+    m_renderer.reset();
+    m_textureDirty = true;
+    if (m_consecutiveFailures >= kMaxConsecutiveFailures) {
+        m_d3dDisabled = true;
+    }
     update();
+}
+
+void VideoSurfaceWidget::paintFallback(QPainter &painter) {
+    painter.fillRect(rect(), Qt::white);
+    if (m_cachedFrame.isNull()) {
+        return;
+    }
+
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.drawImage(videoTargetRect(m_cachedFrame.size(), size(), m_videoFitMode), m_cachedFrame);
 }

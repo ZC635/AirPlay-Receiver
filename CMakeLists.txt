@@ -11,7 +11,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 
 include(cmake/UxPlayDependency.cmake)
 
@@ -20,6 +20,8 @@ add_library(airplay_app_lib
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
     src/app/AppSettingsStore.h
+    src/app/D3D11VideoRenderer.cpp
+    src/app/D3D11VideoRenderer.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
     src/app/SettingsDialog.cpp
@@ -28,6 +30,8 @@ add_library(airplay_app_lib
     src/app/ShortcutBinding.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
+    src/app/VideoRenderGeometry.cpp
+    src/app/VideoRenderGeometry.h
     src/app/VideoSurfaceWidget.cpp
     src/app/VideoSurfaceWidget.h
     src/backend/AirPlayReceiver.h
@@ -50,7 +54,7 @@ add_library(airplay_app_lib
 )
 target_include_directories(airplay_app_lib PUBLIC src)
 target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>)
-target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::OpenGLWidgets)
+target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
 if(AIRPLAY_WITH_UXPLAY)
     target_link_libraries(airplay_app_lib PRIVATE uxplay_dependency)
     if(TARGET qmdnsengine)
@@ -61,7 +65,7 @@ if(AIRPLAY_WITH_UXPLAY)
     endif()
 endif()
 if(WIN32)
-    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi opengl32)
+    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi d3d11 dxgi d3dcompiler)
 endif()
 
 add_executable(airplay_receiver src/app/main.cpp)

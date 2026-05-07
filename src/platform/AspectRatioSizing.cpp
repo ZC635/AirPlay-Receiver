@@ -224,11 +224,10 @@ void updateWindowPosCopyBitsForResize(WINDOWPOS &windowPos, const RECT &currentR
         return;
     }
 
-    const bool topLeftUnchanged = ((windowPos.flags & SWP_NOMOVE) != 0) ||
-                                  (windowPos.x == currentRect.left && windowPos.y == currentRect.top);
-    if (topLeftUnchanged) {
+    if ((windowPos.flags & SWP_NOMOVE) != 0 || (windowPos.x == currentRect.left && windowPos.y == currentRect.top)) {
         windowPos.flags |= SWP_NOCOPYBITS;
-    } else {
-        windowPos.flags &= ~SWP_NOCOPYBITS;
+        return;
     }
+
+    windowPos.flags &= ~SWP_NOCOPYBITS;
 }

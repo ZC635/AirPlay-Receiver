@@ -58,6 +58,11 @@ bool windowHasNativeTopmostState(const QWidget &widget) {
     return (GetWindowLongPtr(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 }
 
+HWND windowFromWidgetCenter(const QWidget &widget) {
+    const QPoint globalCenter = widget.mapToGlobal(widget.rect().center());
+    return WindowFromPoint(POINT{globalCenter.x(), globalCenter.y()});
+}
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -152,12 +157,69 @@ private slots:
         QVERIFY(surface != nullptr);
 
         emit receiver.stateChanged(ReceiverState::Connected);
-        emit receiver.stateChanged(ReceiverState::Discoverable);
+        QVERIFY(receiver.frameCallback() != nullptr);
 
-        QImage image = surface->grabFramebuffer();
-        if (image.isNull())
-            QSKIP("OpenGL framebuffer not available");
-        QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), QColor(0, 0, 0));
+        QImage redFrame(32, 32, QImage::Format_RGBA8888);
+        redFrame.fill(Qt::red);
+        receiver.frameCallback()(redFrame);
+        QCoreApplication::processEvents();
+        surface->repaint();
+
+        QImage frameCapture = surface->grab().toImage();
+        if (frameCapture.isNull())
+            QSKIP("Native video surface capture unavailable");
+        QCOMPARE(frameCapture.pixelColor(frameCapture.width() / 2, frameCapture.height() / 2), QColor(Qt::red));
+
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+        QCoreApplication::processEvents();
+        surface->repaint();
+
+        QImage resetCapture = surface->grab().toImage();
+        if (resetCapture.isNull())
+            QSKIP("Native video surface capture unavailable");
+
+        QVERIFY(window.isVisible());
+        QVERIFY(surface->isVisible());
+        QVERIFY(window.isToolbarVisible());
+        QCOMPARE(resetCapture.pixelColor(resetCapture.width() / 2, resetCapture.height() / 2), QColor(Qt::white));
+    }
+
+    void nativeVideoSurfaceDoesNotCoverVisibleOverlays() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.resize(320, 180);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        auto *status = window.findChild<QLabel *>("receiverStatusLabel");
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(surface != nullptr);
+        QVERIFY(status != nullptr);
+        QVERIFY(settings != nullptr);
+
+        emit receiver.stateChanged(ReceiverState::Connected);
+        window.toggleToolbarVisibility();
+        QCoreApplication::processEvents();
+
+        QVERIFY(window.isToolbarVisible());
+        QVERIFY(status->isVisible());
+        QVERIFY(settings->isVisible());
+
+        const HWND surfaceHwnd = reinterpret_cast<HWND>(surface->winId());
+        QVERIFY(surfaceHwnd != nullptr);
+        QVERIFY(IsWindow(surfaceHwnd));
+
+        const HWND toolbarTop = windowFromWidgetCenter(*settings);
+        const HWND statusTop = windowFromWidgetCenter(*status);
+        QVERIFY(toolbarTop != nullptr);
+        QVERIFY(statusTop != nullptr);
+        QVERIFY(toolbarTop != surfaceHwnd);
+        QVERIFY(statusTop != surfaceHwnd);
     }
 
     void shortcutShowsToolbarWhileConnected() {

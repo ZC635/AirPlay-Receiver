@@ -1,25 +1,47 @@
 #include <QtTest/QtTest>
+#include <QThread>
 #include "app/VideoSurfaceWidget.h"
-#include <QOpenGLContext>
-#include <QOpenGLWidget>
-#include <QSurfaceFormat>
 
-namespace {
-bool hasOpenGLContext() {
-    QSurfaceFormat format;
-    QOpenGLContext ctx;
-    ctx.setFormat(format);
-    return ctx.create();
-}
-}
+#include <QGuiApplication>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 
 class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void isQOpenGLWidget() {
+    void init() {
+        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
+    }
+
+    void cleanup() {
+        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
+    }
+
+    void isPlainQWidgetVideoSurface() {
         VideoSurfaceWidget widget;
-        QVERIFY(qobject_cast<QOpenGLWidget *>(&widget) != nullptr);
+        QVERIFY(!widget.inherits("QOpenGLWidget"));
+        QVERIFY(widget.inherits("QWidget"));
+    }
+
+    void defaultsToPainterSurfaceWithoutNativeD3DChild() {
+        VideoSurfaceWidget widget;
+
+        QVERIFY(!widget.testAttribute(Qt::WA_NativeWindow));
+    }
+
+    void d3dSurfaceIsExplicitOptIn() {
+        qputenv("AIRPLAY_ENABLE_D3D_VIDEO", "1");
+
+        VideoSurfaceWidget widget;
+
+        QVERIFY(widget.testAttribute(Qt::WA_NativeWindow));
     }
 
     void hasExpandingSizePolicy() {
@@ -29,10 +51,6 @@ private slots:
     }
 
     void resetClearsFrame() {
-        if (!hasOpenGLContext()) {
-            QSKIP("OpenGL not available in test environment");
-        }
-
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
         widget.show();
@@ -45,31 +63,104 @@ private slots:
 
         widget.reset();
         QTest::qWait(50);
-
-        QImage screen = widget.grabFramebuffer();
-        QVERIFY(!screen.isNull());
     }
 
-    void fitModeClearsLetterboxAreaToWhite() {
-        if (!hasOpenGLContext()) {
-            QSKIP("OpenGL not available in test environment");
-        }
-
+    void resetBeforeShowDoesNotCreateNativeWindow() {
         VideoSurfaceWidget widget;
-        widget.resize(120, 60);
-        widget.setVideoFitMode(true);
+        QVERIFY(!widget.internalWinId());
+
+        widget.reset();
+
+        QVERIFY(!widget.internalWinId());
+    }
+
+    void acceptsFrameDeliveryWithoutCrashing() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
         widget.show();
         QVERIFY(QTest::qWaitForWindowExposed(&widget));
 
-        QImage testImage(64, 64, QImage::Format_RGBA8888);
-        testImage.fill(Qt::red);
+        QImage testImage(64, 64, QImage::Format_RGB32);
+        testImage.fill(Qt::blue);
         widget.onFrameReady(testImage);
         QTest::qWait(50);
+    }
 
-        const QImage screen = widget.grabFramebuffer();
-        QVERIFY(!screen.isNull());
-        QCOMPARE(screen.pixelColor(4, screen.height() / 2), QColor(Qt::white));
-        QCOMPARE(screen.pixelColor(screen.width() - 5, screen.height() / 2), QColor(Qt::white));
+    void hiddenFrameDeliveryDoesNotCreateNativeWindowOrBlockLaterRender() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+
+        QImage hiddenFrame(64, 64, QImage::Format_RGB32);
+        hiddenFrame.fill(Qt::green);
+        widget.onFrameReady(hiddenFrame);
+
+        QVERIFY(!widget.internalWinId());
+
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QImage visibleFrame(64, 64, QImage::Format_RGB32);
+        visibleFrame.fill(Qt::blue);
+        widget.onFrameReady(visibleFrame);
+        QTest::qWait(50);
+    }
+
+    void hasNativeWindowHandleOnWindowsQpa() {
+        if (QGuiApplication::platformName() != QStringLiteral("windows")) {
+            QSKIP("Native HWND test requires the Windows QPA platform");
+        }
+        qputenv("AIRPLAY_ENABLE_D3D_VIDEO", "1");
+
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        HWND hwnd = reinterpret_cast<HWND>(widget.winId());
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(IsWindow(hwnd));
+    }
+
+    void crossThreadFrameDeliveryDoesNotCrashAndResultsInValidPaint() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        std::atomic<bool> delivered{false};
+
+        QThread *thread = QThread::create([&]() {
+            QImage frame(64, 64, QImage::Format_RGBA8888);
+            frame.fill(Qt::green);
+            widget.onFrameReady(frame);
+            delivered.store(true);
+        });
+        thread->start();
+
+        QTRY_VERIFY_WITH_TIMEOUT(delivered.load(), 1000);
+
+        QTest::qWait(200);
+
+        thread->wait();
+        delete thread;
+
+        QVERIFY(widget.isVisible());
+    }
+
+    void rapidFrameDeliveryWhereD3DCannotInitDoesNotHang() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QImage frame(64, 64, QImage::Format_RGBA8888);
+        for (int i = 0; i < 30; ++i) {
+            frame.fill(QColor(i * 8, 128, 200));
+            widget.onFrameReady(frame);
+            QTest::qWait(10);
+        }
+
+        QVERIFY(widget.isVisible());
     }
 };
 

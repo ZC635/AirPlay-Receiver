@@ -11,7 +11,7 @@ option(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS "Enable tests that require the Windows Q
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     add_test(NAME MainWindowTopmostFlickerTest COMMAND MainWindowSmokeTest visibleAlwaysOnTopToggleDoesNotHideOrShowWindow)
     add_test(NAME MainWindowNativeAspectSizingTest COMMAND MainWindowSmokeTest nativeAspectSizingAdjustsPendingRightEdgeRect)
-    add_test(NAME VideoSurfaceWidgetWhiteLetterboxTest COMMAND VideoSurfaceWidgetTest fitModeClearsLetterboxAreaToWhite)
+    add_test(NAME MainWindowSmokeTestNativeOverlayStacking COMMAND MainWindowSmokeTest nativeVideoSurfaceDoesNotCoverVisibleOverlays)
 endif()
 
 add_executable(AppSettingsTest app/AppSettingsTest.cpp)
@@ -68,6 +68,19 @@ add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
 add_executable(VideoSurfaceWidgetTest app/VideoSurfaceWidgetTest.cpp)
 target_link_libraries(VideoSurfaceWidgetTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoSurfaceWidgetTest COMMAND VideoSurfaceWidgetTest)
+if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
+    add_test(NAME VideoSurfaceWidgetTestWindowsQpa COMMAND VideoSurfaceWidgetTest hasNativeWindowHandleOnWindowsQpa)
+endif()
+
+add_executable(VideoRenderGeometryTest app/VideoRenderGeometryTest.cpp)
+target_link_libraries(VideoRenderGeometryTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME VideoRenderGeometryTest COMMAND VideoRenderGeometryTest)
+
+add_executable(D3D11VideoRendererTest app/D3D11VideoRendererTest.cpp)
+target_link_libraries(D3D11VideoRendererTest PRIVATE airplay_app_lib Qt6::Test)
+if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
+    add_test(NAME D3D11VideoRendererTest COMMAND D3D11VideoRendererTest)
+endif()
 
 get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION_RELEASE)
 if(NOT AIRPLAY_QT_CORE_LOCATION)
@@ -94,6 +107,7 @@ set(AIRPLAY_QT_TESTS
     UxPlayReceiverConfigTest
     VideoRendererLifecycleTest
     VideoSurfaceWidgetTest
+    VideoRenderGeometryTest
 )
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
@@ -111,7 +125,15 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
-    set_tests_properties(VideoSurfaceWidgetWhiteLetterboxTest PROPERTIES
+    set_tests_properties(MainWindowSmokeTestNativeOverlayStacking PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+    set_tests_properties(D3D11VideoRendererTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+    set_tests_properties(VideoSurfaceWidgetTestWindowsQpa PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )

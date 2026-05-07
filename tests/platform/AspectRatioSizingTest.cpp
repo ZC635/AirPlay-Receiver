@@ -14,6 +14,67 @@ class AspectRatioSizingTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void copyBitsPolicySetsNoCopyBitsWhenTopLeftUnchanged() {
+        WINDOWPOS pos{};
+        pos.x = 100;
+        pos.y = 200;
+        pos.flags = 0;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) != 0);
+    }
+
+    void copyBitsPolicySetsNoCopyBitsWhenNoMove() {
+        WINDOWPOS pos{};
+        pos.x = 80;
+        pos.y = 160;
+        pos.flags = SWP_NOMOVE;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) != 0);
+    }
+
+    void copyBitsPolicyClearsNoCopyBitsWhenLeftEdgeMoved() {
+        WINDOWPOS pos{};
+        pos.x = 90;
+        pos.y = 200;
+        pos.flags = SWP_NOCOPYBITS;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
+    }
+
+    void copyBitsPolicyClearsNoCopyBitsWhenTopEdgeMoved() {
+        WINDOWPOS pos{};
+        pos.x = 100;
+        pos.y = 190;
+        pos.flags = SWP_NOCOPYBITS;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
+    }
+
+    void copyBitsPolicyLeavesFlagsUnchangedWhenNoSize() {
+        WINDOWPOS pos{};
+        pos.x = 120;
+        pos.y = 220;
+        pos.flags = SWP_NOSIZE | SWP_NOCOPYBITS | SWP_NOZORDER;
+        const UINT originalFlags = pos.flags;
+        const RECT current{100, 200, 500, 500};
+
+        updateWindowPosCopyBitsForResize(pos, current);
+
+        QCOMPARE(pos.flags, originalFlags);
+    }
+
     void rightEdgeUsesWidthAndKeepsHorizontalAnchor() {
         RECT rect{100, 100, 436, 400};
 
@@ -94,71 +155,6 @@ private slots:
         QVERIFY(adjustWindowRectForAspectRatio(rect, WMSZ_RIGHT, 16.0 / 9.0, margins(), constraints));
 
         compareRect(rect, RECT{100, 120, 507, 380});
-    }
-
-    void resizeCopyBitsDiscardedWhenTopLeftIsUnchanged() {
-        WINDOWPOS windowPos{};
-        windowPos.x = 100;
-        windowPos.y = 100;
-        windowPos.cx = 360;
-        windowPos.cy = 240;
-        windowPos.flags = 0;
-
-        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
-
-        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) != 0);
-    }
-
-    void resizeCopyBitsDiscardedWhenMoveFlagSaysTopLeftIsUnchanged() {
-        WINDOWPOS windowPos{};
-        windowPos.x = 80;
-        windowPos.y = 80;
-        windowPos.cx = 360;
-        windowPos.cy = 240;
-        windowPos.flags = SWP_NOMOVE;
-
-        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
-
-        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) != 0);
-    }
-
-    void resizeCopyBitsUnchangedWhenWindowIsNotResizing() {
-        WINDOWPOS windowPos{};
-        windowPos.x = 80;
-        windowPos.y = 80;
-        windowPos.cx = 320;
-        windowPos.cy = 200;
-        windowPos.flags = SWP_NOSIZE | SWP_NOCOPYBITS;
-
-        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
-
-        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) != 0);
-    }
-
-    void resizeCopyBitsPreservedWhenLeftEdgeMoves() {
-        WINDOWPOS windowPos{};
-        windowPos.x = 80;
-        windowPos.y = 100;
-        windowPos.cx = 340;
-        windowPos.cy = 200;
-        windowPos.flags = SWP_NOCOPYBITS;
-
-        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
-
-        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) == 0);
-    }
-
-    void resizeCopyBitsPreservedWhenTopEdgeMoves() {
-        WINDOWPOS windowPos{};
-        windowPos.x = 100;
-        windowPos.y = 80;
-        windowPos.cx = 320;
-        windowPos.cy = 220;
-        windowPos.flags = SWP_NOCOPYBITS;
-
-        updateWindowPosCopyBitsForResize(windowPos, RECT{100, 100, 420, 300});
-
-        QVERIFY((windowPos.flags & SWP_NOCOPYBITS) == 0);
     }
 
     void invalidInputReturnsFalse() {

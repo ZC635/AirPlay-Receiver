@@ -54,6 +54,22 @@ bool setWindowBorderColor(WId windowId, bool enabled) {
         window, 34, enabled ? &blue : &none, sizeof(COLORREF)));
 }
 
+void makeNativeOverlay(QWidget *widget) {
+    widget->setAttribute(Qt::WA_NativeWindow, true);
+    static_cast<void>(widget->winId());
+}
+
+void raiseNativeOverlay(QWidget *widget) {
+    widget->raise();
+    HWND window = reinterpret_cast<HWND>(widget->winId());
+    if (window == nullptr || !IsWindow(window)) {
+        return;
+    }
+
+    SetWindowPos(window, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+}
+
 AspectRatioFrameMargins frameMarginsFor(const QWidget &widget) {
     const QRect frame = widget.frameGeometry();
     const QRect client = widget.geometry();
@@ -104,6 +120,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     statusLabel_->setAlignment(Qt::AlignCenter);
     statusLabel_->setStyleSheet("color: black; background: transparent;");
     statusLabel_->setAttribute(Qt::WA_TranslucentBackground, true);
+    makeNativeOverlay(statusLabel_);
+    makeNativeOverlay(toolbar_);
 
     auto *central = new QWidget(this);
     auto *layout = new QGridLayout(central);
@@ -114,8 +132,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     layout->addWidget(toolbar_, 0, 0, Qt::AlignTop | Qt::AlignRight);
 
     setCentralWidget(central);
-    statusLabel_->raise();
-    toolbar_->raise();
+    raiseNativeOverlay(statusLabel_);
+    raiseNativeOverlay(toolbar_);
 
     applyShortcutTooltips();
 
@@ -177,10 +195,10 @@ void MainWindow::toggleToolbarVisibility() {
     toolbar_->setVisible(showToolbar);
     statusLabel_->setVisible(receiverConnected_ ? showToolbar : true);
     if (!statusLabel_->isHidden()) {
-        statusLabel_->raise();
+        raiseNativeOverlay(statusLabel_);
     }
     if (showToolbar) {
-        toolbar_->raise();
+        raiseNativeOverlay(toolbar_);
     }
 }
 
@@ -377,8 +395,8 @@ void MainWindow::updateReceiverState(ReceiverState state) {
     toolbar_->setVisible(showToolbar);
     statusLabel_->setVisible(showToolbar);
     if (showToolbar) {
-        statusLabel_->raise();
-        toolbar_->raise();
+        raiseNativeOverlay(statusLabel_);
+        raiseNativeOverlay(toolbar_);
     }
 
     switch (state) {
@@ -430,14 +448,19 @@ void MainWindow::showSettingsDialog() {
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
     auto *msg = static_cast<MSG *>(message);
     if (msg != nullptr && msg->message == WM_WINDOWPOSCHANGING) {
-        const bool handled = QMainWindow::nativeEvent(eventType, message, result);
         auto *wp = reinterpret_cast<WINDOWPOS *>(msg->lParam);
-        RECT currentRect{};
-        const HWND hwnd = wp != nullptr && wp->hwnd != nullptr ? wp->hwnd : msg->hwnd;
-        if (wp != nullptr && (((wp->flags & SWP_NOMOVE) != 0) || GetWindowRect(hwnd, &currentRect))) {
-            updateWindowPosCopyBitsForResize(*wp, currentRect);
+        if (wp != nullptr) {
+            if ((wp->flags & (SWP_NOMOVE | SWP_NOSIZE)) != 0) {
+                updateWindowPosCopyBitsForResize(*wp, RECT{});
+            } else {
+                const HWND hwnd = wp->hwnd != nullptr ? wp->hwnd : msg->hwnd;
+                RECT currentRect{};
+                if (hwnd != nullptr && GetWindowRect(hwnd, &currentRect)) {
+                    updateWindowPosCopyBitsForResize(*wp, currentRect);
+                }
+            }
         }
-        return handled;
+        return QMainWindow::nativeEvent(eventType, message, result);
     }
     if (msg != nullptr && msg->message == WM_SIZING && aspectRatioLock_ && videoWidth_ > 0 && videoHeight_ > 0) {
         auto *rect = reinterpret_cast<RECT *>(msg->lParam);
