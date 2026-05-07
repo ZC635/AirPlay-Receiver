@@ -54,6 +54,10 @@ float4 psMain(PSInput input) : SV_TARGET {
 )";
 }
 
+DXGI_SWAP_EFFECT D3D11VideoRenderer::preferredSwapEffect() {
+    return DXGI_SWAP_EFFECT_SEQUENTIAL;
+}
+
 D3D11VideoRenderer::D3D11VideoRenderer() = default;
 
 D3D11VideoRenderer::~D3D11VideoRenderer() {
@@ -87,7 +91,7 @@ bool D3D11VideoRenderer::initialize(HWND hwnd) {
     swapChainDesc.BufferCount = 2;
     swapChainDesc.OutputWindow = hwnd;
     swapChainDesc.Windowed = TRUE;
-    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    swapChainDesc.SwapEffect = preferredSwapEffect();
 
     constexpr D3D_FEATURE_LEVEL featureLevels[] = {
         D3D_FEATURE_LEVEL_11_1,

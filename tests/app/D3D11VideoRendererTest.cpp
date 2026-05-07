@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QWidget>
 
+#include <dxgi.h>
 #include <windows.h>
 
 #include "app/D3D11VideoRenderer.h"
@@ -37,6 +38,10 @@ private slots:
         QVERIFY(renderer.resize(200, 120));
         QVERIFY(renderer.render(true));
         QVERIFY(renderer.isInitialized());
+    }
+
+    void preferredSwapEffectPreservesBackbufferForFlickerFreeResize() {
+        QCOMPARE(D3D11VideoRenderer::preferredSwapEffect(), DXGI_SWAP_EFFECT_SEQUENTIAL);
     }
 
     void sameSizeUploadReusesResourcesWithoutCrashing() {

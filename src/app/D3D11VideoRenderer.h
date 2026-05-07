@@ -2,6 +2,7 @@
 
 #include <QImage>
 
+#include <dxgi.h>
 #include <windows.h>
 
 struct ID3D11Buffer;
@@ -24,6 +25,7 @@ public:
     D3D11VideoRenderer(const D3D11VideoRenderer &) = delete;
     D3D11VideoRenderer &operator=(const D3D11VideoRenderer &) = delete;
 
+    static DXGI_SWAP_EFFECT preferredSwapEffect();
     bool initialize(HWND hwnd);
     bool isInitialized() const;
     bool resize(int width, int height);
