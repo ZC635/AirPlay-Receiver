@@ -20,6 +20,8 @@ add_library(airplay_app_lib
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
     src/app/AppSettingsStore.h
+    src/app/D3D11VideoRenderer.cpp
+    src/app/D3D11VideoRenderer.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
     src/app/SettingsDialog.cpp
@@ -63,7 +65,7 @@ if(AIRPLAY_WITH_UXPLAY)
     endif()
 endif()
 if(WIN32)
-    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi opengl32)
+    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi opengl32 d3d11 dxgi d3dcompiler)
 endif()
 
 add_executable(airplay_receiver src/app/main.cpp)
