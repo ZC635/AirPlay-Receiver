@@ -65,8 +65,6 @@ void VideoSurfaceWidget::processPendingFrame() {
         m_pendingFrame = QImage();
     }
     m_textureDirty = true;
-    m_d3dDisabled = false;
-    m_consecutiveFailures = 0;
     renderCurrentFrame();
 }
 
@@ -114,6 +112,9 @@ bool VideoSurfaceWidget::ensureRenderer() {
     auto renderer = std::make_unique<D3D11VideoRenderer>();
     if (!renderer->initialize(reinterpret_cast<HWND>(id))) {
         m_consecutiveFailures++;
+        if (m_consecutiveFailures >= kMaxConsecutiveFailures) {
+            m_d3dDisabled = true;
+        }
         return false;
     }
 

@@ -123,6 +123,22 @@ private slots:
 
         QVERIFY(widget.isVisible());
     }
+
+    void rapidFrameDeliveryWhereD3DCannotInitDoesNotHang() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QImage frame(64, 64, QImage::Format_RGBA8888);
+        for (int i = 0; i < 30; ++i) {
+            frame.fill(QColor(i * 8, 128, 200));
+            widget.onFrameReady(frame);
+            QTest::qWait(10);
+        }
+
+        QVERIFY(widget.isVisible());
+    }
 };
 
 QTEST_MAIN(VideoSurfaceWidgetTest)
