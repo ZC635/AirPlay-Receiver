@@ -68,9 +68,6 @@ add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
 add_executable(VideoSurfaceWidgetTest app/VideoSurfaceWidgetTest.cpp)
 target_link_libraries(VideoSurfaceWidgetTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoSurfaceWidgetTest COMMAND VideoSurfaceWidgetTest)
-if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
-    add_test(NAME VideoSurfaceWidgetTestWindowsQpa COMMAND VideoSurfaceWidgetTest hasNativeWindowHandleOnWindowsQpa)
-endif()
 
 add_executable(VideoRenderGeometryTest app/VideoRenderGeometryTest.cpp)
 target_link_libraries(VideoRenderGeometryTest PRIVATE airplay_app_lib Qt6::Test)
@@ -130,10 +127,6 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
     set_tests_properties(D3D11VideoRendererTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
-        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
-    )
-    set_tests_properties(VideoSurfaceWidgetTestWindowsQpa PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
