@@ -1,5 +1,7 @@
 #include "app/VideoSurfaceWidget.h"
 
+#include <QPainter>
+
 VideoSurfaceWidget::VideoSurfaceWidget(QWidget *parent)
     : QOpenGLWidget(parent) {
     setObjectName("videoSurface");
@@ -16,6 +18,18 @@ void VideoSurfaceWidget::initializeGL() {
     initializeOpenGLFunctions();
 }
 
+void VideoSurfaceWidget::resizeGL(int, int) {
+    renderTexture();
+}
+
+void VideoSurfaceWidget::paintEvent(QPaintEvent *e) {
+    if (!m_paintCache.isNull()) {
+        QPainter p(this);
+        p.drawImage(rect(), m_paintCache.scaled(size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    }
+    QOpenGLWidget::paintEvent(e);
+}
+
 void VideoSurfaceWidget::paintGL() {
     {
         QMutexLocker locker(&m_frameMutex);
@@ -24,7 +38,10 @@ void VideoSurfaceWidget::paintGL() {
             m_pendingFrame = QImage();
         }
     }
+    renderTexture();
+}
 
+void VideoSurfaceWidget::renderTexture() {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -62,10 +79,10 @@ void VideoSurfaceWidget::paintGL() {
 
     glEnable(GL_TEXTURE_2D);
     glBegin(GL_QUADS);
-    glTexCoord2f(1.0f, 0.0f); glVertex2f(x, y);
-    glTexCoord2f(0.0f, 0.0f); glVertex2f(x + drawW, y);
-    glTexCoord2f(0.0f, 1.0f); glVertex2f(x + drawW, y + drawH);
-    glTexCoord2f(1.0f, 1.0f); glVertex2f(x, y + drawH);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(x, y);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(x + drawW, y);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(x + drawW, y + drawH);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(x, y + drawH);
     glEnd();
     glDisable(GL_TEXTURE_2D);
 
@@ -74,6 +91,7 @@ void VideoSurfaceWidget::paintGL() {
 
 void VideoSurfaceWidget::updateTexture(const QImage &frame) {
     QImage gl = frame.convertToFormat(QImage::Format_RGBA8888);
+    m_paintCache = gl;
     bool recreate = !m_texture ||
                     m_texture->width() != gl.width() ||
                     m_texture->height() != gl.height();

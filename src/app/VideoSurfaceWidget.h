@@ -21,13 +21,17 @@ public slots:
 
 protected:
     void initializeGL() override;
+    void resizeGL(int w, int h) override;
     void paintGL() override;
+    void paintEvent(QPaintEvent *e) override;
 
 private:
+    void renderTexture();
     void updateTexture(const QImage &frame);
 
     std::unique_ptr<QOpenGLTexture> m_texture;
     QImage m_pendingFrame;
+    QImage m_paintCache;
     QMutex m_frameMutex;
     bool m_videoFitMode = false;
 };
