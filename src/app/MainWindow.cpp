@@ -135,7 +135,9 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
                 enforceAspectRatio();
             }
         });
-        receiver_->setVideoSurface(videoSurface_->winId());
+        receiver_->setVideoFrameCallback([this](QImage frame) {
+            videoSurface_->onFrameReady(frame);
+        });
         updateReceiverState(receiver_->state());
         connect(receiver_, &AirPlayReceiver::stateChanged, this, &MainWindow::updateReceiverState);
         connect(receiver_, &AirPlayReceiver::errorChanged, this, [this](const QString &error) {
@@ -477,6 +479,7 @@ void MainWindow::applyVideoFitMode(bool enabled) {
         toolbar_->setVideoFitChecked(enabled);
         if (receiver_ != nullptr) {
             receiver_->setVideoFitMode(enabled);
+            videoSurface_->setVideoFitMode(enabled);
         }
         return;
     }
@@ -487,6 +490,7 @@ void MainWindow::applyVideoFitMode(bool enabled) {
     toolbar_->setVideoFitChecked(enabled);
     if (receiver_ != nullptr) {
         receiver_->setVideoFitMode(enabled);
+        videoSurface_->setVideoFitMode(enabled);
     }
     if (changed && !saveSettings()) {
         statusLabel_->setText("Could not save settings");
