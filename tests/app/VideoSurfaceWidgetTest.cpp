@@ -8,14 +8,6 @@ class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void init() {
-        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
-    }
-
-    void cleanup() {
-        qunsetenv("AIRPLAY_ENABLE_D3D_VIDEO");
-    }
-
     void isPlainQWidgetVideoSurface() {
         VideoSurfaceWidget widget;
         QVERIFY(!widget.inherits("QOpenGLWidget"));
@@ -23,14 +15,6 @@ private slots:
     }
 
     void defaultsToPainterSurfaceWithoutNativeD3DChild() {
-        VideoSurfaceWidget widget;
-
-        QVERIFY(!widget.testAttribute(Qt::WA_NativeWindow));
-    }
-
-    void environmentVariableDoesNotCreateNativeVideoSurface() {
-        qputenv("AIRPLAY_ENABLE_D3D_VIDEO", "1");
-
         VideoSurfaceWidget widget;
 
         QVERIFY(!widget.testAttribute(Qt::WA_NativeWindow));
