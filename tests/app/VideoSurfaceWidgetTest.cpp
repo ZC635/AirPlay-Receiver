@@ -1,6 +1,8 @@
 #include <QtTest/QtTest>
 #include "app/VideoSurfaceWidget.h"
+#include <QOpenGLContext>
 #include <QOpenGLWidget>
+#include <QSurfaceFormat>
 
 class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
@@ -18,6 +20,13 @@ private slots:
     }
 
     void resetClearsFrame() {
+        QSurfaceFormat format;
+        QOpenGLContext ctx;
+        ctx.setFormat(format);
+        if (!ctx.create()) {
+            QSKIP("OpenGL not available in test environment");
+        }
+
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
         widget.show();

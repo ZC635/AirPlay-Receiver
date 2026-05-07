@@ -143,7 +143,6 @@ private slots:
     }
 
     void leavingConnectedStateClearsVideoSurface() {
-        const QColor expected = QApplication::palette().color(QPalette::Window);
         FakeAirPlayReceiver receiver;
         MainWindow window(AppSettings::defaults(), nullptr, &receiver);
         window.resize(120, 80);
@@ -155,13 +154,8 @@ private slots:
         emit receiver.stateChanged(ReceiverState::Connected);
         emit receiver.stateChanged(ReceiverState::Discoverable);
 
-        QImage image(surface->size(), QImage::Format_ARGB32);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        surface->render(&painter);
-        painter.end();
-
-        QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), expected);
+        QImage image = surface->grabFramebuffer();
+        QCOMPARE(image.pixelColor(image.width() / 2, image.height() / 2), QColor(0, 0, 0));
     }
 
     void shortcutShowsToolbarWhileConnected() {
@@ -863,7 +857,7 @@ private slots:
     void passesVideoSurfaceToReceiver() {
         FakeAirPlayReceiver receiver;
         MainWindow window(AppSettings::defaults(), nullptr, &receiver);
-        QVERIFY(receiver.videoSurfaceId() != 0);
+        QVERIFY(receiver.frameCallback() != nullptr);
     }
 
     void videoSurfaceWidgetExists() {
