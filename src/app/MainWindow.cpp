@@ -448,7 +448,6 @@ void MainWindow::showSettingsDialog() {
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
     auto *msg = static_cast<MSG *>(message);
     if (msg != nullptr && msg->message == WM_WINDOWPOSCHANGING) {
-        const bool handled = QMainWindow::nativeEvent(eventType, message, result);
         auto *wp = reinterpret_cast<WINDOWPOS *>(msg->lParam);
         if (wp != nullptr) {
             if ((wp->flags & (SWP_NOMOVE | SWP_NOSIZE)) != 0) {
@@ -461,7 +460,7 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr
                 }
             }
         }
-        return handled;
+        return QMainWindow::nativeEvent(eventType, message, result);
     }
     if (msg != nullptr && msg->message == WM_SIZING && aspectRatioLock_ && videoWidth_ > 0 && videoHeight_ > 0) {
         auto *rect = reinterpret_cast<RECT *>(msg->lParam);

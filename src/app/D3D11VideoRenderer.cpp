@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace {
 template <typename T>
@@ -205,6 +206,7 @@ bool D3D11VideoRenderer::uploadFrame(const QImage &frame) {
         return false;
     }
 
+    Q_ASSERT(mapped.RowPitch >= static_cast<UINT>(rgba.bytesPerLine()));
     for (int y = 0; y < frameH; ++y) {
         std::memcpy(static_cast<unsigned char *>(mapped.pData) + y * mapped.RowPitch,
                     rgba.constScanLine(y), static_cast<size_t>(rgba.bytesPerLine()));

@@ -30,7 +30,7 @@ protected:
 
 private:
     bool ensureRenderer();
-    void renderCurrentFrame();
+    bool renderCurrentFrame();
     void paintFallback(QPainter &painter);
     void processPendingFrame();
     void handleRenderFailure();

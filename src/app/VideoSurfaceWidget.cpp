@@ -5,6 +5,7 @@
 
 #include <QPainter>
 #include <QPaintEvent>
+#include <QMetaObject>
 #include <QResizeEvent>
 #include <QShowEvent>
 
@@ -38,8 +39,9 @@ void VideoSurfaceWidget::resizeEvent(QResizeEvent *e) {
 
 void VideoSurfaceWidget::paintEvent(QPaintEvent *) {
     if (d3dVideoEnabledByEnvironment() && !m_d3dDisabled && !m_cachedFrame.isNull() && ensureRenderer()) {
-        renderCurrentFrame();
-        return;
+        if (renderCurrentFrame()) {
+            return;
+        }
     }
 
     QPainter painter(this);
@@ -53,7 +55,7 @@ void VideoSurfaceWidget::showEvent(QShowEvent *e) {
 }
 
 void VideoSurfaceWidget::onFrameReady(QImage frame) {
-    QImage converted = frame.convertToFormat(QImage::Format_RGBA8888);
+    QImage converted = frame.format() == QImage::Format_RGBA8888 ? frame : frame.convertToFormat(QImage::Format_RGBA8888);
     {
         QMutexLocker locker(&m_frameMutex);
         m_pendingFrame = converted;
@@ -134,46 +136,49 @@ bool VideoSurfaceWidget::ensureRenderer() {
     return true;
 }
 
-void VideoSurfaceWidget::renderCurrentFrame() {
+bool VideoSurfaceWidget::renderCurrentFrame() {
     if (!d3dVideoEnabledByEnvironment()) {
         update();
-        return;
+        return false;
     }
     if (m_d3dDisabled) {
         update();
-        return;
+        return false;
     }
 
     if (m_cachedFrame.isNull()) {
         if (m_renderer && m_renderer->isInitialized()) {
             if (!m_renderer->render(m_videoFitMode)) {
                 handleRenderFailure();
+                return false;
             }
+            return true;
         } else {
             update();
+            return false;
         }
-        return;
     }
 
     if (!ensureRenderer()) {
         update();
-        return;
+        return false;
     }
 
     if (m_textureDirty) {
         if (!m_renderer->uploadFrame(m_cachedFrame)) {
             handleRenderFailure();
-            return;
+            return false;
         }
         m_textureDirty = false;
     }
 
     if (!m_renderer->render(m_videoFitMode)) {
         handleRenderFailure();
-        return;
+        return false;
     }
 
     m_consecutiveFailures = 0;
+    return true;
 }
 
 void VideoSurfaceWidget::handleRenderFailure() {
