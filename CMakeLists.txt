@@ -35,6 +35,8 @@ add_library(airplay_app_lib
     src/backend/ReceiverState.h
     src/backend/UxPlayReceiver.cpp
     src/backend/UxPlayReceiver.h
+    src/backend/VideoFrameBridge.cpp
+    src/backend/VideoFrameBridge.h
     src/platform/DependencyDiagnostics.cpp
     src/platform/DependencyDiagnostics.h
     src/platform/AspectRatioSizing.cpp
