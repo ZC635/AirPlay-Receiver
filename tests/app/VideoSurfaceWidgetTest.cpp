@@ -1,16 +1,18 @@
 #include <QtTest/QtTest>
 #include "app/VideoSurfaceWidget.h"
-#include <QOpenGLContext>
-#include <QOpenGLWidget>
-#include <QSurfaceFormat>
+
+#include <QGuiApplication>
+
+#include <windows.h>
 
 class VideoSurfaceWidgetTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void isQOpenGLWidget() {
+    void isPlainQWidgetVideoSurface() {
         VideoSurfaceWidget widget;
-        QVERIFY(qobject_cast<QOpenGLWidget *>(&widget) != nullptr);
+        QVERIFY(!widget.inherits("QOpenGLWidget"));
+        QVERIFY(widget.inherits("QWidget"));
     }
 
     void hasExpandingSizePolicy() {
@@ -20,13 +22,6 @@ private slots:
     }
 
     void resetClearsFrame() {
-        QSurfaceFormat format;
-        QOpenGLContext ctx;
-        ctx.setFormat(format);
-        if (!ctx.create()) {
-            QSKIP("OpenGL not available in test environment");
-        }
-
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
         widget.show();
@@ -39,9 +34,31 @@ private slots:
 
         widget.reset();
         QTest::qWait(50);
+    }
 
-        QImage screen = widget.grabFramebuffer();
-        QVERIFY(!screen.isNull());
+    void acceptsFrameDeliveryWithoutCrashing() {
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QImage testImage(64, 64, QImage::Format_RGB32);
+        testImage.fill(Qt::blue);
+        widget.onFrameReady(testImage);
+        QTest::qWait(50);
+    }
+
+    void hasNativeWindowHandleOnWindowsQpa() {
+        if (QGuiApplication::platformName() != QStringLiteral("windows")) {
+            QSKIP("Native HWND test requires the Windows QPA platform");
+        }
+
+        VideoSurfaceWidget widget;
+        widget.resize(100, 100);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QVERIFY(reinterpret_cast<HWND>(widget.winId()) != nullptr);
     }
 };
 

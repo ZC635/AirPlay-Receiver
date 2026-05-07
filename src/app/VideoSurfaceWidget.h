@@ -1,13 +1,15 @@
 #pragma once
 
-#include <QOpenGLWidget>
-#include <QOpenGLFunctions>
-#include <QOpenGLTexture>
 #include <QImage>
-#include <QMutex>
+#include <QWidget>
 #include <memory>
 
-class VideoSurfaceWidget final : public QOpenGLWidget, protected QOpenGLFunctions {
+class D3D11VideoRenderer;
+class QPainter;
+class QPaintEvent;
+class QResizeEvent;
+
+class VideoSurfaceWidget final : public QWidget {
     Q_OBJECT
 
 public:
@@ -20,18 +22,16 @@ public slots:
     void onFrameReady(QImage frame);
 
 protected:
-    void initializeGL() override;
-    void resizeGL(int w, int h) override;
-    void paintGL() override;
+    void resizeEvent(QResizeEvent *e) override;
     void paintEvent(QPaintEvent *e) override;
 
 private:
-    void renderTexture();
-    void updateTexture(const QImage &frame);
+    bool ensureRenderer();
+    void renderCurrentFrame();
+    void paintFallback(QPainter &painter);
 
-    std::unique_ptr<QOpenGLTexture> m_texture;
-    QImage m_pendingFrame;
-    QImage m_paintCache;
-    QMutex m_frameMutex;
+    std::unique_ptr<D3D11VideoRenderer> m_renderer;
+    QImage m_cachedFrame;
     bool m_videoFitMode = false;
+    bool m_rendererUnavailable = false;
 };
