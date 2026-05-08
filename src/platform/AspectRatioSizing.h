@@ -31,4 +31,4 @@ bool adjustWindowRectForAspectRatio(
     AspectRatioFrameMargins margins,
     AspectRatioSizeConstraints constraints = {});
 
-void updateWindowPosCopyBitsForResize(WINDOWPOS &windowPos, const RECT &currentRect);
+void updateWindowPosCopyBitsForResize(WINDOWPOS &windowPos);

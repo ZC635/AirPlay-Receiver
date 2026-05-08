@@ -58,6 +58,11 @@ void debugLog(const char *format, ...) {
     std::fclose(file);
 }
 
+void logConnectionReset(const char *message) {
+    qWarning().noquote() << message;
+    debugLog("%s", message);
+}
+
 QByteArray defaultDeviceId() {
     return QByteArrayLiteral("02:00:00:00:00:01");
 }
@@ -176,19 +181,19 @@ void connDestroy(void *cls) {
 void connReset(void *, int reason) {
     switch (reason) {
     case 1:
-        printf("*** ERROR lost connection with client (network problem?)\n");
+        logConnectionReset("ERROR lost connection with client (network problem?)");
         break;
     case 2:
-        printf("*** ERROR Unsupported HLS streaming source\n");
+        logConnectionReset("ERROR Unsupported HLS streaming source");
         break;
     default:
+        qWarning("ERROR connection reset (reason=%d)", reason);
+        debugLog("ERROR connection reset (reason=%d)", reason);
         break;
     }
 }
 
 void connFeedback(void *) {
-    static int missed_feedback = 0;
-    missed_feedback = 0;
 }
 
 void videoReset(void *cls, reset_type_t type) {
@@ -496,7 +501,7 @@ void UxPlayReceiver::setVolume(double volume) {
     m_volume.store(volume);
 #if AIRPLAY_WITH_UXPLAY
     if (m_audioRendererStarted.load()) {
-        audio_renderer_set_volume(m_volume.load());
+        audio_renderer_set_volume(volume);
     }
 #endif
 }
@@ -509,7 +514,6 @@ void UxPlayReceiver::setVideoFrameCallback(FrameCallback callback) {
     m_frameCallback = std::move(callback);
 #if AIRPLAY_WITH_UXPLAY
     if (m_videoFrameBridge) {
-        QObject::disconnect(m_videoFrameBridge, nullptr, nullptr, nullptr);
         delete m_videoFrameBridge;
         m_videoFrameBridge = nullptr;
     }
@@ -618,7 +622,7 @@ void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
     if (!m_acceptingCallbacks.load() || !m_audioRendererStarted.load()) {
         return;
     }
-    audio_renderer_set_volume(m_volume.load());
+    audio_renderer_set_volume(volume);
 }
 
 void UxPlayReceiver::setCoverArtFromUxPlayCallback(const void *buffer, int buflen) {
@@ -708,7 +712,7 @@ void UxPlayReceiver::applyVideoFitModeToRenderer() {
 
 void UxPlayReceiver::renderAudioBufferFromCallback(void *data, int *data_len, unsigned short *seqnum, uint64_t *ntp_time) {
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
+    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
         return;
     }
     audio_renderer_render_buffer(static_cast<unsigned char *>(data), data_len, seqnum, ntp_time);
@@ -716,7 +720,7 @@ void UxPlayReceiver::renderAudioBufferFromCallback(void *data, int *data_len, un
 
 void UxPlayReceiver::renderVideoBufferFromCallback(void *data, int *data_len, int *nal_count, uint64_t *ntp_time) {
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
+    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
         return;
     }
     video_renderer_render_buffer(static_cast<unsigned char *>(data), data_len, nal_count, ntp_time);
@@ -724,7 +728,7 @@ void UxPlayReceiver::renderVideoBufferFromCallback(void *data, int *data_len, in
 
 void UxPlayReceiver::flushAudioRendererFromCallback() {
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
+    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
         return;
     }
     audio_renderer_flush();
@@ -732,7 +736,7 @@ void UxPlayReceiver::flushAudioRendererFromCallback() {
 
 void UxPlayReceiver::flushVideoRendererFromCallback() {
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
+    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
         return;
     }
     video_renderer_flush();
@@ -740,7 +744,7 @@ void UxPlayReceiver::flushVideoRendererFromCallback() {
 
 void UxPlayReceiver::pauseVideoRendererFromCallback() {
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
+    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
         return;
     }
     video_renderer_pause();
@@ -748,7 +752,7 @@ void UxPlayReceiver::pauseVideoRendererFromCallback() {
 
 void UxPlayReceiver::resumeVideoRendererFromCallback() {
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
+    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
         return;
     }
     video_renderer_resume();
@@ -756,7 +760,7 @@ void UxPlayReceiver::resumeVideoRendererFromCallback() {
 
 int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265) {
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
+    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
         return -1;
     }
     int result = video_renderer_choose_codec(false, video_is_h265);

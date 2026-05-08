@@ -68,7 +68,10 @@ try {
     New-CompletePortablePackageFixture $blockedPackage
     New-RequiredPortableFile $blockedPackage "D3DCompiler_47.dll"
 
-    $powershell = (Get-Command powershell -ErrorAction Stop).Source
+    $powershell = (Get-Command powershell -ErrorAction SilentlyContinue).Source
+    if (-not $powershell) {
+        $powershell = (Get-Command pwsh -ErrorAction Stop).Source
+    }
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $blockedOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File $verifyScript -PackageDir $blockedPackage 2>&1

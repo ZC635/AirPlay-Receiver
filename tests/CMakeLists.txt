@@ -53,14 +53,14 @@ add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)
 add_executable(UxPlayReceiverConfigTest backend/UxPlayReceiverConfigTest.cpp)
 target_link_libraries(UxPlayReceiverConfigTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
-    target_include_directories(UxPlayReceiverConfigTest PRIVATE "${CMAKE_SOURCE_DIR}/third_party/uxplay")
+    target_include_directories(UxPlayReceiverConfigTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
 endif()
 add_test(NAME UxPlayReceiverConfigTest COMMAND UxPlayReceiverConfigTest)
 
 add_executable(VideoRendererLifecycleTest backend/VideoRendererLifecycleTest.cpp)
 target_link_libraries(VideoRendererLifecycleTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
-    target_include_directories(VideoRendererLifecycleTest PRIVATE "${CMAKE_SOURCE_DIR}/third_party/uxplay")
+    target_include_directories(VideoRendererLifecycleTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
     target_link_libraries(VideoRendererLifecycleTest PRIVATE renderers)
 endif()
 add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
@@ -73,13 +73,13 @@ add_executable(VideoRenderGeometryTest app/VideoRenderGeometryTest.cpp)
 target_link_libraries(VideoRenderGeometryTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoRenderGeometryTest COMMAND VideoRenderGeometryTest)
 
-find_program(AIRPLAY_POWERSHELL powershell)
+find_program(AIRPLAY_POWERSHELL NAMES powershell pwsh)
 if(AIRPLAY_POWERSHELL)
     add_test(
         NAME PortablePackageValidationTest
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/PortablePackageValidationTest.ps1"
-            -ProjectRoot "${CMAKE_SOURCE_DIR}"
+            -ProjectRoot "${PROJECT_SOURCE_DIR}"
     )
 endif()
 

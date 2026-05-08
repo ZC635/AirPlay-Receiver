@@ -450,15 +450,7 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr
     if (msg != nullptr && msg->message == WM_WINDOWPOSCHANGING) {
         auto *wp = reinterpret_cast<WINDOWPOS *>(msg->lParam);
         if (wp != nullptr) {
-            if ((wp->flags & (SWP_NOMOVE | SWP_NOSIZE)) != 0) {
-                updateWindowPosCopyBitsForResize(*wp, RECT{});
-            } else {
-                const HWND hwnd = wp->hwnd != nullptr ? wp->hwnd : msg->hwnd;
-                RECT currentRect{};
-                if (hwnd != nullptr && GetWindowRect(hwnd, &currentRect)) {
-                    updateWindowPosCopyBitsForResize(*wp, currentRect);
-                }
-            }
+            updateWindowPosCopyBitsForResize(*wp);
         }
         return QMainWindow::nativeEvent(eventType, message, result);
     }

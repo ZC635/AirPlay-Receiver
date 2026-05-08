@@ -19,9 +19,8 @@ private slots:
         pos.x = 100;
         pos.y = 200;
         pos.flags = 0;
-        const RECT current{100, 200, 500, 500};
 
-        updateWindowPosCopyBitsForResize(pos, current);
+        updateWindowPosCopyBitsForResize(pos);
 
         QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
     }
@@ -31,9 +30,8 @@ private slots:
         pos.x = 80;
         pos.y = 160;
         pos.flags = SWP_NOMOVE;
-        const RECT current{100, 200, 500, 500};
 
-        updateWindowPosCopyBitsForResize(pos, current);
+        updateWindowPosCopyBitsForResize(pos);
 
         QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
     }
@@ -43,9 +41,8 @@ private slots:
         pos.x = 90;
         pos.y = 200;
         pos.flags = SWP_NOCOPYBITS;
-        const RECT current{100, 200, 500, 500};
 
-        updateWindowPosCopyBitsForResize(pos, current);
+        updateWindowPosCopyBitsForResize(pos);
 
         QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
     }
@@ -55,9 +52,8 @@ private slots:
         pos.x = 100;
         pos.y = 190;
         pos.flags = SWP_NOCOPYBITS;
-        const RECT current{100, 200, 500, 500};
 
-        updateWindowPosCopyBitsForResize(pos, current);
+        updateWindowPosCopyBitsForResize(pos);
 
         QVERIFY((pos.flags & SWP_NOCOPYBITS) == 0);
     }
@@ -68,9 +64,8 @@ private slots:
         pos.y = 220;
         pos.flags = SWP_NOSIZE | SWP_NOCOPYBITS | SWP_NOZORDER;
         const UINT originalFlags = pos.flags;
-        const RECT current{100, 200, 500, 500};
 
-        updateWindowPosCopyBitsForResize(pos, current);
+        updateWindowPosCopyBitsForResize(pos);
 
         QCOMPARE(pos.flags, originalFlags);
     }

@@ -53,18 +53,6 @@ AspectRatioSizeConstraints normalized(AspectRatioSizeConstraints constraints) {
     return constraints;
 }
 
-void setHeightAroundCenter(RECT &rect, int outerHeight) {
-    const int center = static_cast<int>((rect.top + rect.bottom) / 2);
-    rect.top = center - outerHeight / 2;
-    rect.bottom = rect.top + outerHeight;
-}
-
-void setWidthAroundCenter(RECT &rect, int outerWidth) {
-    const int center = static_cast<int>((rect.left + rect.right) / 2);
-    rect.left = center - outerWidth / 2;
-    rect.right = rect.left + outerWidth;
-}
-
 OuterSize sizeDrivenByOuterWidth(int outerWidth, double targetRatio, const AspectRatioFrameMargins &margins) {
     const int clientWidth = clientWidthForOuterWidth(outerWidth, margins);
     return OuterSize{outerWidth, outerHeightForClientHeight(rounded(clientWidth / targetRatio), margins)};
@@ -219,11 +207,10 @@ bool adjustWindowRectForAspectRatio(
     }
 }
 
-void updateWindowPosCopyBitsForResize(WINDOWPOS &windowPos, const RECT &currentRect) {
+void updateWindowPosCopyBitsForResize(WINDOWPOS &windowPos) {
     if ((windowPos.flags & SWP_NOSIZE) != 0) {
         return;
     }
 
-    (void)currentRect;
     windowPos.flags &= ~SWP_NOCOPYBITS;
 }
