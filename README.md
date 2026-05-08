@@ -8,6 +8,10 @@ This project was developed with assistance from OpenCode, Codex, and DeepSeek. I
 
 This project is Windows-only. The application, build scripts, tests, and runtime packaging intentionally target Windows 10/11 and may use Windows-native APIs when they produce a better receiver experience. Cross-platform compatibility is not a project goal.
 
+## Quick Start
+
+Download the newest Windows portable build from the [latest release](https://github.com/ZC635/AirPlay-Receiver/releases/latest). Extract the archive, run `airplay_receiver.exe`, then open Control Center on an iPhone, choose Screen Mirroring, and select the advertised receiver name. Keep the iPhone and Windows PC on the same network, and allow the receiver through the Windows firewall if prompted.
+
 ## Usage
 
 ### Prerequisites
@@ -114,7 +118,7 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 ## Features
 
 - Native iPhone AirPlay Screen Mirroring discovery and connection via UxPlay/GStreamer
-- Mirrored video display through a flicker-resistant Qt `QWidget` using `QPainter`
+- Mirrored video display through a Qt `QOpenGLWidget` with texture upload and resize artifact reduction
 - Synchronized audio playback
 - Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, and settings button
 - Settings dialog for receiver name and configurable shortcuts:
@@ -135,12 +139,12 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 
 ```text
 src/
-  app/          Qt UI (MainWindow, ToolbarWidget, VideoSurfaceWidget, SettingsDialog)
-  backend/      AirPlay receiver facade (AirPlayReceiver, UxPlayReceiver, FakeAirPlayReceiver)
-  platform/     Windows-specific hotkey, diagnostics
-cmake/          UxPlay dependency integration
+  app/          Qt UI, toolbar, video surface, settings dialog, settings persistence
+  backend/      Receiver abstraction and UxPlay/GStreamer integration
+  platform/     Windows hotkeys, diagnostics, mDNS helpers, window sizing support
+cmake/          UxPlay, QMdnsEngine, and renderer dependency integration
 scripts/        PowerShell build, deploy, portable packaging, and run helpers
-docs/           AI-oriented project overview and maintenance notes
+docs/           Project overview and maintenance notes
 third_party/
   uxplay/       UxPlay submodule
 tests/
