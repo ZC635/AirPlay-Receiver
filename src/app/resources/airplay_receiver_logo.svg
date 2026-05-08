@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">AirPlay Receiver App Logo</title>
+  <desc id="desc">Original vector logo for a Windows AirPlay screen mirroring receiver app, combining a display frame, play/mirroring symbol, wireless casting arcs, and receiver base.</desc>
+  <defs>
+    <linearGradient id="screenGradient" x1="160" y1="210" x2="864" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#27D7F2"/>
+      <stop offset="0.48" stop-color="#2388F4"/>
+      <stop offset="1" stop-color="#3927E8"/>
+    </linearGradient>
+    <linearGradient id="playGradient" x1="398" y1="324" x2="660" y2="598" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#27DDF0"/>
+      <stop offset="0.52" stop-color="#2495F3"/>
+      <stop offset="1" stop-color="#3926E9"/>
+    </linearGradient>
+    <linearGradient id="arcGradient" x1="306" y1="595" x2="718" y2="840" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#25CFEF"/>
+      <stop offset="0.55" stop-color="#247EF2"/>
+      <stop offset="1" stop-color="#3926E9"/>
+    </linearGradient>
+    <linearGradient id="baseGradient" x1="390" y1="790" x2="634" y2="882" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#23CDEF"/>
+      <stop offset="0.56" stop-color="#247FF3"/>
+      <stop offset="1" stop-color="#3926E8"/>
+    </linearGradient>
+    <linearGradient id="shineGradient" x1="410" y1="330" x2="588" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#58F2FF" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#58F2FF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="softShadow" x="-12%" y="-12%" width="124%" height="124%">
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#102C70" flood-opacity="0.14"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="216" fill="#FFFFFF"/>
+  <rect x="64" y="64" width="896" height="896" rx="216" fill="#F7FBFF" opacity="0.55"/>
+
+  <g filter="url(#softShadow)">
+    <path
+      d="M250 194H774C829.23 194 874 238.77 874 294V628C874 683.23 829.23 728 774 728H706L682 672H770C794.3 672 814 652.3 814 628V300C814 275.7 794.3 256 770 256H254C229.7 256 210 275.7 210 300V628C210 652.3 229.7 672 254 672H342L318 728H250C194.77 728 150 683.23 150 628V294C150 238.77 194.77 194 250 194Z"
+      fill="url(#screenGradient)"/>
+
+    <path
+      d="M421 335C421 313.35 444.63 299.96 463.21 311.09L646.44 420.86C664.5 431.68 664.5 457.82 646.44 468.64L463.21 578.41C444.63 589.54 421 576.15 421 554.5V335Z"
+      fill="url(#playGradient)"/>
+    <path
+      d="M421 473.5L585.5 375L646.44 420.86C664.5 431.68 664.5 457.82 646.44 468.64L463.21 578.41C444.63 589.54 421 576.15 421 554.5V473.5Z"
+      fill="#3429EA" opacity="0.55"/>
+    <path
+      d="M421 335C421 313.35 444.63 299.96 463.21 311.09L585.5 384.35L421 481.6V335Z"
+      fill="url(#shineGradient)"/>
+
+    <path d="M335 688C431 590 593 590 689 688" fill="none" stroke="url(#arcGradient)" stroke-width="44" stroke-linecap="round"/>
+    <path d="M397 748C461 688 563 688 627 748" fill="none" stroke="url(#arcGradient)" stroke-width="40" stroke-linecap="round" opacity="0.92"/>
+    <path d="M462 805C490 781 534 781 562 805" fill="none" stroke="url(#arcGradient)" stroke-width="38" stroke-linecap="round" opacity="0.88"/>
+
+    <rect x="392" y="800" width="240" height="76" rx="34" fill="url(#baseGradient)"/>
+    <rect x="482" y="829" width="60" height="20" rx="10" fill="#FFFFFF" opacity="0.94"/>
+  </g>
+</svg>

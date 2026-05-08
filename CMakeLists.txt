@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX)
+project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX RC)
 
 if(NOT WIN32)
     message(FATAL_ERROR "This project requires Windows")
@@ -8,6 +8,7 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 
@@ -26,6 +27,7 @@ add_library(airplay_app_lib
     src/app/ShortcutBinding.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
+    src/app/app_resources.qrc
     src/app/VideoRenderGeometry.cpp
     src/app/VideoRenderGeometry.h
     src/app/VideoSurfaceWidget.cpp
@@ -64,7 +66,7 @@ if(WIN32)
     target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi)
 endif()
 
-add_executable(airplay_receiver src/app/main.cpp)
+add_executable(airplay_receiver src/app/main.cpp src/app/app-icon.rc)
 target_link_libraries(airplay_receiver PRIVATE airplay_app_lib)
 set_target_properties(airplay_receiver PROPERTIES WIN32_EXECUTABLE TRUE)
 

@@ -11,9 +11,11 @@
 #include <algorithm>
 #include <cmath>
 #include <QGridLayout>
+#include <QIcon>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMessageBox>
+#include <QResource>
 #include <QWidget>
 #include <utility>
 
@@ -93,6 +95,10 @@ AspectRatioSizeConstraints sizeConstraintsFor(const QWidget &widget, const Aspec
 }
 }
 
+static void initializeAppResources() {
+    Q_INIT_RESOURCE(app_resources);
+}
+
 MainWindow::MainWindow(QWidget *parent)
     : MainWindow(AppSettings::defaults(), nullptr, parent) {}
 
@@ -112,6 +118,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
       hotkeys_(hotkeys),
       receiver_(receiver),
       settingsPath_(std::move(settingsPath)) {
+    initializeAppResources();
+    setWindowIcon(QIcon(":/icons/app-icon.ico"));
     setWindowTitle("AirPlay Receiver");
     resize(960, 540);
     alwaysOnTopEnabled_ = windowFlags().testFlag(Qt::WindowStaysOnTopHint);

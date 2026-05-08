@@ -1,0 +1,35 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">AirPlay Receiver Small Icon</title>
+  <desc id="desc">Simplified small-size icon showing a receiving screen, play symbol, and wireless casting waves.</desc>
+  <defs>
+    <linearGradient id="bg" x1="120" y1="120" x2="904" y2="904" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EEF3FA"/>
+    </linearGradient>
+    <linearGradient id="frameGrad" x1="208" y1="236" x2="816" y2="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0A4BFF"/>
+      <stop offset="0.58" stop-color="#0874FF"/>
+      <stop offset="1" stop-color="#16D2E5"/>
+    </linearGradient>
+    <linearGradient id="playGrad" x1="455" y1="382" x2="670" y2="617" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#16CFE7"/>
+      <stop offset="1" stop-color="#0A4BFF"/>
+    </linearGradient>
+    <linearGradient id="waveGrad" x1="360" y1="645" x2="665" y2="870" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0A4BFF"/>
+      <stop offset="1" stop-color="#14CFE5"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="210" fill="url(#bg)"/>
+
+  <rect x="232" y="246" width="560" height="430" rx="64" fill="#FFFFFF" stroke="url(#frameGrad)" stroke-width="60"/>
+
+  <path d="M466 402C466 386.3 483.2 376.7 496.5 385.1L656.1 486.4C668.4 494.2 668.4 512.2 656.1 520L496.5 621.3C483.2 629.7 466 620.1 466 604.4V402Z" fill="url(#playGrad)"/>
+
+  <path d="M382 668C414 632 461 612 512 612C563 612 610 632 642 668" stroke="url(#waveGrad)" stroke-width="50" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M436 735C456 712 484 699 512 699C540 699 568 712 588 735" stroke="url(#waveGrad)" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="420" y="786" width="184" height="92" rx="38" fill="url(#waveGrad)"/>
+  <rect x="478" y="822" width="68" height="20" rx="10" fill="#FFFFFF"/>
+</svg>

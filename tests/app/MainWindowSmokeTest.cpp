@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QImage>
+#include <QIcon>
 #include <QFileInfo>
 #include <QKeySequenceEdit>
 #include <QPainter>
@@ -70,6 +71,12 @@ private slots:
     void constructsWithExpectedTitle() {
         MainWindow window;
         QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
+    }
+
+    void constructsWithApplicationIcon() {
+        MainWindow window;
+        QVERIFY(!window.windowIcon().isNull());
+        QVERIFY(!window.windowIcon().availableSizes().isEmpty());
     }
 
     void togglesToolbarVisibility() {
