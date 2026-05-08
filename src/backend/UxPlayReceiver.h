@@ -66,6 +66,8 @@ private:
 #if AIRPLAY_WITH_UXPLAY
     void cleanupUxPlay();
     void applyVideoFitModeToRenderer();
+    void resetVideoFrameBridge();
+    void attachVideoFrameBridgeToCurrentPipeline();
     bool createDiscoveryBroadcast();
     bool registerDiscoveryBroadcast(unsigned short port);
     void stopDiscoveryBroadcast();

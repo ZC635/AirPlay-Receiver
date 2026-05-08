@@ -19,6 +19,7 @@
 #include "lib/raop.h"
 #include "lib/dnssd.h"
 #include "platform/MdnsPublisher.h"
+#include <gst/gst.h>
 
 static bool txtRecordContainsKey(const char *data, int length, const char *key) {
     const char *end = data + length;
@@ -39,6 +40,7 @@ static bool txtRecordContainsKey(const char *data, int length, const char *key) 
 }
 
 extern "C" int video_renderer_choose_codec(bool video_is_jpeg, bool video_is_h265);
+extern "C" void *video_renderer_get_pipeline(void);
 extern "C" void video_renderer_set_force_aspect_ratio(bool enabled);
 extern "C" bool video_renderer_get_force_aspect_ratio(void);
 
@@ -510,6 +512,51 @@ private slots:
         qunsetenv("AIRPLAY_DEBUG_LOG");
         QCOMPARE(log.count(QStringLiteral("GStreamer video pipeline")), 2);
         QCOMPARE(log.count(QStringLiteral("video_pipeline state change")), 2);
+#endif
+    }
+
+    void videoResetReattachesAppsinkFrameBridge() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Appsink Reset Test";
+        config.videoSink = "appsink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        receiver.setVideoFrameCallback([](QImage) {});
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
+        QVERIFY(receiver.m_videoFrameBridge != nullptr);
+
+        auto appsinkEmitsToBridge = [&receiver] {
+            GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
+            if (!pipeline) {
+                return false;
+            }
+
+            GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h264");
+            if (!appsink) {
+                return false;
+            }
+
+            gboolean emitSignals = FALSE;
+            g_object_get(G_OBJECT(appsink), "emit-signals", &emitSignals, nullptr);
+            const gulong handler = g_signal_handler_find(appsink, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr,
+                                                         receiver.m_videoFrameBridge);
+            gst_object_unref(appsink);
+            return emitSignals == TRUE && handler != 0;
+        };
+
+        QVERIFY(appsinkEmitsToBridge());
+
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+
+        QVERIFY(receiver.m_videoFrameBridge != nullptr);
+        QVERIFY(appsinkEmitsToBridge());
+
+        receiver.stop();
 #endif
     }
 

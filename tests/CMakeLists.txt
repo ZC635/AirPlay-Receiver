@@ -54,6 +54,7 @@ add_executable(UxPlayReceiverConfigTest backend/UxPlayReceiverConfigTest.cpp)
 target_link_libraries(UxPlayReceiverConfigTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
     target_include_directories(UxPlayReceiverConfigTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
+    target_link_libraries(UxPlayReceiverConfigTest PRIVATE renderers)
 endif()
 add_test(NAME UxPlayReceiverConfigTest COMMAND UxPlayReceiverConfigTest)
 

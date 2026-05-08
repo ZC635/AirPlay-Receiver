@@ -377,24 +377,7 @@ void UxPlayReceiver::start() {
     }
     video_renderer_start();
     m_videoRendererStopped.store(false);
-    {
-        GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
-        if (pipeline && m_frameCallback) {
-            GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h264");
-            if (!appsink) {
-                appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h265");
-            }
-            if (appsink) {
-                m_videoFrameBridge = new VideoFrameBridge(appsink, this);
-                m_videoFrameBridge->start();
-                QObject::connect(m_videoFrameBridge, &VideoFrameBridge::frameReady,
-                                 this, [this](QImage frame) {
-                                     if (m_frameCallback) m_frameCallback(frame);
-                                 }, Qt::QueuedConnection);
-                gst_object_unref(appsink);
-            }
-        }
-    }
+    attachVideoFrameBridgeToCurrentPipeline();
     if (audio_renderer_init(logger, audioSink.constData(), &kAudioSync, &kVideoSync, "") != 0) {
         m_acceptingCallbacks.store(false);
         setError("Failed to initialize GStreamer audio renderer");
@@ -514,8 +497,7 @@ void UxPlayReceiver::setVideoFrameCallback(FrameCallback callback) {
     m_frameCallback = std::move(callback);
 #if AIRPLAY_WITH_UXPLAY
     if (m_videoFrameBridge) {
-        delete m_videoFrameBridge;
-        m_videoFrameBridge = nullptr;
+        resetVideoFrameBridge();
     }
 #endif
 }
@@ -657,6 +639,7 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
     const auto restartVideoRenderer = [this] {
         m_videoRendererStopped.store(true);
         video_renderer_stop();
+        resetVideoFrameBridge();
         video_renderer_destroy();
 
         auto *logger = static_cast<logger_t *>(m_logger);
@@ -668,7 +651,9 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
                             kPlaybinVersion, nullptr);
         applyVideoFitModeToRenderer();
         video_renderer_start();
-        video_renderer_choose_codec(false, false);
+        if (video_renderer_choose_codec(false, false) == 0) {
+            attachVideoFrameBridgeToCurrentPipeline();
+        }
         m_videoRendererStopped.store(false);
     };
 
@@ -764,26 +749,46 @@ int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265) {
         return -1;
     }
     int result = video_renderer_choose_codec(false, video_is_h265);
-    if (result == 0 && !m_videoFrameBridge) {
-        GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
-        if (pipeline && m_frameCallback) {
-            GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h264");
-            if (!appsink) {
-                // try alternate
-                appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h265");
-            }
-            if (appsink) {
-                m_videoFrameBridge = new VideoFrameBridge(appsink, this);
-                m_videoFrameBridge->start();
-                QObject::connect(m_videoFrameBridge, &VideoFrameBridge::frameReady,
-                                 this, [this](QImage frame) {
-                                     if (m_frameCallback) m_frameCallback(frame);
-                                 }, Qt::QueuedConnection);
-                gst_object_unref(appsink);
-            }
-        }
+    if (result == 0) {
+        attachVideoFrameBridgeToCurrentPipeline();
     }
     return result;
+}
+
+void UxPlayReceiver::resetVideoFrameBridge() {
+    if (!m_videoFrameBridge) {
+        return;
+    }
+
+    delete m_videoFrameBridge;
+    m_videoFrameBridge = nullptr;
+}
+
+void UxPlayReceiver::attachVideoFrameBridgeToCurrentPipeline() {
+    if (m_videoFrameBridge || !m_frameCallback) {
+        return;
+    }
+
+    GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
+    if (!pipeline) {
+        return;
+    }
+
+    GstElement *appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h264");
+    if (!appsink) {
+        appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h265");
+    }
+    if (!appsink) {
+        return;
+    }
+
+    m_videoFrameBridge = new VideoFrameBridge(appsink, this);
+    m_videoFrameBridge->start();
+    QObject::connect(m_videoFrameBridge, &VideoFrameBridge::frameReady,
+                     this, [this](QImage frame) {
+                         if (m_frameCallback) m_frameCallback(frame);
+                     }, Qt::QueuedConnection);
+    gst_object_unref(appsink);
 }
 #endif
 
