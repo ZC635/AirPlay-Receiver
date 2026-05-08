@@ -73,6 +73,16 @@ add_executable(VideoRenderGeometryTest app/VideoRenderGeometryTest.cpp)
 target_link_libraries(VideoRenderGeometryTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoRenderGeometryTest COMMAND VideoRenderGeometryTest)
 
+find_program(AIRPLAY_POWERSHELL powershell)
+if(AIRPLAY_POWERSHELL)
+    add_test(
+        NAME PortablePackageValidationTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/PortablePackageValidationTest.ps1"
+            -ProjectRoot "${CMAKE_SOURCE_DIR}"
+    )
+endif()
+
 
 get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION_RELEASE)
 if(NOT AIRPLAY_QT_CORE_LOCATION)

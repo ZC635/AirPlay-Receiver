@@ -373,7 +373,8 @@ function Invoke-Build {
     Write-Host "`n=== [$VariantBuildDir] CMake Configure (UxPlay=ON) ===" -ForegroundColor Cyan
     cmake -S $ProjectRoot -B $VariantBuildDir -G Ninja `
         -DCMAKE_BUILD_TYPE=Release `
-        -DAIRPLAY_WITH_UXPLAY=ON
+        -DAIRPLAY_WITH_UXPLAY=ON `
+        -DNO_MARCH_NATIVE=ON
 
     if ($LASTEXITCODE -ne 0) { Write-Error "CMake configure failed"; exit 1 }
 
@@ -397,7 +398,7 @@ function Invoke-Build {
         Write-Host "  windeployqt..." -ForegroundColor Gray
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
-        $windeployqtOutput = & "$MSys2Bin\windeployqt.exe" $VariantExePath --no-translations --no-compiler-runtime 2>&1
+        $windeployqtOutput = & "$MSys2Bin\windeployqt.exe" $VariantExePath --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-system-dxc-compiler 2>&1
         $windeployqtExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEAP
         if ($windeployqtExit -ne 0) {
@@ -477,6 +478,13 @@ function Invoke-Build {
         $LauncherSrc = Join-Path $ProjectRoot "scripts\launcher.cmd"
         if (Test-Path $LauncherSrc) { Copy-Item $LauncherSrc $VariantBuildDir -Force }
 
+        foreach ($nonPortableDll in @("D3DCompiler_47.dll", "D3DCompiler_46.dll", "D3DCompiler_43.dll", "dxcompiler.dll", "dxil.dll")) {
+            $nonPortablePath = Join-Path $VariantBuildDir $nonPortableDll
+            if (Test-Path -LiteralPath $nonPortablePath) {
+                Remove-Item -LiteralPath $nonPortablePath -Force
+            }
+        }
+
         $dllCount = (Get-ChildItem $VariantBuildDir -Filter *.dll -ErrorAction SilentlyContinue | Measure-Object).Count
         $pluginCount = (Get-ChildItem $PluginOutDir -Filter *.dll -ErrorAction SilentlyContinue | Measure-Object).Count
         Write-Host "  Done. ${dllCount} DLLs, ${pluginCount} plugins" -ForegroundColor Green
@@ -484,6 +492,14 @@ function Invoke-Build {
         $missingStandalone = @(Get-StandaloneMissingRequirements $VariantBuildDir)
         if ($missingStandalone.Count -ne 0) {
             throw "Deploy output is incomplete. Missing: $($missingStandalone -join ', ')"
+        }
+
+        if ($IsPortable) {
+            $verifyPortableScript = Join-Path $ProjectRoot "scripts\verify-portable-package.ps1"
+            $verifyPortableOutput = & $verifyPortableScript -PackageDir $VariantBuildDir
+            foreach ($line in $verifyPortableOutput) {
+                Write-Host "  $line" -ForegroundColor Green
+            }
         }
     }
 
