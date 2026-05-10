@@ -67,6 +67,14 @@ void AppSettings::setVideoFitMode(bool enabled) {
     videoFitMode_ = enabled;
 }
 
+VideoQualitySettings AppSettings::videoQuality() const {
+    return videoQuality_;
+}
+
+void AppSettings::setVideoQuality(VideoQualitySettings quality) {
+    videoQuality_ = quality;
+}
+
 QStringList AppSettings::validateGeneral() const {
     QStringList errors;
     if (receiverName_.trimmed().isEmpty()) {

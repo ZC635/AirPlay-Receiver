@@ -7,6 +7,7 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QComboBox>
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
@@ -40,6 +41,7 @@ QString keyFor(ShortcutAction action) {
     }
     return {};
 }
+
 }
 
 SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
@@ -56,6 +58,29 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
 
     auto *generalLayout = new QFormLayout(generalGroup);
     generalLayout->addRow("Receiver name", receiverNameEdit_);
+
+    auto *videoGroup = new QGroupBox("Video", this);
+    videoGroup->setObjectName("videoSettingsGroup");
+
+    const VideoQualitySettings &vq = settings_.videoQuality();
+
+    videoResolutionCombo_ = new QComboBox(videoGroup);
+    videoResolutionCombo_->setObjectName("videoResolutionCombo");
+    videoResolutionCombo_->addItem("540p", static_cast<int>(VideoResolution::P540));
+    videoResolutionCombo_->addItem("720p", static_cast<int>(VideoResolution::P720));
+    videoResolutionCombo_->addItem("1080p", static_cast<int>(VideoResolution::P1080));
+    videoResolutionCombo_->setCurrentIndex(videoResolutionCombo_->findData(static_cast<int>(vq.resolution)));
+
+    videoFrameRateCombo_ = new QComboBox(videoGroup);
+    videoFrameRateCombo_->setObjectName("videoFrameRateCombo");
+    videoFrameRateCombo_->addItem("15 fps", static_cast<int>(VideoFrameRate::Fps15));
+    videoFrameRateCombo_->addItem("30 fps", static_cast<int>(VideoFrameRate::Fps30));
+    videoFrameRateCombo_->addItem("60 fps", static_cast<int>(VideoFrameRate::Fps60));
+    videoFrameRateCombo_->setCurrentIndex(videoFrameRateCombo_->findData(static_cast<int>(vq.frameRate)));
+
+    auto *videoLayout = new QFormLayout(videoGroup);
+    videoLayout->addRow("Resolution", videoResolutionCombo_);
+    videoLayout->addRow("Frame rate", videoFrameRateCombo_);
 
     auto *hotkeyGroup = new QGroupBox("Hotkey Binding", this);
     hotkeyGroup->setObjectName("hotkeyBindingGroup");
@@ -114,6 +139,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
 
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(generalGroup);
+    layout->addWidget(videoGroup);
     layout->addWidget(hotkeyGroup);
     layout->addWidget(errorLabel_);
     layout->addWidget(buttons);
@@ -132,6 +158,11 @@ void SettingsDialog::accept() {
             candidate.setShortcut(shortcutRow.action, edit->keySequence());
         }
     }
+
+    VideoQualitySettings vq;
+    vq.resolution = static_cast<VideoResolution>(videoResolutionCombo_->currentData().toInt());
+    vq.frameRate = static_cast<VideoFrameRate>(videoFrameRateCombo_->currentData().toInt());
+    candidate.setVideoQuality(vq);
 
     QStringList errors = candidate.validateGeneral();
     errors.append(candidate.validateShortcuts());

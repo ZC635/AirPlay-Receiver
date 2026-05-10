@@ -9,6 +9,7 @@
 #include "backend/ReceiverState.h"
 #include "platform/FakeHotkeyService.h"
 
+#include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -1159,6 +1160,164 @@ private slots:
 
         AppSettingsStore store(path);
         QVERIFY(!store.loadOrDefaults().videoFitMode());
+    }
+
+    void videoQualityChangedWhileIdleAppliesImmediatelyAndPersists() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *resCombo = dialog->findChild<QComboBox *>("videoResolutionCombo");
+            QVERIFY(resCombo != nullptr);
+            resCombo->setCurrentIndex(resCombo->findData(static_cast<int>(VideoResolution::P720)));
+            auto *fpsCombo = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+            QVERIFY(fpsCombo != nullptr);
+            fpsCombo->setCurrentIndex(fpsCombo->findData(static_cast<int>(VideoFrameRate::Fps60)));
+            dialog->accept();
+        });
+
+        button->click();
+
+        const VideoQualitySettings expected{VideoResolution::P720, VideoFrameRate::Fps60};
+        QCOMPARE(receiver.lastAppliedVideoQuality, expected);
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), expected);
+    }
+
+    void videoQualityChangedWhileConnectedCanBeDeferred() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        receiver.forceState(ReceiverState::Connected);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *resCombo = dialog->findChild<QComboBox *>("videoResolutionCombo");
+            QVERIFY(resCombo != nullptr);
+            resCombo->setCurrentIndex(resCombo->findData(static_cast<int>(VideoResolution::P540)));
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                auto *no = box->button(QMessageBox::No);
+                QVERIFY(no != nullptr);
+                no->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        const VideoQualitySettings newQuality{VideoResolution::P540, VideoFrameRate::Fps30};
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), newQuality);
+        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
+
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QCOMPARE(receiver.lastAppliedVideoQuality, newQuality);
+    }
+
+    void videoQualityChangedWhileConnectedAppliesImmediatelyWithYes() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        receiver.forceState(ReceiverState::Connected);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *fpsCombo = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+            QVERIFY(fpsCombo != nullptr);
+            fpsCombo->setCurrentIndex(fpsCombo->findData(static_cast<int>(VideoFrameRate::Fps15)));
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                auto *yes = box->button(QMessageBox::Yes);
+                QVERIFY(yes != nullptr);
+                yes->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        const VideoQualitySettings expected{VideoResolution::P1080, VideoFrameRate::Fps15};
+        QCOMPARE(receiver.lastAppliedVideoQuality, expected);
+        QCOMPARE(receiver.stopCount, 1);
+        QCOMPARE(receiver.startCount, 1);
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), expected);
+    }
+
+    void videoQualityApplyFailureSetsPendingAndShowsStatus() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        const VideoQualitySettings rejected{VideoResolution::P540, VideoFrameRate::Fps30};
+        receiver.rejectedVideoQualities.append(rejected);
+
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *resCombo = dialog->findChild<QComboBox *>("videoResolutionCombo");
+            QVERIFY(resCombo != nullptr);
+            resCombo->setCurrentIndex(resCombo->findData(static_cast<int>(VideoResolution::P540)));
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), rejected);
+        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
+
+        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(label != nullptr);
+        QCOMPARE(label->text(), QString("Could not apply video quality; will retry"));
+
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
+        QCOMPARE(label->text(), QString("Could not apply video quality; will retry"));
+
+        receiver.forceState(ReceiverState::Error);
+
+        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
+        QCOMPARE(label->text(), QString("Could not apply video quality; will retry"));
+    }
+
+    void appliesLoadedVideoQualityToReceiver() {
+        AppSettings settings = AppSettings::defaults();
+        const VideoQualitySettings customQuality{VideoResolution::P720, VideoFrameRate::Fps60};
+        settings.setVideoQuality(customQuality);
+        FakeAirPlayReceiver receiver;
+
+        MainWindow window(settings, nullptr, &receiver);
+
+        QCOMPARE(receiver.lastAppliedVideoQuality, customQuality);
     }
 
     void startupWithVideoFitModeTrueDoesNotSaveUnchangedSettings() {

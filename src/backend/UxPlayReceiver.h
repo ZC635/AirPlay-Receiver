@@ -16,6 +16,7 @@ struct UxPlayReceiverConfig {
     QString videoSink = "autovideosink";
     QString audioSink = "autoaudiosink";
     int basePort = 0;
+    VideoQualitySettings videoQuality;
 };
 
 class UxPlayReceiver : public AirPlayReceiver {
@@ -34,6 +35,7 @@ public:
     ReceiverState state() const override;
     QString receiverName() const override;
     bool applyReceiverName(const QString &name) override;
+    bool applyVideoQuality(const VideoQualitySettings &quality) override;
 #if AIRPLAY_WITH_UXPLAY
     void setStateFromUxPlayCallback(ReceiverState state);
     void setStateFromUxPlayCallback(ReceiverState state, quint64 generation);

@@ -22,6 +22,27 @@ private slots:
         QCOMPARE(args.at(0).toInt(), 1170);
         QCOMPARE(args.at(1).toInt(), 2532);
     }
+
+    void fakeRejectsVideoQualityWhileStartingOrError() {
+        FakeAirPlayReceiver receiver;
+        const VideoQualitySettings quality{VideoResolution::P720, VideoFrameRate::Fps60};
+        const VideoQualitySettings defaultQuality;
+
+        receiver.forceState(ReceiverState::Starting);
+
+        QVERIFY(!receiver.applyVideoQuality(quality));
+        QCOMPARE(receiver.lastAppliedVideoQuality, defaultQuality);
+
+        receiver.forceState(ReceiverState::Error);
+
+        QVERIFY(!receiver.applyVideoQuality(quality));
+        QCOMPARE(receiver.lastAppliedVideoQuality, defaultQuality);
+
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QVERIFY(receiver.applyVideoQuality(quality));
+        QCOMPARE(receiver.lastAppliedVideoQuality, quality);
+    }
 };
 
 QTEST_MAIN(AirPlayReceiverTest)

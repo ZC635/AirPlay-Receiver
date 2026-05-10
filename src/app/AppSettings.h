@@ -7,6 +7,7 @@
 #include <QVector>
 #include "app/ShortcutAction.h"
 #include "app/ShortcutBinding.h"
+#include "backend/VideoQualitySettings.h"
 
 class AppKeySequence : public QKeySequence {
 public:
@@ -31,6 +32,8 @@ public:
     void setAspectRatioLock(bool enabled);
     bool videoFitMode() const;
     void setVideoFitMode(bool enabled);
+    VideoQualitySettings videoQuality() const;
+    void setVideoQuality(VideoQualitySettings quality);
     QStringList validateGeneral() const;
     QStringList validateShortcuts() const;
 
@@ -40,4 +43,5 @@ private:
     QString receiverName_ = "AirPlay Receiver";
     bool aspectRatioLock_ = false;
     bool videoFitMode_ = false;
+    VideoQualitySettings videoQuality_;
 };

@@ -5,6 +5,7 @@
 #include <QDialog>
 #include <QHash>
 
+class QComboBox;
 class QLabel;
 class QKeySequenceEdit;
 class QLineEdit;
@@ -26,4 +27,6 @@ private:
     QTableWidget *table_;
     QLabel *errorLabel_;
     QHash<int, QKeySequenceEdit *> shortcutEdits_;
+    QComboBox *videoResolutionCombo_;
+    QComboBox *videoFrameRateCombo_;
 };

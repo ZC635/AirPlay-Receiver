@@ -5,6 +5,7 @@
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
+#include <optional>
 
 enum class ReceiverState;
 class AirPlayReceiver;
@@ -36,7 +37,10 @@ private:
     void handleReceiverNameChange(const QString &receiverName);
     bool applyReceiverNameNow(const QString &receiverName, bool revertOnFailure = true);
     void revertReceiverNameToDefaultAfterApplyFailure();
-    void applyPendingReceiverNameIfNeeded(bool wasRenameBlocked);
+    void applyPendingReceiverNameIfNeeded(bool wasSessionActive);
+    void handleVideoQualityChange(const VideoQualitySettings &quality);
+    bool applyVideoQualityNow(const VideoQualitySettings &quality);
+    void applyPendingVideoQualityIfReady();
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
@@ -55,10 +59,12 @@ private:
     QString currentError_;
     QString settingsPath_;
     bool receiverConnected_ = false;
-    bool receiverRenameBlocked_ = false;
+    bool receiverSessionActive_ = false;
     int videoWidth_ = 0;
     int videoHeight_ = 0;
     bool aspectRatioLock_ = false;
     bool alwaysOnTopEnabled_ = false;
     bool videoFitMode_ = false;
+    VideoQualitySettings activeVideoQuality_;
+    std::optional<VideoQualitySettings> pendingVideoQuality_;
 };

@@ -365,9 +365,10 @@ void UxPlayReceiver::start() {
     const QByteArray serverName = m_config.serverName.toUtf8();
     const QByteArray videoSink = m_config.videoSink.toUtf8();
     const QByteArray audioSink = m_config.audioSink.toUtf8();
+    const bool h265Support = videoQualityH265Support();
     videoflip_t videoFlip[2] = {NONE, NONE};
     if (video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
-                             "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
+                             "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, h265Support, false,
                              kPlaybinVersion, nullptr) != 0) {
         m_acceptingCallbacks.store(false);
         setError("Failed to initialize GStreamer video renderer");
@@ -441,6 +442,11 @@ void UxPlayReceiver::start() {
     unsigned short port = static_cast<unsigned short>(m_config.basePort > 0 ? m_config.basePort : kDynamicPort);
     raop_set_port(raop, port);
     m_raopPort = port;
+
+    raop_set_plist(raop, "width", videoQualityWidth(m_config.videoQuality.resolution));
+    raop_set_plist(raop, "height", videoQualityHeight(m_config.videoQuality.resolution));
+    raop_set_plist(raop, "refreshRate", videoQualityRefreshRate(m_config.videoQuality.frameRate));
+    raop_set_plist(raop, "maxFPS", videoQualityMaxFPS(m_config.videoQuality.frameRate));
 
     if (!createDiscoveryBroadcast()) {
         cleanupUxPlay();
@@ -572,6 +578,67 @@ bool UxPlayReceiver::applyReceiverName(const QString &name) {
 #endif
 }
 
+bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
+    if (m_config.videoQuality == quality) {
+        debugLog("applyVideoQuality: quality unchanged");
+        return true;
+    }
+
+    debugLog("applyVideoQuality: applying new quality, state=%d", static_cast<int>(m_state));
+
+    if (m_state == ReceiverState::Idle) {
+        m_config.videoQuality = quality;
+        debugLog("applyVideoQuality: Idle state, quality stored");
+        return true;
+    }
+
+    if (m_state == ReceiverState::Error || m_state == ReceiverState::Starting) {
+        debugLog("applyVideoQuality: rejected in Error/Starting state");
+        return false;
+    }
+
+    const VideoQualitySettings previousQuality = m_config.videoQuality;
+    m_config.videoQuality = quality;
+
+    if (m_state == ReceiverState::Discoverable) {
+#if AIRPLAY_WITH_UXPLAY
+        if (m_raop) {
+            auto *raop = static_cast<raop_t *>(m_raop);
+            raop_set_plist(raop, "width", videoQualityWidth(quality.resolution));
+            raop_set_plist(raop, "height", videoQualityHeight(quality.resolution));
+            raop_set_plist(raop, "refreshRate", videoQualityRefreshRate(quality.frameRate));
+            raop_set_plist(raop, "maxFPS", videoQualityMaxFPS(quality.frameRate));
+        }
+        if (!restartDiscoveryBroadcast()) {
+            debugLog("applyVideoQuality: restartDiscoveryBroadcast() failed, reverting quality");
+            m_config.videoQuality = previousQuality;
+            return false;
+        }
+        debugLog("applyVideoQuality: Discoverable state, discovery restart scheduled");
+        return true;
+#else
+        debugLog("applyVideoQuality: non-UXPlay path, returning true");
+        return true;
+#endif
+    }
+
+    if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
+        debugLog("applyVideoQuality: Connected/Connecting state, restarting receiver");
+        stop();
+        start();
+        if (m_state == ReceiverState::Error) {
+            debugLog("applyVideoQuality: restart failed, reverting quality");
+            m_config.videoQuality = previousQuality;
+            return false;
+        }
+        debugLog("applyVideoQuality: receiver restarted successfully");
+        return true;
+    }
+
+    debugLog("applyVideoQuality: unexpected state, storing quality and returning true");
+    return true;
+}
+
 #if AIRPLAY_WITH_UXPLAY
 void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state) {
     setStateFromUxPlayCallback(state, m_callbackGeneration.load());
@@ -645,9 +712,10 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
         auto *logger = static_cast<logger_t *>(m_logger);
         const QByteArray serverName = m_config.serverName.toUtf8();
         const QByteArray videoSink = m_config.videoSink.toUtf8();
+        const bool h265Support = videoQualityH265Support();
         videoflip_t videoFlip[2] = {NONE, NONE};
         video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
-                            "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, false, false,
+                            "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, h265Support, false,
                             kPlaybinVersion, nullptr);
         applyVideoFitModeToRenderer();
         video_renderer_start();
@@ -833,6 +901,8 @@ bool UxPlayReceiver::createDiscoveryBroadcast() {
 
     m_dnssd = dnssd;
     raop_set_dnssd(static_cast<raop_t *>(m_raop), dnssd);
+    const bool h265Support = videoQualityH265Support();
+    dnssd_set_airplay_features(dnssd, 42, h265Support ? 1 : 0);
     debugLog("createDiscoveryBroadcast: success");
     return true;
 }

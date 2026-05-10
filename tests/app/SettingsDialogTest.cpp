@@ -1,5 +1,6 @@
 #include <QtTest/QtTest>
 
+#include <QComboBox>
 #include <QGroupBox>
 #include <QKeySequenceEdit>
 #include <QLabel>
@@ -8,6 +9,7 @@
 #include <QTableWidget>
 
 #include "app/SettingsDialog.h"
+#include "backend/VideoQualitySettings.h"
 
 class SettingsDialogTest : public QObject {
     Q_OBJECT
@@ -149,6 +151,46 @@ private slots:
         auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
         QVERIFY(error != nullptr);
         QVERIFY(error->text().contains("single key combination"));
+    }
+
+    void showsVideoSettingsSection() {
+        SettingsDialog dialog(AppSettings::defaults());
+
+        QVERIFY(dialog.findChild<QGroupBox *>("videoSettingsGroup") != nullptr);
+        QVERIFY(dialog.findChild<QComboBox *>("videoResolutionCombo") != nullptr);
+        QVERIFY(dialog.findChild<QComboBox *>("videoFrameRateCombo") != nullptr);
+    }
+
+    void exposesAcceptedVideoSettings() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *resolution = dialog.findChild<QComboBox *>("videoResolutionCombo");
+        auto *frameRate = dialog.findChild<QComboBox *>("videoFrameRateCombo");
+        QVERIFY(resolution != nullptr);
+        QVERIFY(frameRate != nullptr);
+
+        resolution->setCurrentText("720p");
+        frameRate->setCurrentText("15 fps");
+        dialog.accept();
+
+        const VideoQualitySettings quality = dialog.settings().videoQuality();
+        QCOMPARE(quality.resolution, VideoResolution::P720);
+        QCOMPARE(quality.frameRate, VideoFrameRate::Fps15);
+    }
+
+    void initializesFromAppSettings() {
+        AppSettings settings = AppSettings::defaults();
+        VideoQualitySettings vqs;
+        vqs.resolution = VideoResolution::P540;
+        vqs.frameRate = VideoFrameRate::Fps60;
+        settings.setVideoQuality(vqs);
+
+        SettingsDialog dialog(settings);
+
+        auto *resolution = dialog.findChild<QComboBox *>("videoResolutionCombo");
+        auto *frameRate = dialog.findChild<QComboBox *>("videoFrameRateCombo");
+
+        QCOMPARE(resolution->currentText(), "540p");
+        QCOMPARE(frameRate->currentText(), "60 fps");
     }
 };
 

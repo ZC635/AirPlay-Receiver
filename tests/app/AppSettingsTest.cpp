@@ -1,10 +1,30 @@
 #include <QtTest/QtTest>
 #include "app/AppSettings.h"
+#include "backend/VideoQualitySettings.h"
 
 class AppSettingsTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void videoQualityDefaultsAreP1080Fps30() {
+        const AppSettings settings = AppSettings::defaults();
+        const VideoQualitySettings quality = settings.videoQuality();
+        QCOMPARE(quality.resolution, VideoResolution::P1080);
+        QCOMPARE(quality.frameRate, VideoFrameRate::Fps30);
+    }
+
+    void videoQualitySetterAndGetter() {
+        AppSettings settings = AppSettings::defaults();
+        VideoQualitySettings quality;
+        quality.resolution = VideoResolution::P720;
+        quality.frameRate = VideoFrameRate::Fps15;
+
+        settings.setVideoQuality(quality);
+
+        QCOMPARE(settings.videoQuality().resolution, VideoResolution::P720);
+        QCOMPARE(settings.videoQuality().frameRate, VideoFrameRate::Fps15);
+    }
+
     void defaultShortcutsContainRequestedActions() {
         const AppSettings settings = AppSettings::defaults();
         QCOMPARE(settings.shortcuts().size(), 6);

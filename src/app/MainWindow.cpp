@@ -183,6 +183,11 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     applyAspectRatioLock(settings_.aspectRatioLock());
     applyVideoFitMode(settings_.videoFitMode());
 
+    activeVideoQuality_ = settings_.videoQuality();
+    if (receiver_ != nullptr) {
+        receiver_->applyVideoQuality(activeVideoQuality_);
+    }
+
     setVolume(settings_.volume());
 
     const bool hotkeysOk = registerHotkeys();
@@ -331,11 +336,11 @@ void MainWindow::handleReceiverNameChange(const QString &receiverName) {
         return;
     }
 
-    if (receiverRenameBlocked_) {
+    if (receiverSessionActive_) {
         const auto answer = QMessageBox::question(
             this,
             "Apply receiver name",
-            "Applying the new receiver name now will disconnect the current iPhone. Apply now?",
+            "Applying the new receiver name now will disconnect the connected device. Apply now?",
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
         if (answer != QMessageBox::Yes) {
@@ -381,8 +386,8 @@ void MainWindow::revertReceiverNameToDefaultAfterApplyFailure() {
     statusLabel_->setText("Could not apply receiver name; reverted to default");
 }
 
-void MainWindow::applyPendingReceiverNameIfNeeded(bool wasRenameBlocked) {
-    if (!wasRenameBlocked || receiverRenameBlocked_ || pendingReceiverName_.isEmpty()) {
+void MainWindow::applyPendingReceiverNameIfNeeded(bool wasSessionActive) {
+    if (!wasSessionActive || receiverSessionActive_ || pendingReceiverName_.isEmpty()) {
         return;
     }
 
@@ -395,10 +400,67 @@ void MainWindow::applyPendingReceiverNameIfNeeded(bool wasRenameBlocked) {
     }
 }
 
+void MainWindow::handleVideoQualityChange(const VideoQualitySettings &quality) {
+    if (quality == activeVideoQuality_) {
+        pendingVideoQuality_.reset();
+        return;
+    }
+
+    if (pendingVideoQuality_.has_value() && quality == *pendingVideoQuality_) {
+        return;
+    }
+
+    if (receiver_ == nullptr) {
+        activeVideoQuality_ = quality;
+        pendingVideoQuality_.reset();
+        return;
+    }
+
+    if (receiverSessionActive_) {
+        const auto answer = QMessageBox::question(
+            this,
+            "Apply video quality",
+            "Applying the new video quality now will restart AirPlay and disconnect the connected device. Apply now?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            pendingVideoQuality_ = quality;
+            return;
+        }
+    }
+
+    pendingVideoQuality_.reset();
+    if (!applyVideoQualityNow(quality)) {
+        pendingVideoQuality_ = quality;
+        statusLabel_->setText("Could not apply video quality; will retry");
+    }
+}
+
+void MainWindow::applyPendingVideoQualityIfReady() {
+    if (receiverSessionActive_ || !pendingVideoQuality_.has_value()) {
+        return;
+    }
+
+    const VideoQualitySettings quality = *pendingVideoQuality_;
+    if (applyVideoQualityNow(quality)) {
+        pendingVideoQuality_.reset();
+    } else if (receiver_ != nullptr) {
+        statusLabel_->setText("Could not apply video quality; will retry");
+    }
+}
+
+bool MainWindow::applyVideoQualityNow(const VideoQualitySettings &quality) {
+    if (receiver_ != nullptr && !receiver_->applyVideoQuality(quality)) {
+        return false;
+    }
+    activeVideoQuality_ = quality;
+    return true;
+}
+
 void MainWindow::updateReceiverState(ReceiverState state) {
-    const bool wasRenameBlocked = receiverRenameBlocked_;
+    const bool wasSessionActive = receiverSessionActive_;
     receiverConnected_ = state == ReceiverState::Connected;
-    receiverRenameBlocked_ = state == ReceiverState::Connecting || state == ReceiverState::Connected;
+    receiverSessionActive_ = state == ReceiverState::Connecting || state == ReceiverState::Connected;
     const bool showToolbar = !receiverConnected_;
     toolbar_->setVisible(showToolbar);
     statusLabel_->setVisible(showToolbar);
@@ -427,7 +489,8 @@ void MainWindow::updateReceiverState(ReceiverState state) {
         break;
     }
 
-    applyPendingReceiverNameIfNeeded(wasRenameBlocked);
+    applyPendingReceiverNameIfNeeded(wasSessionActive);
+    applyPendingVideoQualityIfReady();
 }
 
 void MainWindow::showSettingsDialog() {
@@ -451,6 +514,7 @@ void MainWindow::showSettingsDialog() {
         statusLabel_->setText("Could not save settings");
     }
     handleReceiverNameChange(settings_.receiverName());
+    handleVideoQualityChange(settings_.videoQuality());
 }
 
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {

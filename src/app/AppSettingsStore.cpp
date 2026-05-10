@@ -19,6 +19,36 @@ QString keyFor(ShortcutAction action) {
     }
     return {};
 }
+
+QString resolutionToString(VideoResolution res) {
+    switch (res) {
+    case VideoResolution::P540: return "540p";
+    case VideoResolution::P720: return "720p";
+    default: return "1080p";
+    }
+}
+
+VideoResolution resolutionFromString(const QString &s) {
+    if (s == "540p") return VideoResolution::P540;
+    if (s == "720p") return VideoResolution::P720;
+    if (s == "1080p") return VideoResolution::P1080;
+    return VideoResolution::P1080;
+}
+
+int frameRateToInt(VideoFrameRate fr) {
+    switch (fr) {
+    case VideoFrameRate::Fps15: return 15;
+    case VideoFrameRate::Fps60: return 60;
+    default: return 30;
+    }
+}
+
+VideoFrameRate frameRateFromInt(int value) {
+    if (value == 15) return VideoFrameRate::Fps15;
+    if (value == 60) return VideoFrameRate::Fps60;
+    if (value == 30) return VideoFrameRate::Fps30;
+    return VideoFrameRate::Fps30;
+}
 }
 
 AppSettingsStore::AppSettingsStore(QString path)
@@ -63,6 +93,20 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     if (videoFit.isBool()) {
         settings.setVideoFitMode(videoFit.toBool());
     }
+    const QJsonValue videoQualityVal = root.value("videoQuality");
+    if (videoQualityVal.isObject()) {
+        const QJsonObject vqObj = videoQualityVal.toObject();
+        VideoQualitySettings vq = settings.videoQuality();
+        const QJsonValue resolutionVal = vqObj.value("resolution");
+        if (resolutionVal.isString()) {
+            vq.resolution = resolutionFromString(resolutionVal.toString());
+        }
+        const QJsonValue frameRateVal = vqObj.value("frameRate");
+        if (frameRateVal.isDouble()) {
+            vq.frameRate = frameRateFromInt(frameRateVal.toInt());
+        }
+        settings.setVideoQuality(vq);
+    }
     return settings;
 }
 
@@ -72,12 +116,17 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
         shortcuts.insert(keyFor(binding.action), binding.sequence.toString(QKeySequence::PortableText));
     }
 
+    QJsonObject videoQuality;
+    videoQuality.insert("resolution", resolutionToString(settings.videoQuality().resolution));
+    videoQuality.insert("frameRate", frameRateToInt(settings.videoQuality().frameRate));
+
     QJsonObject root;
     root.insert("receiverName", settings.receiverName());
     root.insert("shortcuts", shortcuts);
     root.insert("volume", settings.volume());
     root.insert("aspectRatioLock", settings.aspectRatioLock());
     root.insert("videoFitMode", settings.videoFitMode());
+    root.insert("videoQuality", videoQuality);
 
     QSaveFile file(path_);
     if (!file.open(QIODevice::WriteOnly)) {

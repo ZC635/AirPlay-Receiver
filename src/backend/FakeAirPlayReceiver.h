@@ -4,6 +4,7 @@
 
 #include <QImage>
 #include <QStringList>
+#include <QVector>
 #include <functional>
 
 class FakeAirPlayReceiver : public AirPlayReceiver {
@@ -39,6 +40,27 @@ public:
     void setVideoFitMode(bool enabled) override { m_videoFitMode = enabled; }
 
     bool lastVideoFitMode() const { return m_videoFitMode; }
+
+    bool applyVideoQuality(const VideoQualitySettings &quality) override {
+        if (lastAppliedVideoQuality == quality) {
+            return true;
+        }
+        if (m_state == ReceiverState::Error || m_state == ReceiverState::Starting) {
+            return false;
+        }
+        if (rejectedVideoQualities.contains(quality)) {
+            return false;
+        }
+        lastAppliedVideoQuality = quality;
+        if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
+            stop();
+            start();
+        }
+        return true;
+    }
+
+    VideoQualitySettings lastAppliedVideoQuality;
+    QVector<VideoQualitySettings> rejectedVideoQualities;
 
     WId videoSurfaceId() const { return m_videoSurfaceId; }
 

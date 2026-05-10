@@ -276,6 +276,107 @@ private slots:
         const AppSettings defaults = AppSettings::defaults();
         QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), defaults.shortcutFor(ShortcutAction::ToggleToolbar));
     }
+
+    void savesAndLoadsVideoQuality() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        VideoQualitySettings quality;
+        quality.resolution = VideoResolution::P720;
+        quality.frameRate = VideoFrameRate::Fps15;
+        settings.setVideoQuality(quality);
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.videoQuality(), quality);
+    }
+
+    void malformedVideoQualityFallsBackToDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"videoQuality":{"resolution":"999p","frameRate":"fast"}})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        QCOMPARE(store.loadOrDefaults().videoQuality(), AppSettings::defaults().videoQuality());
+    }
+
+    void savesVideoQualityJsonFormat() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        VideoQualitySettings quality;
+        quality.resolution = VideoResolution::P1080;
+        quality.frameRate = VideoFrameRate::Fps30;
+        settings.setVideoQuality(quality);
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+        const QJsonObject vq = root.value("videoQuality").toObject();
+
+        QCOMPARE(vq.value("resolution").toString(), QString("1080p"));
+        QCOMPARE(vq.value("frameRate").toInt(), 30);
+        QVERIFY(!vq.contains("codec"));
+        QVERIFY(!vq.contains("bitrate"));
+    }
+
+    void staleCodecAndBitrateKeysAreIgnored() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"videoQuality":{"resolution":"720p","frameRate":15,"codec":"hevc","bitrate":"extreme"}})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        const VideoQualitySettings loaded = store.loadOrDefaults().videoQuality();
+        QCOMPARE(loaded.resolution, VideoResolution::P720);
+        QCOMPARE(loaded.frameRate, VideoFrameRate::Fps15);
+    }
+
+    void malformedVideoQualityResolutionDefaults() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"videoQuality":{"resolution":"banana","frameRate":30}})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        QCOMPARE(store.loadOrDefaults().videoQuality().resolution, VideoResolution::P1080);
+    }
+
+    void malformedVideoQualityFrameRateDefaults() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"videoQuality":{"resolution":"540p","frameRate":999}})") > 0);
+        file.close();
+
+        AppSettingsStore store(path);
+        QCOMPARE(store.loadOrDefaults().videoQuality().frameRate, VideoFrameRate::Fps30);
+    }
 };
 
 QTEST_MAIN(AppSettingsStoreTest)

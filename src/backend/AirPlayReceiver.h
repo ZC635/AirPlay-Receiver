@@ -7,6 +7,7 @@
 #include <functional>
 
 #include "backend/ReceiverState.h"
+#include "backend/VideoQualitySettings.h"
 
 class AirPlayReceiver : public QObject {
     Q_OBJECT
@@ -24,6 +25,7 @@ public:
     virtual void setVideoSurface(WId id) { Q_UNUSED(id); }
     virtual void setVideoFrameCallback(FrameCallback callback) { Q_UNUSED(callback); }
     virtual void setVideoFitMode(bool enabled) { Q_UNUSED(enabled); }
+    virtual bool applyVideoQuality(const VideoQualitySettings &quality) { Q_UNUSED(quality); return true; }
 
 signals:
     void stateChanged(ReceiverState state);
