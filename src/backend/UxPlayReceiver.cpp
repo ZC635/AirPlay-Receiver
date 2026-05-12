@@ -1,4 +1,6 @@
 #include "backend/UxPlayReceiver.h"
+#include "backend/DiscoveryRestartController.h"
+#include "backend/ReceiverStatePolicy.h"
 #include "backend/VideoFrameBridge.h"
 
 #include <QByteArray>
@@ -321,7 +323,11 @@ int videoSetCodec(void *cls, video_codec_t codec) {
 #endif
 
 UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
-    : AirPlayReceiver(parent), m_config(std::move(config)) {}
+    : AirPlayReceiver(parent), m_config(std::move(config)) {
+#if AIRPLAY_WITH_UXPLAY
+    m_discoveryRestartController = new DiscoveryRestartController(2000, this);
+#endif
+}
 
 UxPlayReceiver::~UxPlayReceiver() {
 #if AIRPLAY_WITH_UXPLAY
@@ -524,83 +530,90 @@ QString UxPlayReceiver::receiverName() const {
 }
 
 bool UxPlayReceiver::applyReceiverName(const QString &name) {
-    const QString trimmed = name.trimmed();
-    if (trimmed.isEmpty()) {
-        debugLog("applyReceiverName: rejected empty name");
+    const auto result = decideReceiverNameChange(m_state, m_config.serverName, name);
+
+    switch (result.action) {
+    case ReceiverPolicyAction::Reject: {
+        debugLog("applyReceiverName: rejected %s", name.trimmed().isEmpty() ? "empty name" : "name");
         return false;
     }
-    if (m_config.serverName == trimmed) {
-        debugLog("applyReceiverName: name unchanged \"%s\"", qPrintable(trimmed));
+    case ReceiverPolicyAction::Noop: {
+        debugLog("applyReceiverName: name unchanged \"%s\"", qPrintable(m_config.serverName));
         return true;
     }
-
-    const QString previousName = m_config.serverName;
-    m_config.serverName = trimmed;
-    debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(trimmed), static_cast<int>(m_state));
-
-    if (m_state == ReceiverState::Idle) {
+    case ReceiverPolicyAction::StoreOnly: {
+        m_config.serverName = result.normalizedName;
         debugLog("applyReceiverName: Idle state, name stored, no restart needed");
         return true;
     }
+    case ReceiverPolicyAction::RestartDiscoveryConnected: {
+        m_config.serverName = result.normalizedName;
+        debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(result.normalizedName), static_cast<int>(m_state));
 
-    if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
+#if AIRPLAY_WITH_UXPLAY
         debugLog("applyReceiverName: Connected/Connecting state, restarting discovery broadcast");
         if (!restartDiscoveryBroadcast()) {
             debugLog("applyReceiverName: restartDiscoveryBroadcast() failed, reverting name");
-            m_config.serverName = previousName;
+            m_config.serverName = result.rollbackName;
             return false;
         }
         debugLog("applyReceiverName: restartDiscoveryBroadcast() succeeded in Connected state");
+#else
+        debugLog("applyReceiverName: non-UXPlay path, returning true");
+#endif
+        return true;
+    }
+    case ReceiverPolicyAction::RestartDiscovery: {
+        m_config.serverName = result.normalizedName;
+        debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(result.normalizedName), static_cast<int>(m_state));
+
+#if AIRPLAY_WITH_UXPLAY
+        if (!restartDiscoveryBroadcast(result.rollbackName)) {
+            debugLog("applyReceiverName: restartDiscoveryBroadcast() failed, reverting name");
+            m_config.serverName = result.rollbackName;
+            if (!restartDiscoveryBroadcast()) {
+                debugLog("applyReceiverName: recovery restartDiscoveryBroadcast() also failed");
+                setError("Failed to recover discovery after receiver rename failure");
+                setState(ReceiverState::Error);
+            }
+            return false;
+        }
+        debugLog("applyReceiverName: restartDiscoveryBroadcast() succeeded");
+#else
+        debugLog("applyReceiverName: non-UXPlay path, returning true");
+#endif
+        return true;
+    }
+    case ReceiverPolicyAction::RestartReceiver:
+        debugLog("applyReceiverName: unexpected RestartReceiver for name change");
         return true;
     }
 
-#if AIRPLAY_WITH_UXPLAY
-    debugLog("applyReceiverName: Discoverable state, restarting discovery broadcast");
-    if (m_pendingDiscoveryRecoveryName.isEmpty()) {
-        m_pendingDiscoveryRecoveryName = previousName;
-    }
-    if (!restartDiscoveryBroadcast()) {
-        debugLog("applyReceiverName: restartDiscoveryBroadcast() failed, reverting name");
-        m_config.serverName = previousName;
-        m_pendingDiscoveryRecoveryName.clear();
-        if (!restartDiscoveryBroadcast()) {
-            debugLog("applyReceiverName: recovery restartDiscoveryBroadcast() also failed");
-            setError("Failed to recover discovery after receiver rename failure");
-            setState(ReceiverState::Error);
-        }
-        return false;
-    }
-    debugLog("applyReceiverName: restartDiscoveryBroadcast() succeeded");
-    return true;
-#else
-    debugLog("applyReceiverName: non-UXPlay path, returning true");
-    return true;
-#endif
+    return false;
 }
 
 bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
-    if (m_config.videoQuality == quality) {
+    const auto result = decideVideoQualityChange(m_state, m_config.videoQuality, quality);
+
+    switch (result.action) {
+    case ReceiverPolicyAction::Reject: {
+        debugLog("applyVideoQuality: rejected in %s state",
+                 m_state == ReceiverState::Error ? "Error" : "Starting");
+        return false;
+    }
+    case ReceiverPolicyAction::Noop: {
         debugLog("applyVideoQuality: quality unchanged");
         return true;
     }
-
-    debugLog("applyVideoQuality: applying new quality, state=%d", static_cast<int>(m_state));
-
-    if (m_state == ReceiverState::Idle) {
+    case ReceiverPolicyAction::StoreOnly: {
         m_config.videoQuality = quality;
         debugLog("applyVideoQuality: Idle state, quality stored");
         return true;
     }
+    case ReceiverPolicyAction::RestartDiscovery: {
+        const VideoQualitySettings previousQuality = m_config.videoQuality;
+        m_config.videoQuality = quality;
 
-    if (m_state == ReceiverState::Error || m_state == ReceiverState::Starting) {
-        debugLog("applyVideoQuality: rejected in Error/Starting state");
-        return false;
-    }
-
-    const VideoQualitySettings previousQuality = m_config.videoQuality;
-    m_config.videoQuality = quality;
-
-    if (m_state == ReceiverState::Discoverable) {
 #if AIRPLAY_WITH_UXPLAY
         if (m_raop) {
             auto *raop = static_cast<raop_t *>(m_raop);
@@ -615,14 +628,15 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
             return false;
         }
         debugLog("applyVideoQuality: Discoverable state, discovery restart scheduled");
-        return true;
 #else
         debugLog("applyVideoQuality: non-UXPlay path, returning true");
-        return true;
 #endif
+        return true;
     }
+    case ReceiverPolicyAction::RestartReceiver: {
+        const VideoQualitySettings previousQuality = m_config.videoQuality;
+        m_config.videoQuality = quality;
 
-    if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
         debugLog("applyVideoQuality: Connected/Connecting state, restarting receiver");
         stop();
         start();
@@ -633,6 +647,7 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
         }
         debugLog("applyVideoQuality: receiver restarted successfully");
         return true;
+    }
     }
 
     debugLog("applyVideoQuality: unexpected state, storing quality and returning true");
@@ -994,148 +1009,73 @@ void UxPlayReceiver::destroyDiscoveryBroadcast() {
     m_dnssd = nullptr;
 }
 
-bool UxPlayReceiver::restartDiscoveryBroadcast() {
-    if (m_discoveryRestartPending.exchange(true)) {
-        debugLog("restartDiscoveryBroadcast: restart already pending, name will be applied");
-        return true;
-    }
+bool UxPlayReceiver::restartDiscoveryBroadcast(const QString &recoveryName) {
+    const bool shouldStartHttpd = m_raopHttpdStarted || m_state == ReceiverState::Discoverable;
 
-    if (!m_raop || !m_raopPort) {
-        debugLog("restartDiscoveryBroadcast: cannot restart, raop=%p port=%u", m_raop, m_raopPort);
-        m_discoveryRestartPending.store(false);
-        setError("Cannot restart discovery before RAOP HTTP server is ready");
+    DiscoveryRestartOperations ops;
+    const auto guarded = QPointer<UxPlayReceiver>(this);
+
+    ops.canRestart = [this] {
+        return m_raop != nullptr && m_raopPort != 0;
+    };
+    ops.stopHttpdIfStarted = [this] {
         if (m_raop && m_raopHttpdStarted) {
             raop_stop_httpd(static_cast<raop_t *>(m_raop));
             m_raopHttpdStarted = false;
         }
-        stopDiscoveryBroadcast();
-        return false;
-    }
-
-    const bool shouldStartHttpd = m_raopHttpdStarted || m_state == ReceiverState::Discoverable;
-    if (m_raopHttpdStarted) {
-        raop_stop_httpd(static_cast<raop_t *>(m_raop));
-        m_raopHttpdStarted = false;
-    }
-
-    unregisterDiscoveryBroadcast();
-
-    if (!m_discoveryRestartTimer) {
-        m_discoveryRestartTimer = new QTimer(this);
-        m_discoveryRestartTimer->setSingleShot(true);
-    } else {
-        QObject::disconnect(m_discoveryRestartTimer, &QTimer::timeout, this, nullptr);
-    }
-
-    const auto guarded = QPointer<UxPlayReceiver>(this);
-    QObject::connect(m_discoveryRestartTimer, &QTimer::timeout, this, [this, shouldStartHttpd, guarded] {
-        if (!guarded) {
-            return;
-        }
-        if (!m_acceptingCallbacks.load()) {
-            m_discoveryRestartPending.store(false);
-            return;
-        }
-        if (!m_raop) {
-            setError("RAOP context missing during discovery restart");
-            setState(ReceiverState::Error);
-            m_discoveryRestartPending.store(false);
-            return;
-        }
-
+    };
+    ops.unregisterBroadcast = [this] {
+        unregisterDiscoveryBroadcast();
+    };
+    ops.destroyBroadcast = [this, guarded] {
+        if (!guarded) return;
         destroyDiscoveryBroadcast();
-
-        if (!createDiscoveryBroadcast()) {
-            if (!m_pendingDiscoveryRecoveryName.isEmpty()) {
-                const QString recoveryName = m_pendingDiscoveryRecoveryName;
-                m_pendingDiscoveryRecoveryName.clear();
-                m_config.serverName = recoveryName;
-                if (!createDiscoveryBroadcast()) {
-                    setError("Failed to recover discovery after receiver rename failure");
-                    setState(ReceiverState::Error);
-                    m_discoveryRestartPending.store(false);
-                    return;
-                }
-            } else {
-                setError("Failed to create discovery broadcast after restart");
-                setState(ReceiverState::Error);
-                m_discoveryRestartPending.store(false);
-                return;
-            }
+    };
+    ops.createBroadcast = [this, guarded] {
+        if (!guarded) return false;
+        if (!m_raop) return false;
+        return createDiscoveryBroadcast();
+    };
+    ops.startHttpdIfNeeded = [this, guarded] {
+        if (!guarded) return false;
+        if (!m_raop) return false;
+        unsigned short port = m_raopPort;
+        if (raop_start_httpd(static_cast<raop_t *>(m_raop), &port) < 0) {
+            return false;
         }
+        raop_set_port(static_cast<raop_t *>(m_raop), port);
+        m_raopPort = port;
+        m_raopHttpdStarted = true;
+        return true;
+    };
+    ops.registerBroadcast = [this, guarded] {
+        if (!guarded) return false;
+        if (!m_raop) return false;
+        return registerDiscoveryBroadcast(m_raopPort);
+    };
+    ops.restoreReceiverName = [this](QString name) {
+        m_config.serverName = std::move(name);
+    };
+    ops.fail = [this](QString msg) {
+        setError(std::move(msg));
+        setState(ReceiverState::Error);
+    };
+    ops.canContinue = [guarded, this] {
+        return guarded && m_acceptingCallbacks.load();
+    };
 
-        if (shouldStartHttpd) {
-            unsigned short port = m_raopPort;
-            if (raop_start_httpd(static_cast<raop_t *>(m_raop), &port) < 0) {
-                setError("Failed to restart RAOP HTTP server");
-                stopDiscoveryBroadcast();
-                m_discoveryRestartPending.store(false);
-                return;
-            }
-            raop_set_port(static_cast<raop_t *>(m_raop), port);
-            m_raopPort = port;
-            m_raopHttpdStarted = true;
-        }
-
-        if (!registerDiscoveryBroadcast(m_raopPort)) {
-            if (m_raopHttpdStarted) {
-                raop_stop_httpd(static_cast<raop_t *>(m_raop));
-                m_raopHttpdStarted = false;
-            }
-            stopDiscoveryBroadcast();
-            if (!m_pendingDiscoveryRecoveryName.isEmpty()) {
-                const QString recoveryName = m_pendingDiscoveryRecoveryName;
-                m_pendingDiscoveryRecoveryName.clear();
-                m_config.serverName = recoveryName;
-                if (createDiscoveryBroadcast()) {
-                    unsigned short port = m_raopPort;
-                    if (raop_start_httpd(static_cast<raop_t *>(m_raop), &port) >= 0) {
-                        raop_set_port(static_cast<raop_t *>(m_raop), port);
-                        m_raopPort = port;
-                        m_raopHttpdStarted = true;
-                        if (registerDiscoveryBroadcast(m_raopPort)) {
-                            m_discoveryRestartPending.store(false);
-                            return;
-                        }
-                    }
-                    stopDiscoveryBroadcast();
-                }
-                setError("Failed to recover discovery after receiver rename failure");
-                setState(ReceiverState::Error);
-            } else {
-                setError("Failed to register discovery broadcast after restart");
-                setState(ReceiverState::Error);
-            }
-            m_discoveryRestartPending.store(false);
-            return;
-        }
-
-        m_pendingDiscoveryRecoveryName.clear();
-        m_discoveryRestartPending.store(false);
-    });
-
-    m_discoveryRestartTimer->start(2000);
-    return true;
-}
-
-void UxPlayReceiver::cancelPendingDiscoveryRestart() {
-    if (m_discoveryRestartTimer) {
-        m_discoveryRestartTimer->stop();
+    const bool scheduled = m_discoveryRestartController->schedule(recoveryName, shouldStartHttpd, std::move(ops));
+    if (!scheduled) {
+        stopDiscoveryBroadcast();
     }
-    m_discoveryRestartPending.store(false);
-    m_pendingDiscoveryRecoveryName.clear();
+    return scheduled;
 }
 
 void UxPlayReceiver::cleanupUxPlay() {
     m_acceptingCallbacks.store(false);
     m_callbackGeneration.fetch_add(1);
 
-    cancelPendingDiscoveryRestart();
-
-    if (m_discoveryRestartTimer) {
-        delete m_discoveryRestartTimer;
-        m_discoveryRestartTimer = nullptr;
-    }
+    m_discoveryRestartController->cancel();
 
     if (m_glibTimer) {
         static_cast<QTimer *>(m_glibTimer)->stop();

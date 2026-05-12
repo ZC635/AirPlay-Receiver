@@ -24,6 +24,20 @@ struct AspectRatioSizeConstraints {
     int maxOuterHeight = std::numeric_limits<int>::max() / 4;
 };
 
+struct AspectRatioOuterSize {
+    int width = 1;
+    int height = 1;
+};
+
+int clientWidthForOuterWidth(int outerWidth, AspectRatioFrameMargins margins);
+int clientHeightForOuterHeight(int outerHeight, AspectRatioFrameMargins margins);
+
+AspectRatioOuterSize adjustedOuterSizeDrivenByHeight(
+    int outerHeight,
+    double targetRatio,
+    AspectRatioFrameMargins margins,
+    AspectRatioSizeConstraints constraints = {});
+
 bool adjustWindowRectForAspectRatio(
     RECT &rect,
     unsigned int sizingEdge,

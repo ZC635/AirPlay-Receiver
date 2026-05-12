@@ -1,6 +1,7 @@
 #pragma once
 
 #include "backend/AirPlayReceiver.h"
+#include "backend/ReceiverStatePolicy.h"
 
 #include <QImage>
 #include <QStringList>
@@ -42,17 +43,18 @@ public:
     bool lastVideoFitMode() const { return m_videoFitMode; }
 
     bool applyVideoQuality(const VideoQualitySettings &quality) override {
-        if (lastAppliedVideoQuality == quality) {
+        const auto result = decideVideoQualityChange(m_state, lastAppliedVideoQuality, quality);
+        if (result.action == ReceiverPolicyAction::Noop) {
             return true;
-        }
-        if (m_state == ReceiverState::Error || m_state == ReceiverState::Starting) {
-            return false;
         }
         if (rejectedVideoQualities.contains(quality)) {
             return false;
         }
+        if (result.action == ReceiverPolicyAction::Reject) {
+            return false;
+        }
         lastAppliedVideoQuality = quality;
-        if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
+        if (result.action == ReceiverPolicyAction::RestartReceiver) {
             stop();
             start();
         }
@@ -72,24 +74,26 @@ public:
         if (rejectedReceiverNames.contains(name)) {
             return false;
         }
-        if (m_receiverName == name) {
+        const auto result = decideReceiverNameChange(m_state, m_receiverName, name);
+        if (result.action == ReceiverPolicyAction::Reject) {
+            return false;
+        }
+        if (result.action == ReceiverPolicyAction::Noop) {
             return true;
         }
-
-        if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
+        m_receiverName = result.normalizedName;
+        appliedReceiverNames.append(result.normalizedName);
+        if (result.action == ReceiverPolicyAction::RestartDiscovery) {
+            if (m_state != ReceiverState::Idle) {
+                ++broadcastRestartCount;
+            }
+            return true;
+        }
+        if (result.action == ReceiverPolicyAction::RestartDiscoveryConnected) {
             stop();
-            m_receiverName = name;
-            appliedReceiverNames.append(name);
             start();
             return true;
         }
-
-        if (m_state != ReceiverState::Idle) {
-            ++broadcastRestartCount;
-        }
-
-        m_receiverName = name;
-        appliedReceiverNames.append(name);
         return true;
     }
 

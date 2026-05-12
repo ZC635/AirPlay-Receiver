@@ -163,6 +163,77 @@ private slots:
         QVERIFY(!adjustWindowRectForAspectRatio(unknownEdge, 999u, 16.0 / 9.0, margins()));
     }
 
+    void adjustedOuterSizeDrivenByHeightComputesOuterWidthFromHeightAndMargins() {
+        const AspectRatioOuterSize size = adjustedOuterSizeDrivenByHeight(320, 16.0 / 9.0, margins());
+        QCOMPARE(size.width, 514);
+        QCOMPARE(size.height, 320);
+    }
+
+    void adjustedOuterSizeDrivenByHeightRespectsMinimumWidthConstraint() {
+        AspectRatioSizeConstraints constraints;
+        constraints.minOuterWidth = 600;
+        const AspectRatioOuterSize size = adjustedOuterSizeDrivenByHeight(320, 16.0 / 9.0, margins(), constraints);
+        QCOMPARE(size.width, 600);
+        QCOMPARE(size.height, 369);
+    }
+
+    void adjustedOuterSizeDrivenByHeightRespectsMaximumHeightConstraint() {
+        AspectRatioSizeConstraints constraints{};
+        constraints.maxOuterHeight = 200;
+        const AspectRatioOuterSize size = adjustedOuterSizeDrivenByHeight(320, 16.0 / 9.0, margins(), constraints);
+        QCOMPARE(size.width, 300);
+        QCOMPARE(size.height, 200);
+    }
+
+    void adjustedOuterSizeDrivenByHeightWithZeroMarginsMatchesBasicMath() {
+        const double ratio = 4.0 / 3.0;
+        const AspectRatioOuterSize size = adjustedOuterSizeDrivenByHeight(300, ratio, {});
+        QCOMPARE(size.width, 400);
+        QCOMPARE(size.height, 300);
+    }
+
+    void adjustedOuterSizeDrivenByHeightReturnsDefaultForZeroHeight() {
+        const AspectRatioOuterSize size = adjustedOuterSizeDrivenByHeight(0, 16.0 / 9.0, margins());
+        QCOMPARE(size.width, 1);
+        QCOMPARE(size.height, 1);
+    }
+
+    void adjustedOuterSizeDrivenByHeightReturnsDefaultForNegativeHeight() {
+        const AspectRatioOuterSize size = adjustedOuterSizeDrivenByHeight(-10, 16.0 / 9.0, margins());
+        QCOMPARE(size.width, 1);
+        QCOMPARE(size.height, 1);
+    }
+
+    void adjustedOuterSizeDrivenByHeightReturnsDefaultForZeroRatio() {
+        const AspectRatioOuterSize size = adjustedOuterSizeDrivenByHeight(320, 0.0, margins());
+        QCOMPARE(size.width, 1);
+        QCOMPARE(size.height, 1);
+    }
+
+    void clientWidthForOuterWidthSubtractsHorizontalFrame() {
+        QCOMPARE(clientWidthForOuterWidth(514, margins()), 498);
+    }
+
+    void clientHeightForOuterHeightSubtractsVerticalFrame() {
+        QCOMPARE(clientHeightForOuterHeight(320, margins()), 280);
+    }
+
+    void clientWidthForOuterWidthClampsToMinimumOfOne() {
+        QCOMPARE(clientWidthForOuterWidth(5, AspectRatioFrameMargins{10, 0, 10, 0}), 1);
+    }
+
+    void clientHeightForOuterHeightClampsToMinimumOfOne() {
+        QCOMPARE(clientHeightForOuterHeight(5, AspectRatioFrameMargins{0, 10, 0, 10}), 1);
+    }
+
+    void clientWidthForOuterWidthWithZeroMarginsIsIdentity() {
+        QCOMPARE(clientWidthForOuterWidth(400, {}), 400);
+    }
+
+    void clientHeightForOuterHeightWithZeroMarginsIsIdentity() {
+        QCOMPARE(clientHeightForOuterHeight(300, {}), 300);
+    }
+
 private:
     static AspectRatioFrameMargins margins() {
         return AspectRatioFrameMargins{8, 32, 8, 8};

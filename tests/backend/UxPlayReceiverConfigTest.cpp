@@ -10,6 +10,7 @@
 #if AIRPLAY_WITH_UXPLAY
 #define private public
 #endif
+#include "backend/DiscoveryRestartController.h"
 #include "backend/UxPlayReceiver.h"
 #if AIRPLAY_WITH_UXPLAY
 #undef private
@@ -230,13 +231,13 @@ private slots:
 
         const bool scheduled = receiver.restartDiscoveryBroadcast();
         const bool goodbyeSent = receiver.m_dnssd != nullptr;
-        const bool timerPending = receiver.m_discoveryRestartPending.load();
+        const bool timerPending = receiver.m_discoveryRestartController->pending();
         blocker.close();
         receiver.stop();
 
         QVERIFY(scheduled);
         QVERIFY(goodbyeSent);
-        QVERIFY(!receiver.m_discoveryRestartPending.load());
+        QVERIFY(!receiver.m_discoveryRestartController->pending());
 #endif
     }
 
@@ -287,7 +288,7 @@ private slots:
 
         QVERIFY(scheduled);
         QVERIFY(goodbyeSent);
-        QVERIFY(!receiver.m_discoveryRestartPending.load());
+        QVERIFY(!receiver.m_discoveryRestartController->pending());
 #endif
     }
 
@@ -438,17 +439,17 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
 
         QVERIFY(receiver.applyReceiverName("AirPlay First Rename"));
-        QVERIFY(receiver.m_discoveryRestartPending.load());
-        QCOMPARE(receiver.m_pendingDiscoveryRecoveryName, QString("AirPlay Receiver Double Rename Test"));
+        QVERIFY(receiver.m_discoveryRestartController->pending());
+        QCOMPARE(receiver.m_discoveryRestartController->recoveryName(), QString("AirPlay Receiver Double Rename Test"));
         QVERIFY(receiver.applyReceiverName("AirPlay Second Rename"));
-        QVERIFY(receiver.m_discoveryRestartPending.load());
-        QCOMPARE(receiver.m_pendingDiscoveryRecoveryName, QString("AirPlay Receiver Double Rename Test"));
+        QVERIFY(receiver.m_discoveryRestartController->pending());
+        QCOMPARE(receiver.m_discoveryRestartController->recoveryName(), QString("AirPlay Receiver Double Rename Test"));
 
         QCOMPARE(receiver.receiverName(), QString("AirPlay Second Rename"));
         QCOMPARE(errorSpy.count(), 0);
 
         receiver.stop();
-        QVERIFY(!receiver.m_discoveryRestartPending.load());
+        QVERIFY(!receiver.m_discoveryRestartController->pending());
 #endif
     }
 
@@ -464,21 +465,18 @@ private slots:
         receiver.start();
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
 
-        receiver.m_pendingDiscoveryRecoveryName.clear();
-
         QVERIFY(receiver.restartDiscoveryBroadcast());
-        QVERIFY(receiver.m_discoveryRestartPending.load());
-        QVERIFY(receiver.m_discoveryRestartTimer != nullptr);
+        QVERIFY(receiver.m_discoveryRestartController->pending());
+        QVERIFY(receiver.m_discoveryRestartController != nullptr);
 
         void *raop = receiver.m_raop;
         receiver.m_raop = nullptr;
 
-        receiver.m_discoveryRestartTimer->stop();
-        receiver.m_discoveryRestartTimer->start(0);
+        receiver.m_discoveryRestartController->trigger();
 
         QTRY_COMPARE_WITH_TIMEOUT(errorSpy.count(), 1, 5000);
         QCOMPARE(receiver.state(), ReceiverState::Error);
-        QVERIFY(errorSpy.at(0).at(0).toString().contains("RAOP context missing"));
+        QVERIFY(errorSpy.at(0).at(0).toString().contains("Failed to create"));
 
         receiver.m_raop = raop;
         receiver.stop();
@@ -790,10 +788,8 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         QCOMPARE(receiver.m_config.videoQuality.resolution, VideoResolution::P720);
 
-        if (receiver.m_discoveryRestartTimer) {
-            receiver.m_discoveryRestartTimer->stop();
-            receiver.m_discoveryRestartTimer->start(0);
-            QTest::qWait(500);
+        if (receiver.m_discoveryRestartController && receiver.m_discoveryRestartController->pending()) {
+            receiver.m_discoveryRestartController->trigger();
         }
 
         QVERIFY(receiver.m_dnssd != nullptr);

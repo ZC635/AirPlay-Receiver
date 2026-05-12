@@ -43,6 +43,19 @@ private slots:
         QVERIFY(receiver.applyVideoQuality(quality));
         QCOMPARE(receiver.lastAppliedVideoQuality, quality);
     }
+    void unchangedVideoQualityReturnsTrueEvenIfRejected() {
+        FakeAirPlayReceiver receiver;
+        const VideoQualitySettings defaultQuality;
+        const VideoQualitySettings otherQuality{VideoResolution::P720, VideoFrameRate::Fps60};
+
+        QVERIFY(receiver.applyVideoQuality(otherQuality));
+        QCOMPARE(receiver.lastAppliedVideoQuality, otherQuality);
+
+        receiver.rejectedVideoQualities.append(otherQuality);
+
+        QVERIFY(receiver.applyVideoQuality(otherQuality));
+        QCOMPARE(receiver.lastAppliedVideoQuality, otherQuality);
+    }
 };
 
 QTEST_MAIN(AirPlayReceiverTest)

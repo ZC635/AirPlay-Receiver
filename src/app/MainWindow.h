@@ -1,11 +1,11 @@
 #pragma once
 
 #include "app/AppSettings.h"
+#include "app/SettingsChangeDeferrer.h"
 
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
-#include <optional>
 
 enum class ReceiverState;
 class AirPlayReceiver;
@@ -37,10 +37,8 @@ private:
     void handleReceiverNameChange(const QString &receiverName);
     bool applyReceiverNameNow(const QString &receiverName, bool revertOnFailure = true);
     void revertReceiverNameToDefaultAfterApplyFailure();
-    void applyPendingReceiverNameIfNeeded(bool wasSessionActive);
     void handleVideoQualityChange(const VideoQualitySettings &quality);
     bool applyVideoQualityNow(const VideoQualitySettings &quality);
-    void applyPendingVideoQualityIfReady();
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
@@ -53,7 +51,7 @@ private:
     VideoSurfaceWidget *videoSurface_;
     AppSettings settings_;
     QString activeReceiverName_;
-    QString pendingReceiverName_;
+    SettingsChangeDeferrer deferrer_;
     QPointer<HotkeyService> hotkeys_;
     QPointer<AirPlayReceiver> receiver_;
     QString currentError_;
@@ -66,5 +64,4 @@ private:
     bool alwaysOnTopEnabled_ = false;
     bool videoFitMode_ = false;
     VideoQualitySettings activeVideoQuality_;
-    std::optional<VideoQualitySettings> pendingVideoQuality_;
 };

@@ -1,3 +1,7 @@
+add_executable(SettingsChangeDeferrerTest app/SettingsChangeDeferrerTest.cpp)
+target_link_libraries(SettingsChangeDeferrerTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME SettingsChangeDeferrerTest COMMAND SettingsChangeDeferrerTest)
+
 add_executable(MainWindowSmokeTest app/MainWindowSmokeTest.cpp)
 target_link_libraries(MainWindowSmokeTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME MainWindowSmokeTest COMMAND MainWindowSmokeTest)
@@ -21,6 +25,10 @@ add_test(NAME AppSettingsTest COMMAND AppSettingsTest)
 add_executable(AppSettingsStoreTest app/AppSettingsStoreTest.cpp)
 target_link_libraries(AppSettingsStoreTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AppSettingsStoreTest COMMAND AppSettingsStoreTest)
+
+add_executable(ShortcutActionKeyTest app/ShortcutActionKeyTest.cpp)
+target_link_libraries(ShortcutActionKeyTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME ShortcutActionKeyTest COMMAND ShortcutActionKeyTest)
 
 add_executable(ToolbarWidgetTest app/ToolbarWidgetTest.cpp)
 target_link_libraries(ToolbarWidgetTest PRIVATE airplay_app_lib Qt6::Test)
@@ -46,6 +54,14 @@ add_executable(MdnsPublisherTest platform/MdnsPublisherTest.cpp)
 target_link_libraries(MdnsPublisherTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
 
+add_executable(DiscoveryRestartControllerTest backend/DiscoveryRestartControllerTest.cpp)
+target_link_libraries(DiscoveryRestartControllerTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME DiscoveryRestartControllerTest COMMAND DiscoveryRestartControllerTest)
+
+add_executable(ReceiverStatePolicyTest backend/ReceiverStatePolicyTest.cpp)
+target_link_libraries(ReceiverStatePolicyTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME ReceiverStatePolicyTest COMMAND ReceiverStatePolicyTest)
+
 add_executable(AirPlayReceiverTest backend/AirPlayReceiverTest.cpp)
 target_link_libraries(AirPlayReceiverTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)
@@ -65,6 +81,14 @@ if(AIRPLAY_WITH_UXPLAY)
     target_link_libraries(VideoRendererLifecycleTest PRIVATE renderers)
 endif()
 add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
+
+add_executable(VideoFrameBridgeTest backend/VideoFrameBridgeTest.cpp)
+target_link_libraries(VideoFrameBridgeTest PRIVATE airplay_app_lib Qt6::Test)
+if(AIRPLAY_WITH_UXPLAY)
+    target_include_directories(VideoFrameBridgeTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
+    target_link_libraries(VideoFrameBridgeTest PRIVATE renderers)
+endif()
+add_test(NAME VideoFrameBridgeTest COMMAND VideoFrameBridgeTest)
 
 add_executable(VideoSurfaceWidgetTest app/VideoSurfaceWidgetTest.cpp)
 target_link_libraries(VideoSurfaceWidgetTest PRIVATE airplay_app_lib Qt6::Test)
@@ -97,19 +121,24 @@ execute_process(
 )
 
 set(AIRPLAY_QT_TESTS
+    SettingsChangeDeferrerTest
     MainWindowSmokeTest
     AppSettingsTest
     AppSettingsStoreTest
+    ShortcutActionKeyTest
     ToolbarWidgetTest
     SettingsDialogTest
     HotkeyServiceTest
     AspectRatioSizingTest
     DependencyDiagnosticsTest
     MdnsPublisherTest
+    DiscoveryRestartControllerTest
+    ReceiverStatePolicyTest
     AirPlayReceiverTest
     UxPlayReceiverConfigTest
     VideoRendererLifecycleTest
     VideoSurfaceWidgetTest
+    VideoFrameBridgeTest
     VideoRenderGeometryTest
 )
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)

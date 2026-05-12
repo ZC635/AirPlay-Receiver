@@ -8,6 +8,7 @@
 
 #include "backend/AirPlayReceiver.h"
 
+class DiscoveryRestartController;
 class MdnsPublisher;
 class VideoFrameBridge;
 
@@ -75,8 +76,7 @@ private:
     void stopDiscoveryBroadcast();
     void unregisterDiscoveryBroadcast();
     void destroyDiscoveryBroadcast();
-    bool restartDiscoveryBroadcast();
-    void cancelPendingDiscoveryRestart();
+    bool restartDiscoveryBroadcast(const QString &recoveryName = {});
 #endif
 
     UxPlayReceiverConfig m_config;
@@ -98,11 +98,9 @@ private:
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_acceptingCallbacks = false;
     std::atomic<quint64> m_callbackGeneration = 0;
-    std::atomic_bool m_discoveryRestartPending = false;
     QObject *m_glibTimer = nullptr;
-    QTimer *m_discoveryRestartTimer = nullptr;
     QRecursiveMutex m_rendererMutex;
-    QString m_pendingDiscoveryRecoveryName; // last stable advertised name, used for async rollback if rename restart fails
+    DiscoveryRestartController *m_discoveryRestartController = nullptr;
     MdnsPublisher *m_mdnsPublisher = nullptr;
 #endif
 };

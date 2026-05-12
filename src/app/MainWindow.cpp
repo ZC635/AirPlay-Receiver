@@ -9,7 +9,6 @@
 #include "platform/HotkeyService.h"
 
 #include <algorithm>
-#include <cmath>
 #include <QGridLayout>
 #include <QIcon>
 #include <QKeySequence>
@@ -197,6 +196,23 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     if (!hotkeysOk) {
         statusLabel_->setText("Could not register one or more shortcuts");
     }
+
+    connect(&deferrer_, &SettingsChangeDeferrer::receiverNameReady, this, [this](const QString &name) {
+        if (applyReceiverNameNow(name, false)) {
+            deferrer_.markReceiverNameApplied(name);
+        } else if (receiver_ != nullptr) {
+            statusLabel_->setText(QString("Could not apply receiver name \"%1\"; will retry")
+                                      .arg(name));
+        }
+    });
+
+    connect(&deferrer_, &SettingsChangeDeferrer::videoQualityReady, this, [this](const VideoQualitySettings &quality) {
+        if (applyVideoQualityNow(quality)) {
+            deferrer_.markVideoQualityApplied(quality);
+        } else if (receiver_ != nullptr) {
+            statusLabel_->setText("Could not apply video quality; will retry");
+        }
+    });
 }
 
 bool MainWindow::isToolbarVisible() const {
@@ -322,17 +338,17 @@ void MainWindow::setReceiverVolume(int value) {
 
 void MainWindow::handleReceiverNameChange(const QString &receiverName) {
     if (receiverName == activeReceiverName_) {
-        pendingReceiverName_.clear();
+        deferrer_.receiverNameChanged(receiverName, activeReceiverName_);
         return;
     }
 
-    if (receiverName == pendingReceiverName_) {
+    if (deferrer_.isReceiverNamePending(receiverName)) {
         return;
     }
 
     if (receiver_ == nullptr) {
         activeReceiverName_ = receiverName;
-        pendingReceiverName_.clear();
+        deferrer_.receiverNameChanged(receiverName, activeReceiverName_);
         return;
     }
 
@@ -344,13 +360,14 @@ void MainWindow::handleReceiverNameChange(const QString &receiverName) {
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
         if (answer != QMessageBox::Yes) {
-            pendingReceiverName_ = receiverName;
+            deferrer_.receiverNameChanged(receiverName, activeReceiverName_);
             return;
         }
     }
 
-    pendingReceiverName_.clear();
-    applyReceiverNameNow(receiverName);
+    if (applyReceiverNameNow(receiverName)) {
+        deferrer_.markReceiverNameApplied(receiverName);
+    }
 }
 
 bool MainWindow::applyReceiverNameNow(const QString &receiverName, bool revertOnFailure) {
@@ -373,11 +390,11 @@ bool MainWindow::applyReceiverNameNow(const QString &receiverName, bool revertOn
 void MainWindow::revertReceiverNameToDefaultAfterApplyFailure() {
     const QString defaultName = AppSettings::defaults().receiverName();
     settings_.setReceiverName(defaultName);
-    pendingReceiverName_.clear();
+    activeReceiverName_ = defaultName;
+    deferrer_.receiverNameChanged(defaultName, activeReceiverName_);
     if (receiver_ != nullptr && receiver_->receiverName() != defaultName) {
         receiver_->applyReceiverName(defaultName);
     }
-    activeReceiverName_ = defaultName;
 
     if (!saveSettings()) {
         statusLabel_->setText("Could not save settings");
@@ -386,33 +403,19 @@ void MainWindow::revertReceiverNameToDefaultAfterApplyFailure() {
     statusLabel_->setText("Could not apply receiver name; reverted to default");
 }
 
-void MainWindow::applyPendingReceiverNameIfNeeded(bool wasSessionActive) {
-    if (!wasSessionActive || receiverSessionActive_ || pendingReceiverName_.isEmpty()) {
-        return;
-    }
-
-    const QString receiverName = pendingReceiverName_;
-    if (applyReceiverNameNow(receiverName, /*revertOnFailure=*/false)) {
-        pendingReceiverName_.clear();
-    } else if (receiver_ != nullptr) {
-        statusLabel_->setText(QString("Could not apply receiver name \"%1\"; will retry")
-                                 .arg(receiverName));
-    }
-}
-
 void MainWindow::handleVideoQualityChange(const VideoQualitySettings &quality) {
     if (quality == activeVideoQuality_) {
-        pendingVideoQuality_.reset();
+        deferrer_.videoQualityChanged(quality, activeVideoQuality_);
         return;
     }
 
-    if (pendingVideoQuality_.has_value() && quality == *pendingVideoQuality_) {
+    if (deferrer_.isVideoQualityPending(quality)) {
         return;
     }
 
     if (receiver_ == nullptr) {
         activeVideoQuality_ = quality;
-        pendingVideoQuality_.reset();
+        deferrer_.videoQualityChanged(quality, activeVideoQuality_);
         return;
     }
 
@@ -424,27 +427,15 @@ void MainWindow::handleVideoQualityChange(const VideoQualitySettings &quality) {
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
         if (answer != QMessageBox::Yes) {
-            pendingVideoQuality_ = quality;
+            deferrer_.videoQualityChanged(quality, activeVideoQuality_);
             return;
         }
     }
 
-    pendingVideoQuality_.reset();
-    if (!applyVideoQualityNow(quality)) {
-        pendingVideoQuality_ = quality;
-        statusLabel_->setText("Could not apply video quality; will retry");
-    }
-}
-
-void MainWindow::applyPendingVideoQualityIfReady() {
-    if (receiverSessionActive_ || !pendingVideoQuality_.has_value()) {
-        return;
-    }
-
-    const VideoQualitySettings quality = *pendingVideoQuality_;
     if (applyVideoQualityNow(quality)) {
-        pendingVideoQuality_.reset();
-    } else if (receiver_ != nullptr) {
+        deferrer_.markVideoQualityApplied(quality);
+    } else {
+        deferrer_.videoQualityChanged(quality, activeVideoQuality_);
         statusLabel_->setText("Could not apply video quality; will retry");
     }
 }
@@ -489,8 +480,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
         break;
     }
 
-    applyPendingReceiverNameIfNeeded(wasSessionActive);
-    applyPendingVideoQualityIfReady();
+    deferrer_.receiverSessionChanged(wasSessionActive, receiverSessionActive_);
 }
 
 void MainWindow::showSettingsDialog() {
@@ -578,8 +568,12 @@ void MainWindow::applyVideoFitMode(bool enabled) {
 
 void MainWindow::enforceAspectRatio() {
     if (videoWidth_ <= 0 || videoHeight_ <= 0) return;
-    double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
-    int newWidth = static_cast<int>(std::lround(height() * targetRatio));
-    if (newWidth < minimumWidth()) newWidth = minimumWidth();
-    resize(newWidth, height());
+    const double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
+    const AspectRatioFrameMargins margins = frameMarginsFor(*this);
+    const AspectRatioSizeConstraints constraints = sizeConstraintsFor(*this, margins);
+    // Resulting height may differ from current when size constraints are active.
+    const AspectRatioOuterSize outer = adjustedOuterSizeDrivenByHeight(
+        frameGeometry().height(), targetRatio, margins, constraints);
+    resize(clientWidthForOuterWidth(outer.width, margins),
+           clientHeightForOuterHeight(outer.height, margins));
 }

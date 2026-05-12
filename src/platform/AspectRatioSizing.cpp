@@ -25,14 +25,6 @@ int verticalFrame(const AspectRatioFrameMargins &margins) {
     return std::max(0, margins.top) + std::max(0, margins.bottom);
 }
 
-int clientWidthForOuterWidth(int outerWidth, const AspectRatioFrameMargins &margins) {
-    return std::max(1, outerWidth - horizontalFrame(margins));
-}
-
-int clientHeightForOuterHeight(int outerHeight, const AspectRatioFrameMargins &margins) {
-    return std::max(1, outerHeight - verticalFrame(margins));
-}
-
 int outerWidthForClientWidth(int clientWidth, const AspectRatioFrameMargins &margins) {
     return std::max(1, clientWidth) + horizontalFrame(margins);
 }
@@ -132,6 +124,27 @@ void setHeightKeepingTop(RECT &rect, int outerHeight) {
 void setHeightKeepingBottom(RECT &rect, int outerHeight) {
     rect.top = rect.bottom - outerHeight;
 }
+}
+
+int clientWidthForOuterWidth(int outerWidth, AspectRatioFrameMargins margins) {
+    return std::max(1, outerWidth - horizontalFrame(margins));
+}
+
+int clientHeightForOuterHeight(int outerHeight, AspectRatioFrameMargins margins) {
+    return std::max(1, outerHeight - verticalFrame(margins));
+}
+
+AspectRatioOuterSize adjustedOuterSizeDrivenByHeight(
+    int outerHeight,
+    double targetRatio,
+    AspectRatioFrameMargins margins,
+    AspectRatioSizeConstraints constraints) {
+    if (targetRatio <= 0.0 || outerHeight <= 0) {
+        return AspectRatioOuterSize{};
+    }
+    const OuterSize size = constrainedSizeDrivenByHeight(
+        outerHeight, targetRatio, margins, normalized(constraints));
+    return AspectRatioOuterSize{size.width, size.height};
 }
 
 bool adjustWindowRectForAspectRatio(

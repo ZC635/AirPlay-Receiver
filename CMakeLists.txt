@@ -21,9 +21,13 @@ add_library(airplay_app_lib
     src/app/AppSettingsStore.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
+    src/app/SettingsChangeDeferrer.cpp
+    src/app/SettingsChangeDeferrer.h
     src/app/SettingsDialog.cpp
     src/app/SettingsDialog.h
     src/app/ShortcutAction.h
+    src/app/ShortcutActionKey.h
+    src/app/ShortcutActionKey.cpp
     src/app/ShortcutBinding.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
@@ -33,10 +37,16 @@ add_library(airplay_app_lib
     src/app/VideoSurfaceWidget.cpp
     src/app/VideoSurfaceWidget.h
     src/backend/AirPlayReceiver.h
+    src/backend/DiscoveryRestartController.cpp
+    src/backend/DiscoveryRestartController.h
     src/backend/FakeAirPlayReceiver.h
     src/backend/ReceiverState.h
+    src/backend/ReceiverStatePolicy.h
+    src/backend/ReceiverStatePolicy.cpp
     src/backend/UxPlayReceiver.cpp
     src/backend/UxPlayReceiver.h
+    src/backend/GstAppSinkFrameSource.cpp
+    src/backend/GstAppSinkFrameSource.h
     src/backend/VideoFrameBridge.cpp
     src/backend/VideoFrameBridge.h
     src/backend/VideoQualitySettings.h

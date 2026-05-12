@@ -1,4 +1,5 @@
 #include "app/AppSettingsStore.h"
+#include "app/ShortcutActionKey.h"
 
 #include <QFile>
 #include <QJsonDocument>
@@ -8,18 +9,6 @@
 #include <utility>
 
 namespace {
-QString keyFor(ShortcutAction action) {
-    switch (action) {
-    case ShortcutAction::ToggleAlwaysOnTop: return "toggleAlwaysOnTop";
-    case ShortcutAction::VolumeUp: return "volumeUp";
-    case ShortcutAction::VolumeDown: return "volumeDown";
-    case ShortcutAction::ToggleToolbar: return "toggleToolbar";
-    case ShortcutAction::ToggleAspectRatio: return "toggleAspectRatio";
-    case ShortcutAction::ToggleVideoFit: return "toggleVideoFit";
-    }
-    return {};
-}
-
 QString resolutionToString(VideoResolution res) {
     switch (res) {
     case VideoResolution::P540: return "540p";
@@ -73,7 +62,7 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
         settings.setReceiverName(receiverName);
     }
     for (const ShortcutBinding &binding : settings.shortcuts()) {
-        const QString value = shortcuts.value(keyFor(binding.action)).toString();
+        const QString value = shortcuts.value(shortcutActionKey(binding.action)).toString();
         if (!value.isEmpty()) {
             const QKeySequence parsed = QKeySequence::fromString(value, QKeySequence::PortableText);
             if (!parsed.toString(QKeySequence::PortableText).isEmpty() && parsed.count() == 1) {
@@ -113,7 +102,7 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
 bool AppSettingsStore::save(const AppSettings &settings) const {
     QJsonObject shortcuts;
     for (const ShortcutBinding &binding : settings.shortcuts()) {
-        shortcuts.insert(keyFor(binding.action), binding.sequence.toString(QKeySequence::PortableText));
+        shortcuts.insert(shortcutActionKey(binding.action), binding.sequence.toString(QKeySequence::PortableText));
     }
 
     QJsonObject videoQuality;

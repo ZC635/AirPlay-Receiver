@@ -1,4 +1,5 @@
 #include "app/SettingsDialog.h"
+#include "app/ShortcutActionKey.h"
 
 #include "platform/WindowsHotkeyService.h"
 
@@ -29,18 +30,6 @@ constexpr ShortcutRow kShortcutRows[] = {
     {ShortcutAction::ToggleAspectRatio, "Toggle aspect ratio"},
     {ShortcutAction::ToggleVideoFit, "Toggle video fit"},
 };
-
-QString keyFor(ShortcutAction action) {
-    switch (action) {
-    case ShortcutAction::ToggleAlwaysOnTop: return "toggleAlwaysOnTop";
-    case ShortcutAction::VolumeUp: return "volumeUp";
-    case ShortcutAction::VolumeDown: return "volumeDown";
-    case ShortcutAction::ToggleToolbar: return "toggleToolbar";
-    case ShortcutAction::ToggleAspectRatio: return "toggleAspectRatio";
-    case ShortcutAction::ToggleVideoFit: return "toggleVideoFit";
-    }
-    return {};
-}
 
 }
 
@@ -99,7 +88,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
         table_->setItem(row, 0, labelItem);
 
         auto *edit = new QKeySequenceEdit(settings.shortcutFor(shortcutRow.action), table_);
-        edit->setObjectName(QString("shortcutEdit_%1").arg(keyFor(shortcutRow.action)));
+        edit->setObjectName(QString("shortcutEdit_%1").arg(shortcutActionKey(shortcutRow.action)));
         table_->setCellWidget(row, 1, edit);
         shortcutEdits_.insert(static_cast<int>(shortcutRow.action), edit);
     }
