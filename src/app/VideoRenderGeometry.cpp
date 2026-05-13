@@ -1,5 +1,7 @@
 #include "app/VideoRenderGeometry.h"
 
+#include <cmath>
+
 QRectF videoTargetRect(QSizeF sourceSize, QSizeF boundsSize, bool fit) {
     if (sourceSize.width() <= 0.0 || sourceSize.height() <= 0.0 ||
         boundsSize.width() <= 0.0 || boundsSize.height() <= 0.0) {
@@ -18,6 +20,11 @@ QRectF videoTargetRect(QSizeF sourceSize, QSizeF boundsSize, bool fit) {
         targetSize.setHeight(boundsSize.width() / sourceAspect);
     } else {
         targetSize.setWidth(boundsSize.height() * sourceAspect);
+    }
+
+    if (std::abs(boundsSize.width() - targetSize.width()) <= 0.5 &&
+        std::abs(boundsSize.height() - targetSize.height()) <= 0.5) {
+        return QRectF(QPointF(0, 0), boundsSize);
     }
 
     return QRectF(QPointF((boundsSize.width() - targetSize.width()) * 0.5,

@@ -21,6 +21,11 @@ private slots:
                  QRectF(QPointF(0, 175), QSizeF(200, 50)));
     }
 
+    void fitModeFillsBoundsWhenOnlyAspectLockRoundingDiffers() {
+        QCOMPARE(videoTargetRect(QSizeF(1920, 1080), QSizeF(1001, 563), true),
+                 QRectF(QPointF(0, 0), QSizeF(1001, 563)));
+    }
+
     void emptySourceOrBoundsReturnsEmptyRect() {
         QVERIFY(videoTargetRect(QSizeF(0, 100), QSizeF(200, 200), true).isEmpty());
         QVERIFY(videoTargetRect(QSizeF(100, 0), QSizeF(200, 200), true).isEmpty());
