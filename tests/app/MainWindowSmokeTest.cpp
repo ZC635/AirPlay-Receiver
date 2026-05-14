@@ -1034,6 +1034,44 @@ private slots:
         QVERIFY(qAbs(actualRatio - (16.0 / 9.0)) < 0.01);
     }
 
+    void nativeAspectSizingAdjustsPendingLeftEdgeRect() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        receiver.emitVideoSize(1920, 1080);
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+        QCoreApplication::processEvents();
+
+        const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+        RECT rect{};
+        QVERIFY(GetWindowRect(hwnd, &rect));
+
+        const LONG originalLeft = rect.left;
+        const LONG originalRight = rect.right;
+        const LONG originalTop = rect.top;
+        rect.left -= 160;
+
+        SendMessage(hwnd, WM_SIZING, WMSZ_LEFT, reinterpret_cast<LPARAM>(&rect));
+
+        const int frameWidth = window.frameGeometry().width() - window.width();
+        const int frameHeight = window.frameGeometry().height() - window.height();
+        const int clientWidth = static_cast<int>(rect.right - rect.left) - frameWidth;
+        const int clientHeight = static_cast<int>(rect.bottom - rect.top) - frameHeight;
+        const double actualRatio = static_cast<double>(clientWidth) / clientHeight;
+
+        QCOMPARE(rect.left, originalLeft - 160);
+        QCOMPARE(rect.right, originalRight);
+        QCOMPARE(rect.top, originalTop);
+        QVERIFY(qAbs(actualRatio - (16.0 / 9.0)) < 0.01);
+    }
+
     void disablingAspectRatioLockKeepsCurrentSize() {
         FakeAirPlayReceiver receiver;
         MainWindow window(AppSettings::defaults(), nullptr, &receiver);

@@ -1,4 +1,5 @@
 #include <QtTest/QtTest>
+#include <QPainter>
 #include <QThread>
 #include "app/VideoSurfaceWidget.h"
 
@@ -75,6 +76,28 @@ private slots:
         QTest::qWait(50);
     }
 
+    void fullSurfaceCachedFrameDoesNotBlendOverWhitePrefill() {
+        VideoSurfaceWidget widget;
+        widget.resize(80, 60);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+
+        QImage frame(widget.size(), QImage::Format_RGBA8888);
+        frame.fill(QColor(255, 0, 0, 128));
+        widget.onFrameReady(frame);
+        QTest::qWait(50);
+
+        QImage rendered(widget.size(), QImage::Format_ARGB32_Premultiplied);
+        rendered.fill(Qt::black);
+        QPainter painter(&rendered);
+        widget.render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+        painter.end();
+
+        const QColor center = rendered.pixelColor(rendered.rect().center());
+        QVERIFY2(center.green() < 32, qPrintable(QStringLiteral("green=%1").arg(center.green())));
+        QVERIFY2(center.blue() < 32, qPrintable(QStringLiteral("blue=%1").arg(center.blue())));
+    }
+
     void hiddenFrameDeliveryDoesNotCreateNativeWindowOrBlockLaterRender() {
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
@@ -136,7 +159,7 @@ private slots:
         QVERIFY(widget.isVisible());
     }
 
-    void resizeRepaintsCachedFrameSynchronously() {
+    void resizeSchedulesCachedFramePaintWithoutBlocking() {
         VideoSurfaceWidget widget;
         widget.resize(100, 100);
         PaintEventCounter counter;
@@ -153,8 +176,10 @@ private slots:
         counter.paintEvents = 0;
         widget.resize(140, 140);
 
-        QVERIFY(counter.paintEvents > 0);
+        QCOMPARE(counter.paintEvents, 0);
+        QTRY_VERIFY_WITH_TIMEOUT(counter.paintEvents > 0, 1000);
     }
+
 };
 
 QTEST_MAIN(VideoSurfaceWidgetTest)

@@ -15,6 +15,7 @@ option(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS "Enable tests that require the Windows Q
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     add_test(NAME MainWindowTopmostFlickerTest COMMAND MainWindowSmokeTest visibleAlwaysOnTopToggleDoesNotHideOrShowWindow)
     add_test(NAME MainWindowNativeAspectSizingTest COMMAND MainWindowSmokeTest nativeAspectSizingAdjustsPendingRightEdgeRect)
+    add_test(NAME MainWindowNativeLeftAspectSizingTest COMMAND MainWindowSmokeTest nativeAspectSizingAdjustsPendingLeftEdgeRect)
     add_test(NAME MainWindowSmokeTestNativeOverlayStacking COMMAND MainWindowSmokeTest videoSurfaceDoesNotCoverVisibleOverlays)
 endif()
 
@@ -160,6 +161,10 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
     set_tests_properties(MainWindowNativeAspectSizingTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+    set_tests_properties(MainWindowNativeLeftAspectSizingTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )

@@ -19,10 +19,6 @@ VideoSurfaceWidget::~VideoSurfaceWidget() = default;
 
 void VideoSurfaceWidget::resizeEvent(QResizeEvent *e) {
     QWidget::resizeEvent(e);
-    if (!m_cachedFrame.isNull() && isVisible()) {
-        repaint();
-        return;
-    }
     update();
 }
 
@@ -71,11 +67,18 @@ void VideoSurfaceWidget::setVideoFitMode(bool fit) {
 }
 
 void VideoSurfaceWidget::paintFallback(QPainter &painter) {
-    painter.fillRect(rect(), Qt::white);
     if (m_cachedFrame.isNull()) {
+        painter.fillRect(rect(), Qt::white);
         return;
     }
 
+    const QRectF targetRect = videoTargetRect(m_cachedFrame.size(), size(), m_videoFitMode);
+    if (targetRect != QRectF(rect())) {
+        painter.fillRect(rect(), Qt::white);
+    } else {
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+    }
+
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.drawImage(videoTargetRect(m_cachedFrame.size(), size(), m_videoFitMode), m_cachedFrame);
+    painter.drawImage(targetRect, m_cachedFrame);
 }
