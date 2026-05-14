@@ -91,7 +91,10 @@ double volumeToAirPlayDb(double volume) {
     return std::clamp(20.0 * std::log10(volume), -30.0, 0.0);
 }
 
-void logCallback(void *, int level, const char *msg) {
+void logCallback(void *cls, int level, const char *msg) {
+    if (auto *receiver = static_cast<UxPlayReceiver *>(cls)) {
+        receiver->handleLogMessageFromUxPlayCallback(level, msg);
+    }
     debugLog("uxplay[%d] %s", level, msg ? msg : "");
 }
 
@@ -440,7 +443,8 @@ void UxPlayReceiver::start() {
         return;
     }
     raop_set_log_callback(raop, logCallback, this);
-    raop_set_log_level(raop, debugLogEnabled() ? LOGGER_DEBUG : LOGGER_INFO);
+    // UxPlay defers SET_PARAMETER volume callbacks through its RTP loop; DEBUG logs expose them immediately.
+    raop_set_log_level(raop, LOGGER_DEBUG);
     m_raop = raop;
 
     const QByteArray deviceId = defaultDeviceId();
@@ -703,6 +707,17 @@ void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
         audio_renderer_set_volume(clamped);
     }
     emit volumeChanged(clamped);
+}
+
+void UxPlayReceiver::handleLogMessageFromUxPlayCallback(int level, const char *message) {
+    if (level != LOGGER_DEBUG || message == nullptr || std::strncmp(message, "volume: ", 8) != 0) {
+        return;
+    }
+
+    float airPlayDb = 0.0F;
+    if (std::sscanf(message + 8, "%f", &airPlayDb) == 1) {
+        setVolumeFromUxPlayCallback(volumeFromAirPlayDb(airPlayDb));
+    }
 }
 
 void UxPlayReceiver::setCoverArtFromUxPlayCallback(const void *buffer, int buflen) {

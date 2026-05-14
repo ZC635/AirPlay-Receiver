@@ -208,6 +208,19 @@ private slots:
 #endif
     }
 
+    void uxPlayVolumeLogUpdatesReceiverVolume() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        QSignalSpy volumeSpy(&receiver, &AirPlayReceiver::volumeChanged);
+
+        receiver.handleLogMessageFromUxPlayCallback(LOGGER_DEBUG, "volume: -15.000000 ");
+
+        QCOMPARE(volumeSpy.count(), 1);
+        QVERIFY(std::abs(volumeSpy.at(0).at(0).toDouble() - std::pow(10.0, 0.05 * -15.0)) < 0.000001);
+#endif
+    }
+
     void discoverableReceiverNameChangeRestartsDiscoveryOnly() {
 #if AIRPLAY_WITH_UXPLAY
         UxPlayReceiverConfig config;

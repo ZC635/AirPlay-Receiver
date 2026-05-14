@@ -44,6 +44,7 @@ public:
     double currentVolumeForUxPlayClientVolumeCallback() const;
     void startAudioRendererFromUxPlayCallback(unsigned char *compressionType);
     void setVolumeFromUxPlayCallback(double volume);
+    void handleLogMessageFromUxPlayCallback(int level, const char *message);
     void setCoverArtFromUxPlayCallback(const void *buffer, int buflen);
     void stopCoverArtRenderingFromUxPlayCallback();
     void handleVideoResetFromUxPlayCallback(int resetType);
