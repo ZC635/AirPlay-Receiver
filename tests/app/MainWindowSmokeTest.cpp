@@ -24,6 +24,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
 #ifndef NOMINMAX
@@ -372,7 +373,7 @@ private slots:
 
         slider->setValue(40);
 
-        QCOMPARE(receiver.volume(), 0.40);
+        QVERIFY(std::abs(receiver.volume() - std::pow(10.0, 0.05 * -18.0)) < 0.000001);
     }
 
     void receiverVolumeChangeUpdatesSliderWithoutFeedback() {
@@ -382,9 +383,9 @@ private slots:
         QVERIFY(slider != nullptr);
         QCOMPARE(receiver.volume(), 1.0);
 
-        emit receiver.volumeChanged(0.40);
+        emit receiver.volumeChanged(std::pow(10.0, 0.05 * -15.0));
 
-        QCOMPARE(slider->value(), 40);
+        QCOMPARE(slider->value(), 50);
         QCOMPARE(receiver.volume(), 1.0);
     }
 
@@ -396,10 +397,10 @@ private slots:
         FakeAirPlayReceiver receiver;
         MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
 
-        emit receiver.volumeChanged(0.40);
+        emit receiver.volumeChanged(std::pow(10.0, 0.05 * -15.0));
 
         AppSettingsStore store(path);
-        QCOMPARE(store.loadOrDefaults().volume(), 40);
+        QCOMPARE(store.loadOrDefaults().volume(), 50);
     }
 
     void appliesLoadedVolume() {
@@ -412,7 +413,7 @@ private slots:
         auto *slider = window.findChild<QSlider *>("volumeSlider");
         QVERIFY(slider != nullptr);
         QCOMPARE(slider->value(), 45);
-        QCOMPARE(receiver.volume(), 0.45);
+        QVERIFY(std::abs(receiver.volume() - std::pow(10.0, 0.05 * -16.5)) < 0.000001);
     }
 
     void appliesLoadedReceiverNameToReceiver() {

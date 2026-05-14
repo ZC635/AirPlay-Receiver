@@ -30,6 +30,32 @@
 #include <dwmapi.h>
 
 namespace {
+constexpr double kAirPlayMinimumVolumeDb = -30.0;
+constexpr double kAirPlayMaximumVolumeDb = 0.0;
+
+double volumeGainFromSliderPercent(int value) {
+    const int clamped = std::clamp(value, 0, 100);
+    if (clamped == 0) {
+        return 0.0;
+    }
+
+    const double sliderFraction = clamped / 100.0;
+    const double db = kAirPlayMinimumVolumeDb +
+        (kAirPlayMaximumVolumeDb - kAirPlayMinimumVolumeDb) * sliderFraction;
+    return std::pow(10.0, 0.05 * db);
+}
+
+int sliderPercentFromVolumeGain(double volume) {
+    if (volume <= 0.0) {
+        return 0;
+    }
+
+    const double db = std::clamp(20.0 * std::log10(volume), kAirPlayMinimumVolumeDb, kAirPlayMaximumVolumeDb);
+    const double sliderFraction = (db - kAirPlayMinimumVolumeDb) /
+        (kAirPlayMaximumVolumeDb - kAirPlayMinimumVolumeDb);
+    return std::clamp(static_cast<int>(std::lround(sliderFraction * 100.0)), 0, 100);
+}
+
 bool setNativeAlwaysOnTop(WId windowId, bool enabled) {
     HWND window = reinterpret_cast<HWND>(windowId);
     if (window == nullptr || !IsWindow(window)) {
@@ -332,7 +358,7 @@ void MainWindow::setReceiverVolume(int value) {
     const bool changed = (settings_.volume() != clamped);
     settings_.setVolume(clamped);
     if (receiver_ != nullptr) {
-        receiver_->setVolume(clamped / 100.0);
+        receiver_->setVolume(volumeGainFromSliderPercent(clamped));
     }
     if (changed && !saveSettings()) {
         statusLabel_->setText("Could not save settings");
@@ -340,7 +366,7 @@ void MainWindow::setReceiverVolume(int value) {
 }
 
 void MainWindow::syncVolumeFromReceiver(double volume) {
-    const int clamped = std::clamp(static_cast<int>(std::lround(volume * 100.0)), 0, 100);
+    const int clamped = sliderPercentFromVolumeGain(volume);
     const bool changed = (settings_.volume() != clamped);
     settings_.setVolume(clamped);
     if (toolbar_->volume() != clamped) {
