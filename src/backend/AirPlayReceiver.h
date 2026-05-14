@@ -30,5 +30,6 @@ public:
 signals:
     void stateChanged(ReceiverState state);
     void errorChanged(QString error);
+    void volumeChanged(double volume);
     void videoSizeChanged(int width, int height);
 };

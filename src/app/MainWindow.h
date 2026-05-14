@@ -34,6 +34,7 @@ private:
     bool registerHotkeys();
     bool saveSettings() const;
     void setReceiverVolume(int value);
+    void syncVolumeFromReceiver(double volume);
     void handleReceiverNameChange(const QString &receiverName);
     bool applyReceiverNameNow(const QString &receiverName, bool revertOnFailure = true);
     void revertReceiverNameToDefaultAfterApplyFailure();

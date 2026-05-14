@@ -15,7 +15,9 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QResource>
+#include <QSignalBlocker>
 #include <QWidget>
+#include <cmath>
 #include <utility>
 
 #ifndef NOMINMAX
@@ -174,6 +176,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
                 statusLabel_->setText(currentError_);
             }
         });
+        connect(receiver_, &AirPlayReceiver::volumeChanged, this, &MainWindow::syncVolumeFromReceiver);
         if (receiver_->receiverName() != settings_.receiverName()) {
             receiver_->applyReceiverName(settings_.receiverName());
         }
@@ -330,6 +333,19 @@ void MainWindow::setReceiverVolume(int value) {
     settings_.setVolume(clamped);
     if (receiver_ != nullptr) {
         receiver_->setVolume(clamped / 100.0);
+    }
+    if (changed && !saveSettings()) {
+        statusLabel_->setText("Could not save settings");
+    }
+}
+
+void MainWindow::syncVolumeFromReceiver(double volume) {
+    const int clamped = std::clamp(static_cast<int>(std::lround(volume * 100.0)), 0, 100);
+    const bool changed = (settings_.volume() != clamped);
+    settings_.setVolume(clamped);
+    if (toolbar_->volume() != clamped) {
+        const QSignalBlocker blocker(toolbar_);
+        toolbar_->setVolume(clamped);
     }
     if (changed && !saveSettings()) {
         statusLabel_->setText("Could not save settings");

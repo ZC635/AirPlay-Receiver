@@ -79,6 +79,15 @@ private slots:
 
         QVERIFY(DependencyDiagnostics::checkStandaloneRuntime(dir.path()).isEmpty());
     }
+
+    void skipsStandaloneRuntimeCheckInMsys2PathMode() {
+        qunsetenv("AIRPLAY_MSYS2_PATH_MODE");
+        QVERIFY(DependencyDiagnostics::shouldCheckStandaloneRuntime());
+
+        qputenv("AIRPLAY_MSYS2_PATH_MODE", "1");
+        QVERIFY(!DependencyDiagnostics::shouldCheckStandaloneRuntime());
+        qunsetenv("AIRPLAY_MSYS2_PATH_MODE");
+    }
 };
 
 QTEST_GUILESS_MAIN(DependencyDiagnosticsTest)

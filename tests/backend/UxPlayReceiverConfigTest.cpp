@@ -5,6 +5,8 @@
 #include <QtTest/QtTest>
 #include <QFile>
 
+#include <cmath>
+
 #include "backend/FakeAirPlayReceiver.h"
 
 #if AIRPLAY_WITH_UXPLAY
@@ -175,6 +177,34 @@ private slots:
         receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
 
         QCOMPARE(receiver.state(), ReceiverState::Idle);
+#endif
+    }
+
+    void clientVolumeCallbackReturnsCurrentVolumeAsAirPlayDb() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+
+        receiver.setVolume(0.0);
+        QCOMPARE(receiver.currentVolumeForUxPlayClientVolumeCallback(), -144.0);
+
+        receiver.setVolume(1.0);
+        QCOMPARE(receiver.currentVolumeForUxPlayClientVolumeCallback(), 0.0);
+
+        receiver.setVolume(0.5);
+        QVERIFY(std::abs(receiver.currentVolumeForUxPlayClientVolumeCallback() - (20.0 * std::log10(0.5))) < 0.000001);
+#endif
+    }
+
+    void uxPlayVolumeCallbackEmitsNormalizedVolume() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        QSignalSpy volumeSpy(&receiver, &AirPlayReceiver::volumeChanged);
+
+        receiver.setVolumeFromUxPlayCallback(0.4);
+
+        QCOMPARE(volumeSpy.count(), 1);
+        QCOMPARE(volumeSpy.at(0).at(0).toDouble(), 0.4);
 #endif
     }
 

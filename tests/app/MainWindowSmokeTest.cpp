@@ -375,6 +375,33 @@ private slots:
         QCOMPARE(receiver.volume(), 0.40);
     }
 
+    void receiverVolumeChangeUpdatesSliderWithoutFeedback() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *slider = window.findChild<QSlider *>("volumeSlider");
+        QVERIFY(slider != nullptr);
+        QCOMPARE(receiver.volume(), 1.0);
+
+        emit receiver.volumeChanged(0.40);
+
+        QCOMPARE(slider->value(), 40);
+        QCOMPARE(receiver.volume(), 1.0);
+    }
+
+    void receiverVolumeChangeSavesSettings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+
+        emit receiver.volumeChanged(0.40);
+
+        AppSettingsStore store(path);
+        QCOMPARE(store.loadOrDefaults().volume(), 40);
+    }
+
     void appliesLoadedVolume() {
         AppSettings settings = AppSettings::defaults();
         settings.setVolume(45);

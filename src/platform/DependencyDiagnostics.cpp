@@ -27,6 +27,10 @@ QStringList DependencyDiagnostics::checkRuntimeBasics() {
     };
 }
 
+bool DependencyDiagnostics::shouldCheckStandaloneRuntime() {
+    return !qEnvironmentVariableIsSet("AIRPLAY_MSYS2_PATH_MODE");
+}
+
 QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directory) {
     const QStringList requiredPaths = {
         "airplay_receiver.exe",

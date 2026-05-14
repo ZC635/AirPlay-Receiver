@@ -41,6 +41,7 @@ public:
     void setStateFromUxPlayCallback(ReceiverState state);
     void setStateFromUxPlayCallback(ReceiverState state, quint64 generation);
     quint64 callbackGenerationForUxPlayCallback() const;
+    double currentVolumeForUxPlayClientVolumeCallback() const;
     void startAudioRendererFromUxPlayCallback(unsigned char *compressionType);
     void setVolumeFromUxPlayCallback(double volume);
     void setCoverArtFromUxPlayCallback(const void *buffer, int buflen);

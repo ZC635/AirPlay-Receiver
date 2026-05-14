@@ -13,6 +13,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cmath>
 #include <cstdio>
@@ -83,6 +84,13 @@ double volumeFromAirPlayDb(float volume) {
     return std::pow(10.0, 0.05 * volume);
 }
 
+double volumeToAirPlayDb(double volume) {
+    if (volume <= 0.0) {
+        return -144.0;
+    }
+    return std::clamp(20.0 * std::log10(volume), -30.0, 0.0);
+}
+
 void logCallback(void *, int level, const char *msg) {
     debugLog("uxplay[%d] %s", level, msg ? msg : "");
 }
@@ -119,8 +127,7 @@ void videoResume(void *cls) {
 
 double audioSetClientVolume(void *cls) {
     const auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    Q_UNUSED(receiver);
-    return 0.0;
+    return receiver->currentVolumeForUxPlayClientVolumeCallback();
 }
 
 void audioSetVolume(void *cls, float volume) {
@@ -493,10 +500,11 @@ void UxPlayReceiver::stop() {
 }
 
 void UxPlayReceiver::setVolume(double volume) {
-    m_volume.store(volume);
+    const double clamped = std::clamp(volume, 0.0, 1.0);
+    m_volume.store(clamped);
 #if AIRPLAY_WITH_UXPLAY
     if (m_audioRendererStarted.load()) {
-        audio_renderer_set_volume(volume);
+        audio_renderer_set_volume(clamped);
     }
 #endif
 }
@@ -670,6 +678,10 @@ quint64 UxPlayReceiver::callbackGenerationForUxPlayCallback() const {
     return m_callbackGeneration.load();
 }
 
+double UxPlayReceiver::currentVolumeForUxPlayClientVolumeCallback() const {
+    return volumeToAirPlayDb(m_volume.load());
+}
+
 void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compressionType) {
     QMutexLocker locker(&m_rendererMutex);
     if (!m_acceptingCallbacks.load()) {
@@ -681,12 +693,16 @@ void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compres
 }
 
 void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
-    m_volume.store(volume);
+    const double clamped = std::clamp(volume, 0.0, 1.0);
     QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_audioRendererStarted.load()) {
+    if (!m_acceptingCallbacks.load()) {
         return;
     }
-    audio_renderer_set_volume(volume);
+    m_volume.store(clamped);
+    if (m_audioRendererStarted.load()) {
+        audio_renderer_set_volume(clamped);
+    }
+    emit volumeChanged(clamped);
 }
 
 void UxPlayReceiver::setCoverArtFromUxPlayCallback(const void *buffer, int buflen) {

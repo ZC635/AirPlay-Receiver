@@ -13,5 +13,6 @@ public:
     static DiagnosticResult checkExecutable(const QString &name);
     static DiagnosticResult checkEnvironmentVariable(const QString &name);
     static QStringList checkRuntimeBasics();
+    static bool shouldCheckStandaloneRuntime();
     static QStringList checkStandaloneRuntime(const QString &directory);
 };

@@ -213,8 +213,11 @@ $hadGstPluginPath = Test-Path Env:GST_PLUGIN_PATH
 $previousGstPluginPath = $env:GST_PLUGIN_PATH
 $hadGstRegistry = Test-Path Env:GST_REGISTRY
 $previousGstRegistry = $env:GST_REGISTRY
+$hadMsys2PathMode = Test-Path Env:AIRPLAY_MSYS2_PATH_MODE
+$previousMsys2PathMode = $env:AIRPLAY_MSYS2_PATH_MODE
 
 try {
+    $env:AIRPLAY_MSYS2_PATH_MODE = "1"
     $env:GST_PLUGIN_PATH = $PluginDir
     $env:PATH = "$MSys2Bin;$env:PATH"
 
@@ -231,5 +234,10 @@ try {
         $env:GST_REGISTRY = $previousGstRegistry
     } else {
         Remove-Item Env:GST_REGISTRY -ErrorAction SilentlyContinue
+    }
+    if ($hadMsys2PathMode) {
+        $env:AIRPLAY_MSYS2_PATH_MODE = $previousMsys2PathMode
+    } else {
+        Remove-Item Env:AIRPLAY_MSYS2_PATH_MODE -ErrorAction SilentlyContinue
     }
 }

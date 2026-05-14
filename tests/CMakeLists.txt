@@ -106,6 +106,12 @@ if(AIRPLAY_POWERSHELL)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/PortablePackageValidationTest.ps1"
             -ProjectRoot "${PROJECT_SOURCE_DIR}"
     )
+    add_test(
+        NAME RunScriptTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/RunScriptTest.ps1"
+            -ProjectRoot "${PROJECT_SOURCE_DIR}"
+    )
 endif()
 
 

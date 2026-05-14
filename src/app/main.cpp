@@ -13,7 +13,9 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
 
 #if AIRPLAY_WITH_UXPLAY
-    const QStringList missingRuntime = DependencyDiagnostics::checkStandaloneRuntime(QCoreApplication::applicationDirPath());
+    const QStringList missingRuntime = DependencyDiagnostics::shouldCheckStandaloneRuntime()
+        ? DependencyDiagnostics::checkStandaloneRuntime(QCoreApplication::applicationDirPath())
+        : QStringList{};
     if (!missingRuntime.isEmpty()) {
         QMessageBox::critical(
             nullptr,
