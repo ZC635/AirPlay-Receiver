@@ -92,6 +92,36 @@ private slots:
         QSKIP("UxPlay support is not enabled in this build");
 #endif
     }
+
+    void startAfterCodecSelectionSkipsDestroyedRendererSlots() {
+#if AIRPLAY_WITH_UXPLAY
+        if (!gstreamer_init()) {
+            QSKIP("GStreamer is not available in this environment");
+        }
+
+        auto logger = std::unique_ptr<logger_t, decltype(&logger_destroy)>(logger_init(), logger_destroy);
+        QVERIFY(logger != nullptr);
+        logger_set_level(logger.get(), LOGGER_DEBUG);
+        logger_set_callback(logger.get(), [](void *, int, const char *) {}, nullptr);
+
+        struct RendererCleanup {
+            ~RendererCleanup() { video_renderer_destroy(); }
+        } cleanup;
+
+        videoflip_t videoFlip[2] = {NONE, NONE};
+        QCOMPARE(video_renderer_init(logger.get(), "Video Renderer Reconnect Test", videoFlip, "h264parse", "",
+                                      "decodebin", "videoconvert", "fakesink", "", false, false, false, true,
+                                      3, nullptr), 0);
+        video_renderer_start();
+        QCOMPARE(video_renderer_choose_codec(false, false), 0);
+
+        video_renderer_stop();
+        video_renderer_start();
+        QCOMPARE(video_renderer_choose_codec(false, false), 0);
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
 };
 
 QTEST_MAIN(VideoRendererLifecycleTest)
