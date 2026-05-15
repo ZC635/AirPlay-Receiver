@@ -66,6 +66,19 @@ HWND windowFromWidgetCenter(const QWidget &widget) {
     return WindowFromPoint(POINT{globalCenter.x(), globalCenter.y()});
 }
 
+RECT nativeClientRectFor(HWND hwnd) {
+    RECT localClient{};
+    if (!GetClientRect(hwnd, &localClient)) {
+        return RECT{};
+    }
+
+    POINT clientPoints[2] = {{localClient.left, localClient.top}, {localClient.right, localClient.bottom}};
+    if (MapWindowPoints(hwnd, nullptr, clientPoints, 2) == 0 && GetLastError() != 0) {
+        return RECT{};
+    }
+    return RECT{clientPoints[0].x, clientPoints[0].y, clientPoints[1].x, clientPoints[1].y};
+}
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -1055,12 +1068,14 @@ private slots:
         const LONG originalLeft = rect.left;
         const LONG originalRight = rect.right;
         const LONG originalTop = rect.top;
+        const LONG originalBottom = rect.bottom;
         rect.right += 160;
 
         SendMessage(hwnd, WM_SIZING, WMSZ_RIGHT, reinterpret_cast<LPARAM>(&rect));
 
-        const int frameWidth = window.frameGeometry().width() - window.width();
-        const int frameHeight = window.frameGeometry().height() - window.height();
+        const RECT nativeClient = nativeClientRectFor(hwnd);
+        const int frameWidth = static_cast<int>(originalRight - originalLeft) - static_cast<int>(nativeClient.right - nativeClient.left);
+        const int frameHeight = static_cast<int>(originalBottom - originalTop) - static_cast<int>(nativeClient.bottom - nativeClient.top);
         const int clientWidth = static_cast<int>(rect.right - rect.left) - frameWidth;
         const int clientHeight = static_cast<int>(rect.bottom - rect.top) - frameHeight;
         const double actualRatio = static_cast<double>(clientWidth) / clientHeight;
@@ -1093,12 +1108,14 @@ private slots:
         const LONG originalLeft = rect.left;
         const LONG originalRight = rect.right;
         const LONG originalTop = rect.top;
+        const LONG originalBottom = rect.bottom;
         rect.left -= 160;
 
         SendMessage(hwnd, WM_SIZING, WMSZ_LEFT, reinterpret_cast<LPARAM>(&rect));
 
-        const int frameWidth = window.frameGeometry().width() - window.width();
-        const int frameHeight = window.frameGeometry().height() - window.height();
+        const RECT nativeClient = nativeClientRectFor(hwnd);
+        const int frameWidth = static_cast<int>(originalRight - originalLeft) - static_cast<int>(nativeClient.right - nativeClient.left);
+        const int frameHeight = static_cast<int>(originalBottom - originalTop) - static_cast<int>(nativeClient.bottom - nativeClient.top);
         const int clientWidth = static_cast<int>(rect.right - rect.left) - frameWidth;
         const int clientHeight = static_cast<int>(rect.bottom - rect.top) - frameHeight;
         const double actualRatio = static_cast<double>(clientWidth) / clientHeight;

@@ -2,6 +2,8 @@
 
 #include "platform/WindowsWindowBehavior.h"
 
+#include <QRect>
+#include <QSize>
 #include <QWidget>
 
 #ifndef NOMINMAX
@@ -42,6 +44,22 @@ private slots:
         QCOMPARE(constraints.minOuterHeight, 222);
         QCOMPARE(constraints.maxOuterWidth, 1288);
         QCOMPARE(constraints.maxOuterHeight, 762);
+    }
+
+    void nativeAspectTargetMarginsScaleLogicalTargetIntoNativeClient() {
+        const RECT outerRect{100, 100, 626, 1270};
+        const RECT clientRect{114, 158, 612, 1238};
+
+        const AspectRatioFrameMargins margins = aspectTargetMarginsFromNativeGeometry(
+            outerRect,
+            clientRect,
+            QSize(249, 540),
+            QRect(0, 0, 249, 540));
+
+        QCOMPARE(margins.left, 14);
+        QCOMPARE(margins.top, 58);
+        QCOMPARE(margins.right, 14);
+        QCOMPARE(margins.bottom, 32);
     }
 
     void nativeWindowPosChangingClearsNoCopyBitsForResize() {
@@ -86,6 +104,41 @@ private slots:
         const int clientWidth = clientWidthForOuterWidth(static_cast<int>(rect.right - rect.left), margins);
         const int clientHeight = clientHeightForOuterHeight(static_cast<int>(rect.bottom - rect.top), margins);
         QVERIFY(qAbs((static_cast<double>(clientWidth) / clientHeight) - (16.0 / 9.0)) < 0.01);
+    }
+
+    void nativeSizingDispatchLocksAspectTargetWidget() {
+        QWidget widget;
+        widget.setMinimumSize(100, 80);
+        widget.setMaximumSize(2000, 1200);
+        widget.setGeometry(50, 80, 960, 580);
+
+        QWidget videoTarget(&widget);
+        videoTarget.setGeometry(0, 40, 960, 540);
+
+        RECT rect{100, 100, 1100, 740};
+        qintptr result = 0;
+
+        const WindowsNativeEventResult handled = handleNativeWindowBehaviorEvent(
+            WM_SIZING,
+            WMSZ_RIGHT,
+            reinterpret_cast<LPARAM>(&rect),
+            &result,
+            &widget,
+            true,
+            1920,
+            1080,
+            &videoTarget);
+
+        QVERIFY(handled.handled);
+        QCOMPARE(result, static_cast<qintptr>(TRUE));
+        QCOMPARE(rect.left, 100L);
+        QCOMPARE(rect.top, 100L);
+        QCOMPARE(rect.right, 1100L);
+
+        const AspectRatioFrameMargins margins = aspectTargetMarginsFor(widget, videoTarget);
+        const int targetWidth = clientWidthForOuterWidth(static_cast<int>(rect.right - rect.left), margins);
+        const int targetHeight = clientHeightForOuterHeight(static_cast<int>(rect.bottom - rect.top), margins);
+        QVERIFY(qAbs((static_cast<double>(targetWidth) / targetHeight) - (16.0 / 9.0)) < 0.01);
     }
 };
 

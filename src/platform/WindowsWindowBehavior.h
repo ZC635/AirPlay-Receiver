@@ -3,6 +3,8 @@
 #include "platform/AspectRatioSizing.h"
 
 #include <QtGlobal>
+#include <QRect>
+#include <QSize>
 #include <QWidget>
 
 #ifndef NOMINMAX
@@ -22,6 +24,12 @@ bool setWindowBorderColor(WId windowId, bool enabled);
 void makeNativeOverlay(QWidget *widget);
 void raiseNativeOverlay(QWidget *widget);
 AspectRatioFrameMargins frameMarginsFor(const QWidget &widget);
+AspectRatioFrameMargins aspectTargetMarginsFor(const QWidget &window, const QWidget &target);
+AspectRatioFrameMargins aspectTargetMarginsFromNativeGeometry(
+    const RECT &outerRect,
+    const RECT &clientRect,
+    QSize logicalClientSize,
+    QRect logicalTargetGeometry);
 AspectRatioSizeConstraints sizeConstraintsFor(const QWidget &widget, const AspectRatioFrameMargins &margins);
 
 WindowsNativeEventResult handleNativeWindowBehaviorEvent(
@@ -32,4 +40,5 @@ WindowsNativeEventResult handleNativeWindowBehaviorEvent(
     const QWidget *widget = nullptr,
     bool aspectRatioLock = false,
     int videoWidth = 0,
-    int videoHeight = 0);
+    int videoHeight = 0,
+    const QWidget *aspectTarget = nullptr);

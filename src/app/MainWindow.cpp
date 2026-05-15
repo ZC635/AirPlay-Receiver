@@ -481,7 +481,7 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr
     auto *msg = static_cast<MSG *>(message);
     if (msg != nullptr) {
         const WindowsNativeEventResult nativeResult = handleNativeWindowBehaviorEvent(
-            msg->message, msg->wParam, msg->lParam, result, this, aspectRatioLock_, videoWidth_, videoHeight_);
+            msg->message, msg->wParam, msg->lParam, result, this, aspectRatioLock_, videoWidth_, videoHeight_, videoSurface_);
         if (nativeResult.handled) {
             return true;
         }
@@ -528,11 +528,14 @@ void MainWindow::applyVideoFitMode(bool enabled) {
 void MainWindow::enforceAspectRatio() {
     if (videoWidth_ <= 0 || videoHeight_ <= 0) return;
     const double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
-    const AspectRatioFrameMargins margins = frameMarginsFor(*this);
-    const AspectRatioSizeConstraints constraints = sizeConstraintsFor(*this, margins);
+    const AspectRatioFrameMargins frameMargins = frameMarginsFor(*this);
+    const AspectRatioFrameMargins aspectMargins = isVisible()
+        ? aspectTargetMarginsFor(*this, *videoSurface_)
+        : frameMargins;
+    const AspectRatioSizeConstraints constraints = sizeConstraintsFor(*this, frameMargins);
     // Resulting height may differ from current when size constraints are active.
     const AspectRatioOuterSize outer = adjustedOuterSizeDrivenByHeight(
-        frameGeometry().height(), targetRatio, margins, constraints);
-    resize(clientWidthForOuterWidth(outer.width, margins),
-           clientHeightForOuterHeight(outer.height, margins));
+        frameGeometry().height(), targetRatio, aspectMargins, constraints);
+    resize(clientWidthForOuterWidth(outer.width, frameMargins),
+           clientHeightForOuterHeight(outer.height, frameMargins));
 }
