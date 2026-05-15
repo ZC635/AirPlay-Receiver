@@ -15,6 +15,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-PortableRuntimeManifestPaths {
+    $projectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+    $manifestPath = Join-Path $projectRoot "config\portable-runtime-manifest.txt"
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        throw "Portable runtime manifest was not found: $manifestPath"
+    }
+
+    return Get-Content -LiteralPath $manifestPath |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and (-not $_.StartsWith("#")) } |
+        ForEach-Object { $_.Replace('/', '\') }
+}
+
 # Normalize GNU-style aliases because PowerShell only binds -Name parameters.
 $NormalizedArgs = @()
 if ($RemainingArgs.Count -gt 0) { $NormalizedArgs += $RemainingArgs }
@@ -243,25 +256,7 @@ function Ensure-MSys2Requirements {
 function Get-StandaloneMissingRequirements {
     param([string]$Directory)
 
-    $requiredPaths = @(
-        "airplay_receiver.exe",
-        "Qt6Core.dll",
-        "Qt6Gui.dll",
-        "Qt6Widgets.dll",
-        "platforms\qwindows.dll",
-        "libgcc_s_seh-1.dll",
-        "libstdc++-6.dll",
-        "libwinpthread-1.dll",
-        "libgstreamer-1.0-0.dll",
-        "gstreamer-plugins\libgstapp.dll",
-        "gstreamer-plugins\libgstplayback.dll",
-        "gstreamer-plugins\libgstautodetect.dll",
-        "gstreamer-plugins\libgstvideoparsersbad.dll",
-        "gstreamer-plugins\libgstlibav.dll",
-        "gstreamer-plugins\libgstd3d11.dll",
-        "gstreamer-plugins\libgstwasapi.dll",
-        "libqmdnsengine.dll"
-    )
+    $requiredPaths = @(Get-PortableRuntimeManifestPaths)
 
     $missing = @()
     foreach ($relativePath in $requiredPaths) {
@@ -439,41 +434,44 @@ function Invoke-Build {
         if (-not (Test-Path $PluginOutDir)) { New-Item -ItemType Directory -Path $PluginOutDir -Force | Out-Null }
         Get-ChildItem $PluginDir -Filter "*.dll" | Copy-Item -Destination $PluginOutDir -Force
 
-        if ($IsPortable) {
-            Write-Host "  Generating GStreamer registry cache..." -ForegroundColor Gray
-            $registryDir = Join-Path $VariantBuildDir "gstreamer-1.0"
-            if (-not (Test-Path $registryDir)) { New-Item -ItemType Directory -Path $registryDir -Force | Out-Null }
-            $portableRegistry = Join-Path $registryDir "registry.x86_64.bin"
-            $hadGstRegistryForScan = Test-Path Env:GST_REGISTRY
-            $previousGstRegistryForScan = $env:GST_REGISTRY
-            $env:GST_REGISTRY = $portableRegistry
-            $hadGstPluginPathForScan = Test-Path Env:GST_PLUGIN_PATH
-            $previousGstPluginPathForScan = $env:GST_PLUGIN_PATH
-            $env:GST_PLUGIN_PATH = $PluginOutDir
-            $prevEAP = $ErrorActionPreference
-            $ErrorActionPreference = "Continue"
-            $gstInspectOutput = & "$MSys2Bin\gst-inspect-1.0.exe" --gst-disable-registry-fork 2>&1
-            $gstInspectExit = $LASTEXITCODE
-            $ErrorActionPreference = $prevEAP
-            if ($gstInspectExit -ne 0) {
-                Write-Warning "gst-inspect-1.0.exe exited with code $gstInspectExit. GStreamer registry may be incomplete. $($gstInspectOutput -join ' ')"
-            }
-            if ($hadGstPluginPathForScan) {
-                $env:GST_PLUGIN_PATH = $previousGstPluginPathForScan
-            } else {
-                Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
-            }
-            if ($hadGstRegistryForScan) {
-                $env:GST_REGISTRY = $previousGstRegistryForScan
-            } else {
-                Remove-Item Env:GST_REGISTRY -ErrorAction SilentlyContinue
-            }
-            if (Test-Path $portableRegistry) {
-                Write-Host "    Registry generated at gstreamer-1.0\registry.x86_64.bin" -ForegroundColor Gray
-            } else {
-                Write-Warning "GStreamer registry was not generated. Plugin discovery may be slow."
-            }
+        Write-Host "  Generating GStreamer registry cache..." -ForegroundColor Gray
+        $registryDir = Join-Path $VariantBuildDir "gstreamer-1.0"
+        if (-not (Test-Path $registryDir)) { New-Item -ItemType Directory -Path $registryDir -Force | Out-Null }
+        $portableRegistry = Join-Path $registryDir "registry.x86_64.bin"
+        $hadGstRegistryForScan = Test-Path Env:GST_REGISTRY
+        $previousGstRegistryForScan = $env:GST_REGISTRY
+        $env:GST_REGISTRY = $portableRegistry
+        $hadGstPluginPathForScan = Test-Path Env:GST_PLUGIN_PATH
+        $previousGstPluginPathForScan = $env:GST_PLUGIN_PATH
+        $env:GST_PLUGIN_PATH = $PluginOutDir
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $gstInspectOutput = & "$MSys2Bin\gst-inspect-1.0.exe" --gst-disable-registry-fork 2>&1
+        $gstInspectExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        if ($gstInspectExit -ne 0) {
+            Write-Warning "gst-inspect-1.0.exe exited with code $gstInspectExit. GStreamer registry may be incomplete. $($gstInspectOutput -join ' ')"
         }
+        if ($hadGstPluginPathForScan) {
+            $env:GST_PLUGIN_PATH = $previousGstPluginPathForScan
+        } else {
+            Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
+        }
+        if ($hadGstRegistryForScan) {
+            $env:GST_REGISTRY = $previousGstRegistryForScan
+        } else {
+            Remove-Item Env:GST_REGISTRY -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $portableRegistry) {
+            Write-Host "    Registry generated at gstreamer-1.0\registry.x86_64.bin" -ForegroundColor Gray
+        } else {
+            Write-Warning "GStreamer registry was not generated. Plugin discovery may be slow."
+        }
+
+        $manifestSource = Join-Path $ProjectRoot "config\portable-runtime-manifest.txt"
+        $manifestOutDir = Join-Path $VariantBuildDir "config"
+        if (-not (Test-Path $manifestOutDir)) { New-Item -ItemType Directory -Path $manifestOutDir -Force | Out-Null }
+        Copy-Item $manifestSource $manifestOutDir -Force
 
         $LauncherSrc = Join-Path $ProjectRoot "scripts\launcher.cmd"
         if (Test-Path $LauncherSrc) { Copy-Item $LauncherSrc $VariantBuildDir -Force }

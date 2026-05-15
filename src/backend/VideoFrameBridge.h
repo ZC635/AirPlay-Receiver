@@ -4,7 +4,6 @@
 #include <QImage>
 
 #include <gst/gst.h>
-#include <gst/app/gstappsink.h>
 
 #include "backend/GstAppSinkFrameSource.h"
 
@@ -23,9 +22,7 @@ signals:
     void frameReady(QImage frame);
 
 private:
-    static GstFlowReturn onNewSample(GstAppSink *appsink, gpointer userData);
     AppSinkFrameSource *m_source = nullptr;
     bool m_ownsSource = false;
     bool m_started = false;
-    GstElement *m_appsink = nullptr;
 };

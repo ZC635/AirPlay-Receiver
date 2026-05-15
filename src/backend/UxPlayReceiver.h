@@ -1,15 +1,19 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
+#include <vector>
 
 #include <QString>
 #include <QMutex>
 #include <QRecursiveMutex>
+#include <QWaitCondition>
 
 #include "backend/AirPlayReceiver.h"
+#include "backend/UxPlayCallbackDispatch.h"
 
 class DiscoveryRestartController;
-class MdnsPublisher;
+class MdnsPublishing;
 class VideoFrameBridge;
 
 struct UxPlayReceiverConfig {
@@ -18,6 +22,7 @@ struct UxPlayReceiverConfig {
     QString audioSink = "autoaudiosink";
     int basePort = 0;
     VideoQualitySettings videoQuality;
+    MdnsPublishing *mdnsPublisher = nullptr;
 };
 
 class UxPlayReceiver : public AirPlayReceiver {
@@ -38,26 +43,61 @@ public:
     bool applyReceiverName(const QString &name) override;
     bool applyVideoQuality(const VideoQualitySettings &quality) override;
 #if AIRPLAY_WITH_UXPLAY
+    struct CallbackContext {
+        CallbackContext(UxPlayReceiver *receiver, quint64 generation);
+
+        bool enter(UxPlayReceiver **receiverOut);
+        void leave();
+        void close();
+
+        quint64 generation = 0;
+
+    private:
+        UxPlayReceiver *m_receiver = nullptr;
+        bool m_closed = false;
+        int m_inFlight = 0;
+        QMutex m_mutex;
+        QWaitCondition m_idle;
+    };
+
     void setStateFromUxPlayCallback(ReceiverState state);
     void setStateFromUxPlayCallback(ReceiverState state, quint64 generation);
     quint64 callbackGenerationForUxPlayCallback() const;
     double currentVolumeForUxPlayClientVolumeCallback() const;
     void startAudioRendererFromUxPlayCallback(unsigned char *compressionType);
+    void startAudioRendererFromUxPlayCallback(unsigned char *compressionType, quint64 generation);
     void setVolumeFromUxPlayCallback(double volume);
+    void setVolumeFromUxPlayCallback(double volume, quint64 generation);
     void handleLogMessageFromUxPlayCallback(int level, const char *message);
+    void handleLogMessageFromUxPlayCallback(int level, const char *message, quint64 generation);
+    void setMetadataFromUxPlayCallback(const void *buffer, int buflen);
+    void setMetadataFromUxPlayCallback(const void *buffer, int buflen, quint64 generation);
     void setCoverArtFromUxPlayCallback(const void *buffer, int buflen);
+    void setCoverArtFromUxPlayCallback(const void *buffer, int buflen, quint64 generation);
+    void setProgressFromUxPlayCallback(uint32_t start, uint32_t current, uint32_t end);
+    void setProgressFromUxPlayCallback(uint32_t start, uint32_t current, uint32_t end, quint64 generation);
     void stopCoverArtRenderingFromUxPlayCallback();
+    void reportVideoSizeFromUxPlayCallback(int width, int height, quint64 generation);
     void handleVideoResetFromUxPlayCallback(int resetType);
     void handleVideoResetFromUxPlayCallback(int resetType, quint64 generation);
     void stopVideoPipelineForDisconnect();
+    void stopVideoPipelineForDisconnect(quint64 generation);
     void restartVideoPipelineForConnect();
+    void restartVideoPipelineForConnect(quint64 generation);
     void renderAudioBufferFromCallback(void *data, int *data_len, unsigned short *seqnum, uint64_t *ntp_time);
+    void renderAudioBufferFromCallback(void *data, int *data_len, unsigned short *seqnum, uint64_t *ntp_time, quint64 generation);
     void renderVideoBufferFromCallback(void *data, int *data_len, int *nal_count, uint64_t *ntp_time);
+    void renderVideoBufferFromCallback(void *data, int *data_len, int *nal_count, uint64_t *ntp_time, quint64 generation);
     void flushAudioRendererFromCallback();
+    void flushAudioRendererFromCallback(quint64 generation);
     void flushVideoRendererFromCallback();
+    void flushVideoRendererFromCallback(quint64 generation);
     void pauseVideoRendererFromCallback();
+    void pauseVideoRendererFromCallback(quint64 generation);
     void resumeVideoRendererFromCallback();
+    void resumeVideoRendererFromCallback(quint64 generation);
     int chooseVideoCodecFromCallback(bool video_is_h265);
+    int chooseVideoCodecFromCallback(bool video_is_h265, quint64 generation);
 #endif
 
 signals:
@@ -102,7 +142,11 @@ private:
     std::atomic<quint64> m_callbackGeneration = 0;
     QObject *m_glibTimer = nullptr;
     QRecursiveMutex m_rendererMutex;
+    UxPlayCallbackDispatch m_callbackDispatch;
+    CallbackContext *m_callbackContext = nullptr;
+    std::vector<std::unique_ptr<CallbackContext>> m_callbackContexts;
     DiscoveryRestartController *m_discoveryRestartController = nullptr;
-    MdnsPublisher *m_mdnsPublisher = nullptr;
+    MdnsPublishing *m_mdnsPublisher = nullptr;
+    bool m_ownsMdnsPublisher = false;
 #endif
 };

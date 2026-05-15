@@ -40,9 +40,13 @@ add_library(airplay_app_lib
     src/backend/DiscoveryRestartController.cpp
     src/backend/DiscoveryRestartController.h
     src/backend/FakeAirPlayReceiver.h
+    src/backend/ReceiverConfigurationChange.cpp
+    src/backend/ReceiverConfigurationChange.h
     src/backend/ReceiverState.h
     src/backend/ReceiverStatePolicy.h
     src/backend/ReceiverStatePolicy.cpp
+    src/backend/UxPlayCallbackDispatch.cpp
+    src/backend/UxPlayCallbackDispatch.h
     src/backend/UxPlayReceiver.cpp
     src/backend/UxPlayReceiver.h
     src/backend/GstAppSinkFrameSource.cpp
@@ -56,8 +60,11 @@ add_library(airplay_app_lib
     src/platform/AspectRatioSizing.h
     src/platform/FakeHotkeyService.h
     src/platform/HotkeyService.h
+    src/platform/MdnsPublishing.h
     src/platform/MdnsPublisher.cpp
     src/platform/MdnsPublisher.h
+    src/platform/WindowsWindowBehavior.cpp
+    src/platform/WindowsWindowBehavior.h
     src/platform/WindowsHotkeyService.cpp
     src/platform/WindowsHotkeyService.h
 )
@@ -80,6 +87,12 @@ endif()
 add_executable(airplay_receiver src/app/main.cpp src/app/app-icon.rc)
 target_link_libraries(airplay_receiver PRIVATE airplay_app_lib)
 set_target_properties(airplay_receiver PROPERTIES WIN32_EXECUTABLE TRUE)
+
+configure_file(
+    "${PROJECT_SOURCE_DIR}/config/portable-runtime-manifest.txt"
+    "${PROJECT_BINARY_DIR}/config/portable-runtime-manifest.txt"
+    COPYONLY
+)
 
 enable_testing()
 add_subdirectory(tests)

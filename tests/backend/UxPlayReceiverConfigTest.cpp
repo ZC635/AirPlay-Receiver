@@ -13,6 +13,7 @@
 #define private public
 #endif
 #include "backend/DiscoveryRestartController.h"
+#include "backend/UxPlayCallbackDispatch.h"
 #include "backend/UxPlayReceiver.h"
 #if AIRPLAY_WITH_UXPLAY
 #undef private
@@ -21,8 +22,35 @@
 #if AIRPLAY_WITH_UXPLAY
 #include "lib/raop.h"
 #include "lib/dnssd.h"
+#include "platform/MdnsPublishing.h"
 #include "platform/MdnsPublisher.h"
 #include <gst/gst.h>
+
+class FakeMdnsPublishing : public MdnsPublishing {
+public:
+    bool publish(const QString &receiverName, const QByteArray &hardwareAddress, quint16 port,
+                 const char *raopTxt, int raopTxtLength,
+                 const char *airplayTxt, int airplayTxtLength) override {
+        publishCalls++;
+        lastReceiverName = receiverName;
+        lastHardwareAddress = hardwareAddress;
+        lastPort = port;
+        lastRaopTxt = QByteArray(raopTxt, raopTxtLength);
+        lastAirplayTxt = QByteArray(airplayTxt, airplayTxtLength);
+        return publishResult;
+    }
+
+    void stop() override { stopCalls++; }
+
+    int publishCalls = 0;
+    int stopCalls = 0;
+    bool publishResult = true;
+    QString lastReceiverName;
+    QByteArray lastHardwareAddress;
+    quint16 lastPort = 0;
+    QByteArray lastRaopTxt;
+    QByteArray lastAirplayTxt;
+};
 
 static bool txtRecordContainsKey(const char *data, int length, const char *key) {
     const char *end = data + length;
@@ -121,10 +149,12 @@ private slots:
 
     void startWithUxPlayStartsReceiverLifecycle() {
 #if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing publisher;
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Test";
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
         UxPlayReceiver receiver(config);
         QSignalSpy stateSpy(&receiver, &AirPlayReceiver::stateChanged);
         QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
@@ -136,11 +166,86 @@ private slots:
         }
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         QVERIFY(stateSpy.count() >= 1);
-
-        QVERIFY(receiver.m_mdnsPublisher != nullptr);
+        QCOMPARE(publisher.publishCalls, 1);
 
         receiver.stop();
         QCOMPARE(receiver.state(), ReceiverState::Idle);
+#endif
+    }
+
+    void startAndStopUseInjectedMdnsPublisherForDiscoveryLifecycle() {
+#if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing publisher;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Publishing Seam Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+
+        if (errorSpy.count() != 0) {
+            QFAIL(qPrintable(errorSpy.at(0).at(0).toString()));
+        }
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        QCOMPARE(publisher.publishCalls, 1);
+        QCOMPARE(publisher.lastReceiverName, config.serverName);
+        QVERIFY(!publisher.lastHardwareAddress.isEmpty());
+        QVERIFY(publisher.lastPort > 0);
+        QVERIFY(txtRecordContainsKey(publisher.lastRaopTxt.constData(), publisher.lastRaopTxt.size(), "am"));
+        QVERIFY(txtRecordContainsKey(publisher.lastAirplayTxt.constData(), publisher.lastAirplayTxt.size(), "features"));
+
+        receiver.stop();
+
+        QCOMPARE(receiver.state(), ReceiverState::Idle);
+        QVERIFY(publisher.stopCalls >= 1);
+#endif
+    }
+
+    void publishFailurePreventsUxPlayReceiverFromBecomingDiscoverable() {
+#if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing publisher;
+        publisher.publishResult = false;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Publishing Failure Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+
+        QCOMPARE(publisher.publishCalls, 1);
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QVERIFY(errorSpy.count() >= 1);
+        QCOMPARE(errorSpy.last().at(0).toString(), QString("Failed to publish mDNS services"));
+        QVERIFY(publisher.stopCalls >= 1);
+#endif
+    }
+
+    void defaultConfigCreatesOwnedMdnsPublisherOnSuccessfulStart() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Default Publisher Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
+
+        receiver.start();
+
+        if (errorSpy.count() != 0) {
+            QFAIL(qPrintable(errorSpy.at(0).at(0).toString()));
+        }
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        QVERIFY(receiver.m_config.mdnsPublisher == nullptr);
+        QVERIFY(receiver.m_mdnsPublisher != nullptr);
+        QVERIFY(receiver.m_ownsMdnsPublisher);
+
+        receiver.stop();
 #endif
     }
 
@@ -218,6 +323,247 @@ private slots:
 
         QCOMPARE(volumeSpy.count(), 1);
         QVERIFY(std::abs(volumeSpy.at(0).at(0).toDouble() - std::pow(10.0, 0.05 * -15.0)) < 0.000001);
+#endif
+    }
+
+    void callbackDispatchRejectsStaleGenerationUniformly() {
+#if AIRPLAY_WITH_UXPLAY
+        std::atomic_bool acceptingCallbacks = true;
+        std::atomic<quint64> callbackGeneration = 7;
+        std::atomic_bool renderersStarted = true;
+        QRecursiveMutex rendererMutex;
+        UxPlayCallbackDispatch dispatch(acceptingCallbacks, callbackGeneration, renderersStarted, rendererMutex);
+
+        int stateCallbackCount = 0;
+        int resetCallbackCount = 0;
+
+        QVERIFY(!dispatch.runIfCurrent(6, [&] { stateCallbackCount++; }));
+        QVERIFY(!dispatch.runWithRendererStarted(6, [&] { resetCallbackCount++; }));
+
+        QCOMPARE(stateCallbackCount, 0);
+        QCOMPARE(resetCallbackCount, 0);
+#endif
+    }
+
+    void callbackDispatchGuardsRendererStartedUniformly() {
+#if AIRPLAY_WITH_UXPLAY
+        std::atomic_bool acceptingCallbacks = true;
+        std::atomic<quint64> callbackGeneration = 7;
+        std::atomic_bool renderersStarted = false;
+        QRecursiveMutex rendererMutex;
+        UxPlayCallbackDispatch dispatch(acceptingCallbacks, callbackGeneration, renderersStarted, rendererMutex);
+
+        int audioCallbackCount = 0;
+        int videoCallbackCount = 0;
+
+        QVERIFY(!dispatch.runWithRendererStarted(7, [&] { audioCallbackCount++; }));
+        QVERIFY(!dispatch.runWithRendererStarted(7, [&] { videoCallbackCount++; }));
+
+        QCOMPARE(audioCallbackCount, 0);
+        QCOMPARE(videoCallbackCount, 0);
+#endif
+    }
+
+    void uxPlayReceiverRejectsStaleGenerationAcrossCallbackPaths() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(7);
+        receiver.m_renderersStarted.store(true);
+        receiver.setState(ReceiverState::Connected);
+        receiver.m_videoRendererStopped.store(true);
+
+        receiver.setStateFromUxPlayCallback(ReceiverState::Discoverable, 6);
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN, 6);
+
+        QCOMPARE(receiver.state(), ReceiverState::Connected);
+        QVERIFY(receiver.m_videoRendererStopped.load());
+        receiver.m_renderersStarted.store(false);
+#endif
+    }
+
+    void uxPlayReceiverRejectsStaleGenerationBeforeConnectionRendererMutation() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(7);
+        receiver.m_renderersStarted.store(true);
+
+        receiver.m_videoRendererStopped.store(true);
+        receiver.restartVideoPipelineForConnect(6);
+        QVERIFY(receiver.m_videoRendererStopped.load());
+
+        receiver.m_videoRendererStopped.store(false);
+        receiver.stopVideoPipelineForDisconnect(6);
+        QVERIFY(!receiver.m_videoRendererStopped.load());
+        receiver.m_renderersStarted.store(false);
+#endif
+    }
+
+    void uxPlayReceiverGuardsRendererStartedAcrossCallbackPaths() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(7);
+        receiver.m_renderersStarted.store(false);
+
+        QCOMPARE(receiver.chooseVideoCodecFromCallback(false), -1);
+
+        receiver.m_videoRendererStopped.store(true);
+        receiver.restartVideoPipelineForConnect();
+        QVERIFY(receiver.m_videoRendererStopped.load());
+#endif
+    }
+
+    void queuedCoverArtCallbackRevalidatesGenerationBeforeEmit() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(7);
+        QSignalSpy coverArtSpy(&receiver, &UxPlayReceiver::coverArtReceived);
+
+        const QByteArray coverArt("fake-jpeg-data");
+        receiver.setCoverArtFromUxPlayCallback(coverArt.constData(), coverArt.size());
+        receiver.m_callbackGeneration.store(8);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(coverArtSpy.count(), 0);
+#endif
+    }
+
+    void queuedMetadataCallbackRevalidatesGenerationBeforeEmit() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(7);
+        QSignalSpy metadataSpy(&receiver, &UxPlayReceiver::trackMetadataChanged);
+
+        const QByteArray title("Song");
+        QByteArray metadata("mlit");
+        const int mlitLength = 8 + title.size();
+        metadata.append(char((mlitLength >> 24) & 0xff));
+        metadata.append(char((mlitLength >> 16) & 0xff));
+        metadata.append(char((mlitLength >> 8) & 0xff));
+        metadata.append(char(mlitLength & 0xff));
+        metadata.append("minm");
+        metadata.append(char((title.size() >> 24) & 0xff));
+        metadata.append(char((title.size() >> 16) & 0xff));
+        metadata.append(char((title.size() >> 8) & 0xff));
+        metadata.append(char(title.size() & 0xff));
+        metadata.append(title);
+
+        receiver.setMetadataFromUxPlayCallback(metadata.constData(), metadata.size());
+        receiver.m_callbackGeneration.store(8);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(metadataSpy.count(), 0);
+#endif
+    }
+
+    void queuedProgressCallbackRevalidatesGenerationBeforeEmit() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(7);
+        QSignalSpy progressSpy(&receiver, &UxPlayReceiver::progressUpdated);
+
+        receiver.setProgressFromUxPlayCallback(0, 44100, 88200);
+        receiver.m_callbackGeneration.store(8);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(progressSpy.count(), 0);
+#endif
+    }
+
+    void staleCallbackContextAfterRestartCannotMutateReceiver() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(8);
+        receiver.setState(ReceiverState::Discoverable);
+
+        UxPlayReceiver::CallbackContext oldContext(&receiver, 7);
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected, oldContext.generation);
+
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+#endif
+    }
+
+    void closedCallbackContextRejectsNewCallbacks() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        UxPlayReceiver::CallbackContext context(&receiver, 7);
+        UxPlayReceiver *enteredReceiver = nullptr;
+
+        QVERIFY(context.enter(&enteredReceiver));
+        QCOMPARE(enteredReceiver, &receiver);
+        context.leave();
+
+        context.close();
+
+        enteredReceiver = &receiver;
+        QVERIFY(!context.enter(&enteredReceiver));
+        QVERIFY(enteredReceiver == nullptr);
+#endif
+    }
+
+    void callbackContextCloseWaitsForInflightCallback() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        UxPlayReceiver::CallbackContext context(&receiver, 7);
+        UxPlayReceiver *enteredReceiver = nullptr;
+        QVERIFY(context.enter(&enteredReceiver));
+
+        std::atomic_bool closeReturned = false;
+        QSemaphore closeEntered;
+        QThread closer;
+        QObject::connect(&closer, &QThread::started, [&] {
+            closeEntered.release();
+            context.close();
+            closeReturned.store(true);
+            closer.quit();
+        });
+
+        closer.start();
+        QVERIFY(closeEntered.tryAcquire(1, 1000));
+        QTest::qWait(50);
+        QVERIFY(!closeReturned.load());
+
+        context.leave();
+        QVERIFY(closer.wait(1000));
+        QVERIFY(closeReturned.load());
+#endif
+    }
+
+    void staleVolumeLogCallbackAfterRestartCannotMutateReceiver() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(8);
+        QSignalSpy volumeSpy(&receiver, &AirPlayReceiver::volumeChanged);
+
+        receiver.handleLogMessageFromUxPlayCallback(LOGGER_DEBUG, "volume: -15.000000 ", 7);
+
+        QCOMPARE(volumeSpy.count(), 0);
+#endif
+    }
+
+    void queuedVideoSizeCallbackRevalidatesGenerationBeforeEmit() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiver receiver;
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(7);
+        QSignalSpy sizeSpy(&receiver, &AirPlayReceiver::videoSizeChanged);
+
+        receiver.reportVideoSizeFromUxPlayCallback(1280, 720, 7);
+        receiver.m_callbackGeneration.store(8);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(sizeSpy.count(), 0);
 #endif
     }
 
@@ -576,7 +922,7 @@ private slots:
         QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
         QVERIFY(receiver.m_videoFrameBridge != nullptr);
 
-        auto appsinkEmitsToBridge = [&receiver] {
+        auto appsinkHasOneFrameHandler = [&receiver] {
             GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
             if (!pipeline) {
                 return false;
@@ -589,18 +935,20 @@ private slots:
 
             gboolean emitSignals = FALSE;
             g_object_get(G_OBJECT(appsink), "emit-signals", &emitSignals, nullptr);
-            const gulong handler = g_signal_handler_find(appsink, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr,
-                                                         receiver.m_videoFrameBridge);
+            const guint signalId = g_signal_lookup("new-sample", G_OBJECT_TYPE(appsink));
+            const guint handlerCount = g_signal_handlers_block_matched(appsink, G_SIGNAL_MATCH_ID, signalId, 0,
+                                                                       nullptr, nullptr, nullptr);
+            g_signal_handlers_unblock_matched(appsink, G_SIGNAL_MATCH_ID, signalId, 0, nullptr, nullptr, nullptr);
             gst_object_unref(appsink);
-            return emitSignals == TRUE && handler != 0;
+            return emitSignals == TRUE && handlerCount == 1;
         };
 
-        QVERIFY(appsinkEmitsToBridge());
+        QVERIFY(appsinkHasOneFrameHandler());
 
         receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
 
         QVERIFY(receiver.m_videoFrameBridge != nullptr);
-        QVERIFY(appsinkEmitsToBridge());
+        QVERIFY(appsinkHasOneFrameHandler());
 
         receiver.stop();
 #endif

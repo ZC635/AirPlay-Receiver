@@ -7,6 +7,7 @@
 #include "backend/AirPlayReceiver.h"
 #include "platform/AspectRatioSizing.h"
 #include "platform/HotkeyService.h"
+#include "platform/WindowsWindowBehavior.h"
 
 #include <algorithm>
 #include <QGridLayout>
@@ -19,15 +20,6 @@
 #include <QWidget>
 #include <cmath>
 #include <utility>
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#include <dwmapi.h>
 
 namespace {
 constexpr double kAirPlayMinimumVolumeDb = -30.0;
@@ -56,70 +48,6 @@ int sliderPercentFromVolumeGain(double volume) {
     return std::clamp(static_cast<int>(std::lround(sliderFraction * 100.0)), 0, 100);
 }
 
-bool setNativeAlwaysOnTop(WId windowId, bool enabled) {
-    HWND window = reinterpret_cast<HWND>(windowId);
-    if (window == nullptr || !IsWindow(window)) {
-        return false;
-    }
-
-    return SetWindowPos(
-               window,
-               enabled ? HWND_TOPMOST : HWND_NOTOPMOST,
-               0,
-               0,
-               0,
-               0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER) != FALSE;
-}
-
-bool setWindowBorderColor(WId windowId, bool enabled) {
-    HWND window = reinterpret_cast<HWND>(windowId);
-    if (window == nullptr || !IsWindow(window)) {
-        return false;
-    }
-    const COLORREF blue = RGB(0x33, 0x96, 0xF3);
-    const COLORREF none = 0xFFFFFFFE;
-    return SUCCEEDED(DwmSetWindowAttribute(
-        window, 34, enabled ? &blue : &none, sizeof(COLORREF)));
-}
-
-void makeNativeOverlay(QWidget *widget) {
-    widget->setAttribute(Qt::WA_NativeWindow, true);
-    static_cast<void>(widget->winId());
-}
-
-void raiseNativeOverlay(QWidget *widget) {
-    widget->raise();
-    HWND window = reinterpret_cast<HWND>(widget->winId());
-    if (window == nullptr || !IsWindow(window)) {
-        return;
-    }
-
-    SetWindowPos(window, HWND_TOP, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-}
-
-AspectRatioFrameMargins frameMarginsFor(const QWidget &widget) {
-    const QRect frame = widget.frameGeometry();
-    const QRect client = widget.geometry();
-    const int left = client.left() - frame.left();
-    const int top = client.top() - frame.top();
-    return AspectRatioFrameMargins{
-        left,
-        top,
-        frame.width() - client.width() - left,
-        frame.height() - client.height() - top};
-}
-
-AspectRatioSizeConstraints sizeConstraintsFor(const QWidget &widget, const AspectRatioFrameMargins &margins) {
-    const int horizontalFrame = std::max(0, margins.left) + std::max(0, margins.right);
-    const int verticalFrame = std::max(0, margins.top) + std::max(0, margins.bottom);
-    return AspectRatioSizeConstraints{
-        widget.minimumWidth() + horizontalFrame,
-        widget.minimumHeight() + verticalFrame,
-        widget.maximumWidth() + horizontalFrame,
-        widget.maximumHeight() + verticalFrame};
-}
 }
 
 static void initializeAppResources() {
@@ -515,7 +443,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
     case ReceiverState::Idle:
     case ReceiverState::Starting:
     case ReceiverState::Discoverable:
-        if (state == ReceiverState::Discoverable) {
+        if (state == ReceiverState::Discoverable || (wasSessionActive && !receiverSessionActive_)) {
             videoSurface_->reset();
         }
         statusLabel_->setText("Ready for AirPlay");
@@ -551,21 +479,10 @@ void MainWindow::showSettingsDialog() {
 
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
     auto *msg = static_cast<MSG *>(message);
-    if (msg != nullptr && msg->message == WM_WINDOWPOSCHANGING) {
-        auto *wp = reinterpret_cast<WINDOWPOS *>(msg->lParam);
-        if (wp != nullptr) {
-            updateWindowPosCopyBitsForResize(*wp);
-        }
-        return QMainWindow::nativeEvent(eventType, message, result);
-    }
-    if (msg != nullptr && msg->message == WM_SIZING && aspectRatioLock_ && videoWidth_ > 0 && videoHeight_ > 0) {
-        auto *rect = reinterpret_cast<RECT *>(msg->lParam);
-        const double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
-        const AspectRatioFrameMargins margins = frameMarginsFor(*this);
-        if (rect != nullptr && adjustWindowRectForAspectRatio(*rect, static_cast<unsigned int>(msg->wParam), targetRatio, margins, sizeConstraintsFor(*this, margins))) {
-            if (result != nullptr) {
-                *result = TRUE;
-            }
+    if (msg != nullptr) {
+        const WindowsNativeEventResult nativeResult = handleNativeWindowBehaviorEvent(
+            msg->message, msg->wParam, msg->lParam, result, this, aspectRatioLock_, videoWidth_, videoHeight_);
+        if (nativeResult.handled) {
             return true;
         }
     }

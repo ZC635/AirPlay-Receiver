@@ -1,4 +1,5 @@
 #include <QtTest/QtTest>
+#include "backend/ReceiverConfigurationChange.h"
 #include "backend/ReceiverStatePolicy.h"
 
 class ReceiverStatePolicyTest : public QObject {
@@ -134,6 +135,63 @@ private slots:
                 ReceiverState::Connected, current, requested);
             QCOMPARE(result.action, ReceiverPolicyAction::RestartReceiver);
         }
+    }
+
+    void receiverNameChangeAppliesRestartAndRollbackThroughCallbacks() {
+        QString storedName = QStringLiteral("OldName");
+        QString recoveryName;
+        int storeCount = 0;
+        int restartWithRecoveryCount = 0;
+        int recoveryFailureCount = 0;
+
+        ReceiverNameChangeOperations operations;
+        operations.storeName = [&](const QString &name) {
+            storedName = name;
+            ++storeCount;
+        };
+        operations.restartDiscoveryWithRecovery = [&](const QString &name) {
+            recoveryName = name;
+            ++restartWithRecoveryCount;
+            return false;
+        };
+        operations.restartDiscovery = [&] {
+            ++recoveryFailureCount;
+            return true;
+        };
+
+        QVERIFY(!applyReceiverNameConfigurationChange(
+            ReceiverState::Discoverable, QStringLiteral("OldName"), QStringLiteral(" NewName "), operations));
+
+        QCOMPARE(storedName, QStringLiteral("OldName"));
+        QCOMPARE(recoveryName, QStringLiteral("OldName"));
+        QCOMPARE(storeCount, 2);
+        QCOMPARE(restartWithRecoveryCount, 1);
+        QCOMPARE(recoveryFailureCount, 1);
+    }
+
+    void videoQualityChangeAppliesReceiverRestartThroughCallbacks() {
+        const VideoQualitySettings current{VideoResolution::P1080, VideoFrameRate::Fps30};
+        const VideoQualitySettings requested{VideoResolution::P720, VideoFrameRate::Fps15};
+        VideoQualitySettings storedQuality = current;
+        int storeCount = 0;
+        int receiverRestartCount = 0;
+
+        VideoQualityChangeOperations operations;
+        operations.storeQuality = [&](const VideoQualitySettings &quality) {
+            storedQuality = quality;
+            ++storeCount;
+        };
+        operations.restartReceiver = [&] {
+            ++receiverRestartCount;
+            return true;
+        };
+
+        QVERIFY(applyVideoQualityConfigurationChange(
+            ReceiverState::Connected, current, requested, operations));
+
+        QCOMPARE(storedQuality, requested);
+        QCOMPARE(storeCount, 1);
+        QCOMPARE(receiverRestartCount, 1);
     }
 };
 

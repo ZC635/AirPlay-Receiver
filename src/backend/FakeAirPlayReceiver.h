@@ -1,7 +1,7 @@
 #pragma once
 
 #include "backend/AirPlayReceiver.h"
-#include "backend/ReceiverStatePolicy.h"
+#include "backend/ReceiverConfigurationChange.h"
 
 #include <QImage>
 #include <QStringList>
@@ -43,22 +43,19 @@ public:
     bool lastVideoFitMode() const { return m_videoFitMode; }
 
     bool applyVideoQuality(const VideoQualitySettings &quality) override {
-        const auto result = decideVideoQualityChange(m_state, lastAppliedVideoQuality, quality);
-        if (result.action == ReceiverPolicyAction::Noop) {
-            return true;
-        }
-        if (rejectedVideoQualities.contains(quality)) {
-            return false;
-        }
-        if (result.action == ReceiverPolicyAction::Reject) {
-            return false;
-        }
-        lastAppliedVideoQuality = quality;
-        if (result.action == ReceiverPolicyAction::RestartReceiver) {
+        VideoQualityChangeOperations operations;
+        operations.storeQuality = [&](const VideoQualitySettings &requestedQuality) {
+            lastAppliedVideoQuality = requestedQuality;
+        };
+        operations.restartReceiver = [&] {
             stop();
             start();
+            return true;
+        };
+        if (lastAppliedVideoQuality != quality && rejectedVideoQualities.contains(quality)) {
+            return false;
         }
-        return true;
+        return applyVideoQualityConfigurationChange(m_state, lastAppliedVideoQuality, quality, operations);
     }
 
     VideoQualitySettings lastAppliedVideoQuality;
@@ -74,27 +71,25 @@ public:
         if (rejectedReceiverNames.contains(name)) {
             return false;
         }
-        const auto result = decideReceiverNameChange(m_state, m_receiverName, name);
-        if (result.action == ReceiverPolicyAction::Reject) {
-            return false;
-        }
-        if (result.action == ReceiverPolicyAction::Noop) {
-            return true;
-        }
-        m_receiverName = result.normalizedName;
-        appliedReceiverNames.append(result.normalizedName);
-        if (result.action == ReceiverPolicyAction::RestartDiscovery) {
-            if (m_state != ReceiverState::Idle) {
+        ReceiverNameChangeOperations operations;
+        operations.storeName = [&](const QString &requestedName) {
+            m_receiverName = requestedName;
+            appliedReceiverNames.append(requestedName);
+        };
+        operations.restartDiscovery = [&] {
+            if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
+                stop();
+                start();
+            } else {
                 ++broadcastRestartCount;
             }
             return true;
-        }
-        if (result.action == ReceiverPolicyAction::RestartDiscoveryConnected) {
-            stop();
-            start();
+        };
+        operations.restartDiscoveryWithRecovery = [&](const QString &) {
+            ++broadcastRestartCount;
             return true;
-        }
-        return true;
+        };
+        return applyReceiverNameConfigurationChange(m_state, m_receiverName, name, operations);
     }
 
     double volume() const { return m_volume; }

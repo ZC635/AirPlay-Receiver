@@ -2,6 +2,7 @@
 #include <QMap>
 #include <QByteArray>
 
+#include "platform/MdnsPublishing.h"
 #include "platform/MdnsPublisher.h"
 
 class MdnsPublisherTest : public QObject {
@@ -151,6 +152,13 @@ private slots:
         QVERIFY(ok);
         QCOMPARE(defs.size(), 2);
         QCOMPARE(defs.at(0).name, QByteArray("ABCDEF012345@My Receiver"));
+    }
+
+    void mdnsPublisherImplementsPublishingInterface() {
+        MdnsPublisher publisher;
+        MdnsPublishing *publishing = &publisher;
+
+        QVERIFY(publishing != nullptr);
     }
 
 #if !AIRPLAY_WITH_UXPLAY

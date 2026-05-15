@@ -7,7 +7,9 @@
 #include <QScopedPointer>
 #include <QString>
 
-class MdnsPublisher : public QObject {
+#include "platform/MdnsPublishing.h"
+
+class MdnsPublisher : public QObject, public MdnsPublishing {
     Q_OBJECT
 
 public:
@@ -23,8 +25,8 @@ public:
 
     bool publish(const QString &receiverName, const QByteArray &hardwareAddress, quint16 port,
                  const char *raopTxt, int raopTxtLength,
-                 const char *airplayTxt, int airplayTxtLength);
-    void stop();
+                 const char *airplayTxt, int airplayTxtLength) override;
+    void stop() override;
 
     static QMap<QByteArray, QByteArray> parseTxtRecord(const char *txt, int length, bool *ok = nullptr);
     static QList<ServiceDefinition> buildServiceDefinitions(
