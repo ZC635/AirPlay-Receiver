@@ -1,5 +1,6 @@
 #include "backend/UxPlayReceiver.h"
 #include "backend/DiscoveryRestartController.h"
+#include "backend/ReceiverConfigurationChange.h"
 #include "backend/ReceiverStatePolicy.h"
 #include "backend/VideoFrameBridge.h"
 
@@ -91,51 +92,92 @@ double volumeToAirPlayDb(double volume) {
     return std::clamp(20.0 * std::log10(volume), -30.0, 0.0);
 }
 
+class CallbackScope {
+public:
+    explicit CallbackScope(void *cls) : m_context(static_cast<UxPlayReceiver::CallbackContext *>(cls)) {
+        if (m_context) {
+            m_entered = m_context->enter(&m_receiver);
+        }
+    }
+
+    ~CallbackScope() {
+        if (m_entered) {
+            m_context->leave();
+        }
+    }
+
+    UxPlayReceiver *receiver() const { return m_receiver; }
+    quint64 generation() const { return m_context ? m_context->generation : 0; }
+
+private:
+    UxPlayReceiver::CallbackContext *m_context = nullptr;
+    UxPlayReceiver *m_receiver = nullptr;
+    bool m_entered = false;
+};
+
 void logCallback(void *cls, int level, const char *msg) {
-    if (auto *receiver = static_cast<UxPlayReceiver *>(cls)) {
-        receiver->handleLogMessageFromUxPlayCallback(level, msg);
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->handleLogMessageFromUxPlayCallback(level, msg, callback.generation());
     }
     debugLog("uxplay[%d] %s", level, msg ? msg : "");
 }
 
 void audioProcess(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->renderAudioBufferFromCallback(data->data, &data->data_len, &data->seqnum, &data->ntp_time_remote);
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->renderAudioBufferFromCallback(data->data, &data->data_len, &data->seqnum, &data->ntp_time_remote,
+                                                callback.generation());
+    }
 }
 
 void videoProcess(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->renderVideoBufferFromCallback(data->data, &data->data_len, &data->nal_count, &data->ntp_time_remote);
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->renderVideoBufferFromCallback(data->data, &data->data_len, &data->nal_count, &data->ntp_time_remote,
+                                                callback.generation());
+    }
 }
 
 void audioFlush(void *cls) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->flushAudioRendererFromCallback();
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->flushAudioRendererFromCallback(callback.generation());
+    }
 }
 
 void videoFlush(void *cls) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->flushVideoRendererFromCallback();
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->flushVideoRendererFromCallback(callback.generation());
+    }
 }
 
 void videoPause(void *cls) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->pauseVideoRendererFromCallback();
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->pauseVideoRendererFromCallback(callback.generation());
+    }
 }
 
 void videoResume(void *cls) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->resumeVideoRendererFromCallback();
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->resumeVideoRendererFromCallback(callback.generation());
+    }
 }
 
 double audioSetClientVolume(void *cls) {
-    const auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    return receiver->currentVolumeForUxPlayClientVolumeCallback();
+    CallbackScope callback(cls);
+    const auto *receiver = callback.receiver();
+    return receiver ? receiver->currentVolumeForUxPlayClientVolumeCallback() : 0.0;
 }
 
 void audioSetVolume(void *cls, float volume) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->setVolumeFromUxPlayCallback(volumeFromAirPlayDb(volume));
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->setVolumeFromUxPlayCallback(volumeFromAirPlayDb(volume), callback.generation());
+    }
 }
 
 void audioGetFormat(void *cls, unsigned char *ct, unsigned short *spf, bool *usingScreen, bool *isMedia, uint64_t *audioFormat) {
@@ -143,12 +185,13 @@ void audioGetFormat(void *cls, unsigned char *ct, unsigned short *spf, bool *usi
     Q_UNUSED(usingScreen);
     Q_UNUSED(isMedia);
     Q_UNUSED(audioFormat);
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->startAudioRendererFromUxPlayCallback(ct);
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->startAudioRendererFromUxPlayCallback(ct, callback.generation());
+    }
 }
 
 void videoReportSize(void *cls, float *widthSource, float *heightSource, float *width, float *height) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
     int w = static_cast<int>(*widthSource);
     int h = static_cast<int>(*heightSource);
     *widthSource = 1920.0F;
@@ -156,35 +199,37 @@ void videoReportSize(void *cls, float *widthSource, float *heightSource, float *
     *width = 1920.0F;
     *height = 1080.0F;
     if (w > 0 && h > 0) {
-        QPointer<UxPlayReceiver> guardedReceiver(receiver);
-        QMetaObject::invokeMethod(receiver, [guardedReceiver, w, h] {
-            if (guardedReceiver) {
-                emit guardedReceiver->videoSizeChanged(w, h);
-            }
-        }, Qt::QueuedConnection);
+        CallbackScope callback(cls);
+        if (auto *receiver = callback.receiver()) {
+            receiver->reportVideoSizeFromUxPlayCallback(w, h, callback.generation());
+        }
     }
 }
 
 void connInit(void *cls) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    const auto generation = receiver->callbackGenerationForUxPlayCallback();
+    CallbackScope callback(cls);
+    auto *receiver = callback.receiver();
+    if (!receiver) return;
+    const auto generation = callback.generation();
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
         if (guardedReceiver) {
-            guardedReceiver->restartVideoPipelineForConnect();
+            guardedReceiver->restartVideoPipelineForConnect(generation);
             guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Connected, generation);
         }
     }, Qt::QueuedConnection);
 }
 
 void connDestroy(void *cls) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    CallbackScope callback(cls);
+    auto *receiver = callback.receiver();
+    if (!receiver) return;
     debugLog("connDestroy callback fired");
-    const auto generation = receiver->callbackGenerationForUxPlayCallback();
+    const auto generation = callback.generation();
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
         if (guardedReceiver) {
-            guardedReceiver->stopVideoPipelineForDisconnect();
+            guardedReceiver->stopVideoPipelineForDisconnect(generation);
             guardedReceiver->setStateFromUxPlayCallback(ReceiverState::Discoverable, generation);
         }
     }, Qt::QueuedConnection);
@@ -209,8 +254,10 @@ void connFeedback(void *) {
 }
 
 void videoReset(void *cls, reset_type_t type) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    const auto generation = receiver->callbackGenerationForUxPlayCallback();
+    CallbackScope callback(cls);
+    auto *receiver = callback.receiver();
+    if (!receiver) return;
+    const auto generation = callback.generation();
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation, type] {
         if (guardedReceiver) {
@@ -220,104 +267,31 @@ void videoReset(void *cls, reset_type_t type) {
 }
 
 void audioSetMetadata(void *cls, const void *buffer, int buflen) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-
-    if (buflen < 8) {
-        return;
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->setMetadataFromUxPlayCallback(buffer, buflen, callback.generation());
     }
-
-    const unsigned char *metadata = static_cast<const unsigned char *>(buffer);
-    char dmap_tag[5] = {0};
-    int datalen = 0;
-
-    for (int i = 0; i < 4; i++) {
-        dmap_tag[i] = static_cast<char>(metadata[i]);
-    }
-    for (int i = 0; i < 4; i++) {
-        datalen <<= 8;
-        datalen += static_cast<int>(metadata[4 + i]);
-    }
-
-    if (std::strcmp(dmap_tag, "mlit") != 0 || datalen != buflen - 8) {
-        return;
-    }
-
-    metadata += 8;
-    buflen -= 8;
-
-    QString title, artist, album;
-
-    while (buflen >= 8) {
-        char item_tag[5] = {0};
-        int item_len = 0;
-
-        for (int i = 0; i < 4; i++) {
-            item_tag[i] = static_cast<char>(metadata[i]);
-        }
-        for (int i = 0; i < 4; i++) {
-            item_len <<= 8;
-            item_len += static_cast<int>(metadata[4 + i]);
-        }
-
-        metadata += 8;
-        buflen -= 8;
-
-        if (item_len <= 0 || item_len > buflen) {
-            break;
-        }
-
-        QString value = QString::fromUtf8(reinterpret_cast<const char *>(metadata), item_len);
-
-        if (std::strcmp(item_tag, "minm") == 0 || std::strcmp(item_tag, "\302\251nam") == 0) {
-            title = value;
-        } else if (std::strcmp(item_tag, "asar") == 0 || std::strcmp(item_tag, "\302\251ART") == 0) {
-            artist = value;
-        } else if (std::strcmp(item_tag, "asal") == 0 || std::strcmp(item_tag, "\302\251alb") == 0) {
-            album = value;
-        }
-
-        metadata += item_len;
-        buflen -= item_len;
-    }
-
-    QPointer<UxPlayReceiver> guardedReceiver(receiver);
-    QMetaObject::invokeMethod(receiver, [guardedReceiver, title, artist, album] {
-        if (guardedReceiver) {
-            emit guardedReceiver->trackMetadataChanged(title, artist, album);
-        }
-    }, Qt::QueuedConnection);
 }
 
 void audioSetCoverart(void *cls, const void *buffer, int buflen) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->setCoverArtFromUxPlayCallback(buffer, buflen);
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->setCoverArtFromUxPlayCallback(buffer, buflen, callback.generation());
+    }
 }
 
 void audioStopCoverartRendering(void *cls) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-    receiver->stopCoverArtRenderingFromUxPlayCallback();
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->stopCoverArtRenderingFromUxPlayCallback();
+    }
 }
 
 void audioSetProgress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
-
-    uint32_t s = *start;
-    uint32_t c = *curr;
-    uint32_t e = *end;
-
-    if (c < s || c > e) {
-        return;
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->setProgressFromUxPlayCallback(*start, *curr, *end, callback.generation());
     }
-
-    int positionSec = static_cast<int>((c - s) / 44100);
-    int durationSec = static_cast<int>((e - s) / 44100);
-
-    QPointer<UxPlayReceiver> guardedReceiver(receiver);
-    QMetaObject::invokeMethod(receiver, [guardedReceiver, positionSec, durationSec] {
-        if (guardedReceiver) {
-            emit guardedReceiver->progressUpdated(positionSec, durationSec);
-        }
-    }, Qt::QueuedConnection);
 }
 
 void reportClientRequest(void *, char *, char *, char *, bool *admit) {
@@ -325,17 +299,25 @@ void reportClientRequest(void *, char *, char *, char *, bool *admit) {
 }
 
 int videoSetCodec(void *cls, video_codec_t codec) {
-    auto *receiver = static_cast<UxPlayReceiver *>(cls);
+    CallbackScope callback(cls);
+    auto *receiver = callback.receiver();
+    if (!receiver) return -1;
     bool video_is_h265 = (codec == VIDEO_CODEC_H265);
-    return receiver->chooseVideoCodecFromCallback(video_is_h265);
+    return receiver->chooseVideoCodecFromCallback(video_is_h265, callback.generation());
 }
 } // namespace
 #endif
 
 UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
-    : AirPlayReceiver(parent), m_config(std::move(config)) {
+    : AirPlayReceiver(parent),
+      m_config(std::move(config))
+#if AIRPLAY_WITH_UXPLAY
+      , m_callbackDispatch(m_acceptingCallbacks, m_callbackGeneration, m_renderersStarted, m_rendererMutex)
+#endif
+{
 #if AIRPLAY_WITH_UXPLAY
     m_discoveryRestartController = new DiscoveryRestartController(2000, this);
+    m_mdnsPublisher = m_config.mdnsPublisher;
 #endif
 }
 
@@ -345,6 +327,42 @@ UxPlayReceiver::~UxPlayReceiver() {
 #endif
 }
 
+UxPlayReceiver::CallbackContext::CallbackContext(UxPlayReceiver *receiver, quint64 startGeneration)
+    : generation(startGeneration), m_receiver(receiver) {
+}
+
+bool UxPlayReceiver::CallbackContext::enter(UxPlayReceiver **receiverOut) {
+    QMutexLocker locker(&m_mutex);
+    if (m_closed || !m_receiver) {
+        if (receiverOut) {
+            *receiverOut = nullptr;
+        }
+        return false;
+    }
+    ++m_inFlight;
+    if (receiverOut) {
+        *receiverOut = m_receiver;
+    }
+    return true;
+}
+
+void UxPlayReceiver::CallbackContext::leave() {
+    QMutexLocker locker(&m_mutex);
+    --m_inFlight;
+    if (m_inFlight == 0) {
+        m_idle.wakeAll();
+    }
+}
+
+void UxPlayReceiver::CallbackContext::close() {
+    QMutexLocker locker(&m_mutex);
+    m_closed = true;
+    m_receiver = nullptr;
+    while (m_inFlight > 0) {
+        m_idle.wait(&m_mutex);
+    }
+}
+
 void UxPlayReceiver::start() {
 #if AIRPLAY_WITH_UXPLAY
     if (m_state != ReceiverState::Idle) {
@@ -352,7 +370,9 @@ void UxPlayReceiver::start() {
     }
 
     setState(ReceiverState::Starting);
-    m_callbackGeneration.fetch_add(1);
+    const auto generation = m_callbackGeneration.fetch_add(1) + 1;
+    m_callbackContexts.push_back(std::make_unique<CallbackContext>(this, generation));
+    m_callbackContext = m_callbackContexts.back().get();
     m_acceptingCallbacks.store(true);
 
     const QString pluginDir = QCoreApplication::applicationDirPath() + "/gstreamer-plugins";
@@ -375,7 +395,7 @@ void UxPlayReceiver::start() {
         return;
     }
     auto *logger = static_cast<logger_t *>(m_logger);
-    logger_set_callback(logger, logCallback, this);
+    logger_set_callback(logger, logCallback, m_callbackContext);
     logger_set_level(logger, debugLogEnabled() ? LOGGER_DEBUG : LOGGER_INFO);
 
     const QByteArray serverName = m_config.serverName.toUtf8();
@@ -412,7 +432,7 @@ void UxPlayReceiver::start() {
 
     raop_callbacks_t callbacks;
     std::memset(&callbacks, 0, sizeof(callbacks));
-    callbacks.cls = this;
+    callbacks.cls = m_callbackContext;
     callbacks.audio_process = audioProcess;
     callbacks.video_process = videoProcess;
     callbacks.video_pause = videoPause;
@@ -442,7 +462,7 @@ void UxPlayReceiver::start() {
         setState(ReceiverState::Error);
         return;
     }
-    raop_set_log_callback(raop, logCallback, this);
+    raop_set_log_callback(raop, logCallback, m_callbackContext);
     // UxPlay defers SET_PARAMETER volume callbacks through its RTP loop; DEBUG logs expose them immediately.
     raop_set_log_level(raop, LOGGER_DEBUG);
     m_raop = raop;
@@ -520,6 +540,7 @@ void UxPlayReceiver::setVideoSurface(WId id) {
 void UxPlayReceiver::setVideoFrameCallback(FrameCallback callback) {
     m_frameCallback = std::move(callback);
 #if AIRPLAY_WITH_UXPLAY
+    QMutexLocker locker(&m_rendererMutex);
     if (m_videoFrameBridge) {
         resetVideoFrameBridge();
     }
@@ -529,7 +550,7 @@ void UxPlayReceiver::setVideoFrameCallback(FrameCallback callback) {
 void UxPlayReceiver::setVideoFitMode(bool enabled) {
     m_videoFitMode.store(enabled);
 #if AIRPLAY_WITH_UXPLAY
-    applyVideoFitModeToRenderer();
+    m_callbackDispatch.runWithRendererStarted([&] { applyVideoFitModeToRenderer(); });
 #endif
 }
 
@@ -542,144 +563,80 @@ QString UxPlayReceiver::receiverName() const {
 }
 
 bool UxPlayReceiver::applyReceiverName(const QString &name) {
-    const auto result = decideReceiverNameChange(m_state, m_config.serverName, name);
-
-    switch (result.action) {
-    case ReceiverPolicyAction::Reject: {
-        debugLog("applyReceiverName: rejected %s", name.trimmed().isEmpty() ? "empty name" : "name");
-        return false;
-    }
-    case ReceiverPolicyAction::Noop: {
-        debugLog("applyReceiverName: name unchanged \"%s\"", qPrintable(m_config.serverName));
-        return true;
-    }
-    case ReceiverPolicyAction::StoreOnly: {
-        m_config.serverName = result.normalizedName;
-        debugLog("applyReceiverName: Idle state, name stored, no restart needed");
-        return true;
-    }
-    case ReceiverPolicyAction::RestartDiscoveryConnected: {
-        m_config.serverName = result.normalizedName;
-        debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(result.normalizedName), static_cast<int>(m_state));
-
+    ReceiverNameChangeOperations operations;
+    operations.storeName = [&](const QString &requestedName) {
+        m_config.serverName = requestedName;
+        debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(requestedName), static_cast<int>(m_state));
+    };
+    operations.restartDiscovery = [&] {
 #if AIRPLAY_WITH_UXPLAY
-        debugLog("applyReceiverName: Connected/Connecting state, restarting discovery broadcast");
-        if (!restartDiscoveryBroadcast()) {
-            debugLog("applyReceiverName: restartDiscoveryBroadcast() failed, reverting name");
-            m_config.serverName = result.rollbackName;
-            return false;
-        }
-        debugLog("applyReceiverName: restartDiscoveryBroadcast() succeeded in Connected state");
+        return restartDiscoveryBroadcast();
 #else
-        debugLog("applyReceiverName: non-UXPlay path, returning true");
-#endif
         return true;
-    }
-    case ReceiverPolicyAction::RestartDiscovery: {
-        m_config.serverName = result.normalizedName;
-        debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(result.normalizedName), static_cast<int>(m_state));
-
+#endif
+    };
+    operations.restartDiscoveryWithRecovery = [&](const QString &recoveryName) {
 #if AIRPLAY_WITH_UXPLAY
-        if (!restartDiscoveryBroadcast(result.rollbackName)) {
-            debugLog("applyReceiverName: restartDiscoveryBroadcast() failed, reverting name");
-            m_config.serverName = result.rollbackName;
-            if (!restartDiscoveryBroadcast()) {
-                debugLog("applyReceiverName: recovery restartDiscoveryBroadcast() also failed");
-                setError("Failed to recover discovery after receiver rename failure");
-                setState(ReceiverState::Error);
-            }
-            return false;
-        }
-        debugLog("applyReceiverName: restartDiscoveryBroadcast() succeeded");
+        return restartDiscoveryBroadcast(recoveryName);
 #else
-        debugLog("applyReceiverName: non-UXPlay path, returning true");
+        Q_UNUSED(recoveryName);
+        return true;
 #endif
-        return true;
-    }
-    case ReceiverPolicyAction::RestartReceiver:
-        debugLog("applyReceiverName: unexpected RestartReceiver for name change");
-        return true;
-    }
+    };
+    operations.reportRecoveryFailure = [&](const QString &message) {
+        debugLog("applyReceiverName: recovery restartDiscoveryBroadcast() also failed");
+        setError(message);
+        setState(ReceiverState::Error);
+    };
 
-    return false;
+    return applyReceiverNameConfigurationChange(m_state, m_config.serverName, name, operations);
 }
 
 bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
-    const auto result = decideVideoQualityChange(m_state, m_config.videoQuality, quality);
-
-    switch (result.action) {
-    case ReceiverPolicyAction::Reject: {
-        debugLog("applyVideoQuality: rejected in %s state",
-                 m_state == ReceiverState::Error ? "Error" : "Starting");
-        return false;
-    }
-    case ReceiverPolicyAction::Noop: {
-        debugLog("applyVideoQuality: quality unchanged");
-        return true;
-    }
-    case ReceiverPolicyAction::StoreOnly: {
-        m_config.videoQuality = quality;
-        debugLog("applyVideoQuality: Idle state, quality stored");
-        return true;
-    }
-    case ReceiverPolicyAction::RestartDiscovery: {
-        const VideoQualitySettings previousQuality = m_config.videoQuality;
-        m_config.videoQuality = quality;
-
+    VideoQualityChangeOperations operations;
+    operations.storeQuality = [&](const VideoQualitySettings &requestedQuality) {
+        m_config.videoQuality = requestedQuality;
+    };
+    operations.updateActiveAdvertisement = [&](const VideoQualitySettings &requestedQuality) {
 #if AIRPLAY_WITH_UXPLAY
         if (m_raop) {
             auto *raop = static_cast<raop_t *>(m_raop);
-            raop_set_plist(raop, "width", videoQualityWidth(quality.resolution));
-            raop_set_plist(raop, "height", videoQualityHeight(quality.resolution));
-            raop_set_plist(raop, "refreshRate", videoQualityRefreshRate(quality.frameRate));
-            raop_set_plist(raop, "maxFPS", videoQualityMaxFPS(quality.frameRate));
+            raop_set_plist(raop, "width", videoQualityWidth(requestedQuality.resolution));
+            raop_set_plist(raop, "height", videoQualityHeight(requestedQuality.resolution));
+            raop_set_plist(raop, "refreshRate", videoQualityRefreshRate(requestedQuality.frameRate));
+            raop_set_plist(raop, "maxFPS", videoQualityMaxFPS(requestedQuality.frameRate));
         }
-        if (!restartDiscoveryBroadcast()) {
-            debugLog("applyVideoQuality: restartDiscoveryBroadcast() failed, reverting quality");
-            m_config.videoQuality = previousQuality;
-            return false;
-        }
-        debugLog("applyVideoQuality: Discoverable state, discovery restart scheduled");
 #else
-        debugLog("applyVideoQuality: non-UXPlay path, returning true");
+        Q_UNUSED(requestedQuality);
 #endif
+    };
+    operations.restartDiscovery = [&] {
+#if AIRPLAY_WITH_UXPLAY
+        return restartDiscoveryBroadcast();
+#else
         return true;
-    }
-    case ReceiverPolicyAction::RestartReceiver: {
-        const VideoQualitySettings previousQuality = m_config.videoQuality;
-        m_config.videoQuality = quality;
-
-        debugLog("applyVideoQuality: Connected/Connecting state, restarting receiver");
+#endif
+    };
+    operations.restartReceiver = [&] {
         stop();
         start();
-        if (m_state == ReceiverState::Error) {
-            debugLog("applyVideoQuality: restart failed, reverting quality");
-            m_config.videoQuality = previousQuality;
-            return false;
-        }
-        debugLog("applyVideoQuality: receiver restarted successfully");
-        return true;
-    }
-    }
+        return m_state != ReceiverState::Error;
+    };
 
-    debugLog("applyVideoQuality: unexpected state, storing quality and returning true");
-    return true;
+    return applyVideoQualityConfigurationChange(m_state, m_config.videoQuality, quality, operations);
 }
 
 #if AIRPLAY_WITH_UXPLAY
 void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state) {
-    setStateFromUxPlayCallback(state, m_callbackGeneration.load());
+    setStateFromUxPlayCallback(state, m_callbackDispatch.currentGeneration());
 }
 
 void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state, quint64 generation) {
-    if (!m_acceptingCallbacks.load() || generation != m_callbackGeneration.load()) {
-        return;
-    }
-    setState(state);
+    m_callbackDispatch.runIfCurrent(generation, [&] { setState(state); });
 }
 
 quint64 UxPlayReceiver::callbackGenerationForUxPlayCallback() const {
-    return m_callbackGeneration.load();
+    return m_callbackDispatch.currentGeneration();
 }
 
 double UxPlayReceiver::currentVolumeForUxPlayClientVolumeCallback() const {
@@ -687,51 +644,184 @@ double UxPlayReceiver::currentVolumeForUxPlayClientVolumeCallback() const {
 }
 
 void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compressionType) {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
-        return;
-    }
-    audio_renderer_start(compressionType);
-    m_audioRendererStarted.store(true);
-    audio_renderer_set_volume(m_volume.load());
+    startAudioRendererFromUxPlayCallback(compressionType, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compressionType, quint64 generation) {
+    m_callbackDispatch.runWithRendererLock([&] {
+        if (!m_callbackDispatch.accepts(generation)) {
+            return;
+        }
+        audio_renderer_start(compressionType);
+        m_audioRendererStarted.store(true);
+        audio_renderer_set_volume(m_volume.load());
+    });
 }
 
 void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume) {
+    setVolumeFromUxPlayCallback(volume, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::setVolumeFromUxPlayCallback(double volume, quint64 generation) {
     const double clamped = std::clamp(volume, 0.0, 1.0);
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load()) {
-        return;
-    }
-    m_volume.store(clamped);
-    if (m_audioRendererStarted.load()) {
-        audio_renderer_set_volume(clamped);
-    }
-    emit volumeChanged(clamped);
+    m_callbackDispatch.runWithRendererLock([&] {
+        if (!m_callbackDispatch.accepts(generation)) {
+            return;
+        }
+        m_volume.store(clamped);
+        if (m_audioRendererStarted.load()) {
+            audio_renderer_set_volume(clamped);
+        }
+        emit volumeChanged(clamped);
+    });
 }
 
 void UxPlayReceiver::handleLogMessageFromUxPlayCallback(int level, const char *message) {
+    handleLogMessageFromUxPlayCallback(level, message, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::handleLogMessageFromUxPlayCallback(int level, const char *message, quint64 generation) {
     if (level != LOGGER_DEBUG || message == nullptr || std::strncmp(message, "volume: ", 8) != 0) {
         return;
     }
 
     float airPlayDb = 0.0F;
     if (std::sscanf(message + 8, "%f", &airPlayDb) == 1) {
-        setVolumeFromUxPlayCallback(volumeFromAirPlayDb(airPlayDb));
+        setVolumeFromUxPlayCallback(volumeFromAirPlayDb(airPlayDb), generation);
     }
 }
 
+void UxPlayReceiver::setMetadataFromUxPlayCallback(const void *buffer, int buflen) {
+    setMetadataFromUxPlayCallback(buffer, buflen, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::setMetadataFromUxPlayCallback(const void *buffer, int buflen, quint64 generation) {
+    if (buflen < 8) {
+        return;
+    }
+
+    const unsigned char *metadata = static_cast<const unsigned char *>(buffer);
+    char dmap_tag[5] = {0};
+    int datalen = 0;
+
+    for (int i = 0; i < 4; i++) {
+        dmap_tag[i] = static_cast<char>(metadata[i]);
+    }
+    for (int i = 0; i < 4; i++) {
+        datalen <<= 8;
+        datalen += static_cast<int>(metadata[4 + i]);
+    }
+
+    if (std::strcmp(dmap_tag, "mlit") != 0 || datalen != buflen - 8) {
+        return;
+    }
+
+    metadata += 8;
+    buflen -= 8;
+
+    QString title, artist, album;
+
+    while (buflen >= 8) {
+        char item_tag[5] = {0};
+        int item_len = 0;
+
+        for (int i = 0; i < 4; i++) {
+            item_tag[i] = static_cast<char>(metadata[i]);
+        }
+        for (int i = 0; i < 4; i++) {
+            item_len <<= 8;
+            item_len += static_cast<int>(metadata[4 + i]);
+        }
+
+        metadata += 8;
+        buflen -= 8;
+
+        if (item_len <= 0 || item_len > buflen) {
+            break;
+        }
+
+        QString value = QString::fromUtf8(reinterpret_cast<const char *>(metadata), item_len);
+
+        if (std::strcmp(item_tag, "minm") == 0 || std::strcmp(item_tag, "\302\251nam") == 0) {
+            title = value;
+        } else if (std::strcmp(item_tag, "asar") == 0 || std::strcmp(item_tag, "\302\251ART") == 0) {
+            artist = value;
+        } else if (std::strcmp(item_tag, "asal") == 0 || std::strcmp(item_tag, "\302\251alb") == 0) {
+            album = value;
+        }
+
+        metadata += item_len;
+        buflen -= item_len;
+    }
+
+    m_callbackDispatch.runIfCurrent(generation, [&] {
+        QPointer<UxPlayReceiver> guardedReceiver(this);
+        QMetaObject::invokeMethod(this, [guardedReceiver, generation, title, artist, album] {
+            if (guardedReceiver) {
+                guardedReceiver->m_callbackDispatch.runIfCurrent(generation, [&] {
+                    emit guardedReceiver->trackMetadataChanged(title, artist, album);
+                });
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
 void UxPlayReceiver::setCoverArtFromUxPlayCallback(const void *buffer, int buflen) {
-    if (!m_acceptingCallbacks.load() || !buffer || buflen <= 0) {
+    setCoverArtFromUxPlayCallback(buffer, buflen, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::setCoverArtFromUxPlayCallback(const void *buffer, int buflen, quint64 generation) {
+    if (!buffer || buflen <= 0) {
         return;
     }
 
     QByteArray data(static_cast<const char *>(buffer), buflen);
-    QPointer<UxPlayReceiver> guardedReceiver(this);
-    QMetaObject::invokeMethod(this, [guardedReceiver, data] {
-        if (guardedReceiver) {
-            emit guardedReceiver->coverArtReceived(data);
-        }
-    }, Qt::QueuedConnection);
+    m_callbackDispatch.runIfCurrent(generation, [&] {
+        QPointer<UxPlayReceiver> guardedReceiver(this);
+        QMetaObject::invokeMethod(this, [guardedReceiver, generation, data] {
+            if (guardedReceiver) {
+                guardedReceiver->m_callbackDispatch.runIfCurrent(generation, [&] {
+                    emit guardedReceiver->coverArtReceived(data);
+                });
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+void UxPlayReceiver::setProgressFromUxPlayCallback(uint32_t start, uint32_t current, uint32_t end) {
+    setProgressFromUxPlayCallback(start, current, end, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::setProgressFromUxPlayCallback(uint32_t start, uint32_t current, uint32_t end, quint64 generation) {
+    if (current < start || current > end) {
+        return;
+    }
+
+    const int positionSec = static_cast<int>((current - start) / 44100);
+    const int durationSec = static_cast<int>((end - start) / 44100);
+    m_callbackDispatch.runIfCurrent(generation, [&] {
+        QPointer<UxPlayReceiver> guardedReceiver(this);
+        QMetaObject::invokeMethod(this, [guardedReceiver, generation, positionSec, durationSec] {
+            if (guardedReceiver) {
+                guardedReceiver->m_callbackDispatch.runIfCurrent(generation, [&] {
+                    emit guardedReceiver->progressUpdated(positionSec, durationSec);
+                });
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+void UxPlayReceiver::reportVideoSizeFromUxPlayCallback(int width, int height, quint64 generation) {
+    m_callbackDispatch.runIfCurrent(generation, [&] {
+        QPointer<UxPlayReceiver> guardedReceiver(this);
+        QMetaObject::invokeMethod(this, [guardedReceiver, generation, width, height] {
+            if (guardedReceiver) {
+                guardedReceiver->m_callbackDispatch.runIfCurrent(generation, [&] {
+                    emit guardedReceiver->videoSizeChanged(width, height);
+                });
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void UxPlayReceiver::stopCoverArtRenderingFromUxPlayCallback() {
@@ -739,70 +829,74 @@ void UxPlayReceiver::stopCoverArtRenderingFromUxPlayCallback() {
 }
 
 void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
-    handleVideoResetFromUxPlayCallback(resetType, m_callbackGeneration.load());
+    handleVideoResetFromUxPlayCallback(resetType, m_callbackDispatch.currentGeneration());
 }
 
 void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 generation) {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || generation != m_callbackGeneration.load() || !m_renderersStarted.load()
-        || m_state != ReceiverState::Connected) {
-        return;
-    }
-
-    const auto restartVideoRenderer = [this] {
-        m_videoRendererStopped.store(true);
-        video_renderer_stop();
-        resetVideoFrameBridge();
-        video_renderer_destroy();
-
-        auto *logger = static_cast<logger_t *>(m_logger);
-        const QByteArray serverName = m_config.serverName.toUtf8();
-        const QByteArray videoSink = m_config.videoSink.toUtf8();
-        const bool h265Support = videoQualityH265Support();
-        videoflip_t videoFlip[2] = {NONE, NONE};
-        video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
-                            "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, h265Support, false,
-                            kPlaybinVersion, nullptr);
-        applyVideoFitModeToRenderer();
-        video_renderer_start();
-        if (video_renderer_choose_codec(false, false) == 0) {
-            attachVideoFrameBridgeToCurrentPipeline();
+    m_callbackDispatch.runWithRendererStarted(generation, [&] {
+        if (m_state != ReceiverState::Connected) {
+            return;
         }
-        m_videoRendererStopped.store(false);
-    };
 
-    switch (static_cast<reset_type_t>(resetType)) {
-    case RESET_TYPE_NOHOLD:
-    case RESET_TYPE_RTP_SHUTDOWN:
-    case RESET_TYPE_HLS_SHUTDOWN:
-    case RESET_TYPE_HLS_EOS:
-    case RESET_TYPE_RTP_TO_HLS_TEARDOWN:
-        restartVideoRenderer();
-        break;
-    case RESET_TYPE_ON_VIDEO_PLAY:
-        break;
-    }
+        const auto restartVideoRenderer = [this] {
+            m_videoRendererStopped.store(true);
+            video_renderer_stop();
+            resetVideoFrameBridge();
+            video_renderer_destroy();
+
+            auto *logger = static_cast<logger_t *>(m_logger);
+            const QByteArray serverName = m_config.serverName.toUtf8();
+            const QByteArray videoSink = m_config.videoSink.toUtf8();
+            const bool h265Support = videoQualityH265Support();
+            videoflip_t videoFlip[2] = {NONE, NONE};
+            video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
+                                "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, h265Support, false,
+                                kPlaybinVersion, nullptr);
+            applyVideoFitModeToRenderer();
+            video_renderer_start();
+            if (video_renderer_choose_codec(false, false) == 0) {
+                attachVideoFrameBridgeToCurrentPipeline();
+            }
+            m_videoRendererStopped.store(false);
+        };
+
+        switch (static_cast<reset_type_t>(resetType)) {
+        case RESET_TYPE_NOHOLD:
+        case RESET_TYPE_RTP_SHUTDOWN:
+        case RESET_TYPE_HLS_SHUTDOWN:
+        case RESET_TYPE_HLS_EOS:
+        case RESET_TYPE_RTP_TO_HLS_TEARDOWN:
+            restartVideoRenderer();
+            break;
+        case RESET_TYPE_ON_VIDEO_PLAY:
+            break;
+        }
+    });
 }
 
 void UxPlayReceiver::stopVideoPipelineForDisconnect() {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    if (m_videoRendererStopped.exchange(true)) {
-        return;
-    }
-    video_renderer_stop();
+    stopVideoPipelineForDisconnect(m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::stopVideoPipelineForDisconnect(quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [&] {
+        if (m_videoRendererStopped.exchange(true)) {
+            return;
+        }
+        video_renderer_stop();
+    });
 }
 
 void UxPlayReceiver::restartVideoPipelineForConnect() {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    if (m_videoRendererStopped.exchange(false)) {
-        video_renderer_start();
-    }
+    restartVideoPipelineForConnect(m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::restartVideoPipelineForConnect(quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [&] {
+        if (m_videoRendererStopped.exchange(false)) {
+            video_renderer_start();
+        }
+    });
 }
 
 void UxPlayReceiver::applyVideoFitModeToRenderer() {
@@ -810,61 +904,72 @@ void UxPlayReceiver::applyVideoFitModeToRenderer() {
 }
 
 void UxPlayReceiver::renderAudioBufferFromCallback(void *data, int *data_len, unsigned short *seqnum, uint64_t *ntp_time) {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    audio_renderer_render_buffer(static_cast<unsigned char *>(data), data_len, seqnum, ntp_time);
+    renderAudioBufferFromCallback(data, data_len, seqnum, ntp_time, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::renderAudioBufferFromCallback(void *data, int *data_len, unsigned short *seqnum, uint64_t *ntp_time,
+                                                   quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [&] {
+        audio_renderer_render_buffer(static_cast<unsigned char *>(data), data_len, seqnum, ntp_time);
+    });
 }
 
 void UxPlayReceiver::renderVideoBufferFromCallback(void *data, int *data_len, int *nal_count, uint64_t *ntp_time) {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    video_renderer_render_buffer(static_cast<unsigned char *>(data), data_len, nal_count, ntp_time);
+    renderVideoBufferFromCallback(data, data_len, nal_count, ntp_time, m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::renderVideoBufferFromCallback(void *data, int *data_len, int *nal_count, uint64_t *ntp_time,
+                                                   quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [&] {
+        video_renderer_render_buffer(static_cast<unsigned char *>(data), data_len, nal_count, ntp_time);
+    });
 }
 
 void UxPlayReceiver::flushAudioRendererFromCallback() {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    audio_renderer_flush();
+    flushAudioRendererFromCallback(m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::flushAudioRendererFromCallback(quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [] { audio_renderer_flush(); });
 }
 
 void UxPlayReceiver::flushVideoRendererFromCallback() {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    video_renderer_flush();
+    flushVideoRendererFromCallback(m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::flushVideoRendererFromCallback(quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [] { video_renderer_flush(); });
 }
 
 void UxPlayReceiver::pauseVideoRendererFromCallback() {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    video_renderer_pause();
+    pauseVideoRendererFromCallback(m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::pauseVideoRendererFromCallback(quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [] { video_renderer_pause(); });
 }
 
 void UxPlayReceiver::resumeVideoRendererFromCallback() {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
-        return;
-    }
-    video_renderer_resume();
+    resumeVideoRendererFromCallback(m_callbackDispatch.currentGeneration());
+}
+
+void UxPlayReceiver::resumeVideoRendererFromCallback(quint64 generation) {
+    m_callbackDispatch.runWithRendererStarted(generation, [] { video_renderer_resume(); });
 }
 
 int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265) {
-    QMutexLocker locker(&m_rendererMutex);
-    if (!m_acceptingCallbacks.load() || !m_renderersStarted.load()) {
+    return chooseVideoCodecFromCallback(video_is_h265, m_callbackDispatch.currentGeneration());
+}
+
+int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265, quint64 generation) {
+    int result = -1;
+    if (!m_callbackDispatch.runWithRendererStarted(generation, [&] {
+        result = video_renderer_choose_codec(false, video_is_h265);
+        if (result == 0) {
+            attachVideoFrameBridgeToCurrentPipeline();
+        }
+    })) {
         return -1;
-    }
-    int result = video_renderer_choose_codec(false, video_is_h265);
-    if (result == 0) {
-        attachVideoFrameBridgeToCurrentPipeline();
     }
     return result;
 }
@@ -979,12 +1084,15 @@ bool UxPlayReceiver::registerDiscoveryBroadcast(unsigned short port) {
 
     if (!m_mdnsPublisher) {
         m_mdnsPublisher = new MdnsPublisher(this);
+        m_ownsMdnsPublisher = true;
     }
     const QByteArray hwAddress = defaultHardwareAddress();
     if (!m_mdnsPublisher->publish(m_config.serverName, hwAddress, port,
                                   raopTxt, raopTxtLength,
                                   airplayTxt, airplayTxtLength)) {
-        debugLog("registerDiscoveryBroadcast: MdnsPublisher::publish failed");
+        debugLog("registerDiscoveryBroadcast: MdnsPublishing::publish failed");
+        setError("Failed to publish mDNS services");
+        return false;
     }
 
     debugLog("registerDiscoveryBroadcast: success");
@@ -1026,8 +1134,11 @@ void UxPlayReceiver::unregisterDiscoveryBroadcast() {
 void UxPlayReceiver::destroyDiscoveryBroadcast() {
     if (m_mdnsPublisher) {
         m_mdnsPublisher->stop();
-        delete m_mdnsPublisher;
-        m_mdnsPublisher = nullptr;
+        if (m_ownsMdnsPublisher) {
+            delete m_mdnsPublisher;
+            m_mdnsPublisher = nullptr;
+            m_ownsMdnsPublisher = false;
+        }
     }
 
     if (!m_dnssd) {
@@ -1105,6 +1216,10 @@ bool UxPlayReceiver::restartDiscoveryBroadcast(const QString &recoveryName) {
 void UxPlayReceiver::cleanupUxPlay() {
     m_acceptingCallbacks.store(false);
     m_callbackGeneration.fetch_add(1);
+    if (m_callbackContext) {
+        m_callbackContext->close();
+        m_callbackContext = nullptr;
+    }
 
     m_discoveryRestartController->cancel();
 
@@ -1125,18 +1240,17 @@ void UxPlayReceiver::cleanupUxPlay() {
         m_raop = nullptr;
         m_raopHttpdInitialized = false;
     }
-    if (m_videoFrameBridge) {
-        delete m_videoFrameBridge;
-        m_videoFrameBridge = nullptr;
-    }
-    if (m_renderersStarted.load()) {
+    {
         QMutexLocker rendererLocker(&m_rendererMutex);
-        video_renderer_stop();
-        video_renderer_destroy();
-        audio_renderer_destroy();
-        m_renderersStarted.store(false);
-        m_audioRendererStarted.store(false);
-        m_videoRendererStopped.store(false);
+        resetVideoFrameBridge();
+        if (m_renderersStarted.load()) {
+            video_renderer_stop();
+            video_renderer_destroy();
+            audio_renderer_destroy();
+            m_renderersStarted.store(false);
+            m_audioRendererStarted.store(false);
+            m_videoRendererStopped.store(false);
+        }
     }
     if (m_logger) {
         logger_destroy(static_cast<logger_t *>(m_logger));

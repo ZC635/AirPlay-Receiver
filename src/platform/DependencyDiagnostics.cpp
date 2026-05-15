@@ -1,8 +1,49 @@
 #include "platform/DependencyDiagnostics.h"
 
+#include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QTextStream>
+
+namespace {
+QStringList readPortableRuntimeManifest() {
+    const QString relativeManifestPath = "config/portable-runtime-manifest.txt";
+    const QString appDirPath = QCoreApplication::applicationDirPath();
+    const QString currentDirPath = QDir::currentPath();
+    const QStringList candidatePaths = {
+        QDir(appDirPath).filePath(relativeManifestPath),
+        QDir(appDirPath).filePath("../" + relativeManifestPath),
+        QDir(appDirPath).filePath("../../" + relativeManifestPath),
+        QDir(currentDirPath).filePath(relativeManifestPath),
+        QDir(currentDirPath).filePath("../" + relativeManifestPath),
+        QDir(currentDirPath).filePath("../../" + relativeManifestPath)
+    };
+
+    for (const QString &candidatePath : candidatePaths) {
+        QFile file(candidatePath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+
+        QStringList paths;
+        QTextStream stream(&file);
+        while (!stream.atEnd()) {
+            QString line = stream.readLine().trimmed();
+            if (line.isEmpty() || line.startsWith('#')) {
+                continue;
+            }
+            paths.append(line.replace('\\', '/'));
+        }
+        if (!paths.isEmpty()) {
+            return paths;
+        }
+    }
+
+    return {"config/portable-runtime-manifest.txt"};
+}
+}
 
 DiagnosticResult DependencyDiagnostics::checkExecutable(const QString &name) {
     const QString path = QStandardPaths::findExecutable(name);
@@ -32,25 +73,7 @@ bool DependencyDiagnostics::shouldCheckStandaloneRuntime() {
 }
 
 QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directory) {
-    const QStringList requiredPaths = {
-        "airplay_receiver.exe",
-        "Qt6Core.dll",
-        "Qt6Gui.dll",
-        "Qt6Widgets.dll",
-        "platforms/qwindows.dll",
-        "libgcc_s_seh-1.dll",
-        "libstdc++-6.dll",
-        "libwinpthread-1.dll",
-        "libgstreamer-1.0-0.dll",
-        "gstreamer-plugins/libgstapp.dll",
-        "gstreamer-plugins/libgstplayback.dll",
-        "gstreamer-plugins/libgstautodetect.dll",
-        "gstreamer-plugins/libgstvideoparsersbad.dll",
-        "gstreamer-plugins/libgstlibav.dll",
-        "gstreamer-plugins/libgstd3d11.dll",
-        "gstreamer-plugins/libgstwasapi.dll",
-        "libqmdnsengine.dll"
-    };
+    const QStringList requiredPaths = readPortableRuntimeManifest();
 
     QStringList missing;
     const QDir baseDir(directory);

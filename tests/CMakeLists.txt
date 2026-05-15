@@ -47,6 +47,10 @@ add_executable(AspectRatioSizingTest platform/AspectRatioSizingTest.cpp)
 target_link_libraries(AspectRatioSizingTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AspectRatioSizingTest COMMAND AspectRatioSizingTest)
 
+add_executable(WindowsWindowBehaviorTest platform/WindowsWindowBehaviorTest.cpp)
+target_link_libraries(WindowsWindowBehaviorTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME WindowsWindowBehaviorTest COMMAND WindowsWindowBehaviorTest)
+
 add_executable(DependencyDiagnosticsTest platform/DependencyDiagnosticsTest.cpp)
 target_link_libraries(DependencyDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME DependencyDiagnosticsTest COMMAND DependencyDiagnosticsTest)
@@ -137,6 +141,7 @@ set(AIRPLAY_QT_TESTS
     SettingsDialogTest
     HotkeyServiceTest
     AspectRatioSizingTest
+    WindowsWindowBehaviorTest
     DependencyDiagnosticsTest
     MdnsPublisherTest
     DiscoveryRestartControllerTest

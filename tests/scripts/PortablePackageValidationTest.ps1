@@ -10,6 +10,18 @@ if (-not (Test-Path -LiteralPath $verifyScript)) {
     throw "Missing portable package verifier: $verifyScript"
 }
 
+function Get-PortableRuntimeManifestPaths {
+    $manifestPath = Join-Path $ProjectRoot "config\portable-runtime-manifest.txt"
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        throw "Portable runtime manifest was not found: $manifestPath"
+    }
+
+    return Get-Content -LiteralPath $manifestPath |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and (-not $_.StartsWith("#")) } |
+        ForEach-Object { $_.Replace('/', '\') }
+}
+
 function New-RequiredPortableFile {
     param(
         [string]$Root,
@@ -27,26 +39,7 @@ function New-RequiredPortableFile {
 function New-CompletePortablePackageFixture {
     param([string]$Root)
 
-    $requiredPaths = @(
-        "airplay_receiver.exe",
-        "Qt6Core.dll",
-        "Qt6Gui.dll",
-        "Qt6Widgets.dll",
-        "platforms\qwindows.dll",
-        "libgcc_s_seh-1.dll",
-        "libstdc++-6.dll",
-        "libwinpthread-1.dll",
-        "libgstreamer-1.0-0.dll",
-        "gstreamer-plugins\libgstapp.dll",
-        "gstreamer-plugins\libgstplayback.dll",
-        "gstreamer-plugins\libgstautodetect.dll",
-        "gstreamer-plugins\libgstvideoparsersbad.dll",
-        "gstreamer-plugins\libgstlibav.dll",
-        "gstreamer-plugins\libgstd3d11.dll",
-        "gstreamer-plugins\libgstwasapi.dll",
-        "gstreamer-1.0\registry.x86_64.bin",
-        "libqmdnsengine.dll"
-    )
+    $requiredPaths = @(Get-PortableRuntimeManifestPaths)
 
     foreach ($relativePath in $requiredPaths) {
         New-RequiredPortableFile $Root $relativePath
@@ -82,6 +75,23 @@ try {
     }
     if (($blockedOutput -join "`n") -notmatch "D3DCompiler_47\.dll") {
         throw "Expected verifier output to mention D3DCompiler_47.dll. Output: $($blockedOutput -join ' ')"
+    }
+
+    $missingManifestPackage = Join-Path $tempRoot "missing-manifest"
+    New-Item -ItemType Directory -Path $missingManifestPackage -Force | Out-Null
+    New-CompletePortablePackageFixture $missingManifestPackage
+    Remove-Item -LiteralPath (Join-Path $missingManifestPackage "config\portable-runtime-manifest.txt") -Force -ErrorAction SilentlyContinue
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $missingManifestOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File $verifyScript -PackageDir $missingManifestPackage 2>&1
+    $missingManifestExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+    if ($missingManifestExitCode -eq 0) {
+        throw "Expected portable verifier to reject packages missing config\portable-runtime-manifest.txt."
+    }
+    if (($missingManifestOutput -join "`n") -notmatch "config\\portable-runtime-manifest\.txt") {
+        throw "Expected verifier output to mention config\portable-runtime-manifest.txt. Output: $($missingManifestOutput -join ' ')"
     }
 } finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

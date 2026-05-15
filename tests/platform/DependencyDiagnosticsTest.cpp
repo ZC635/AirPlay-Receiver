@@ -1,10 +1,59 @@
 #include <QtTest/QtTest>
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
+#include <QTextStream>
 
 #include "platform/DependencyDiagnostics.h"
+
+namespace {
+QStringList requiredStandaloneRuntimePaths() {
+    const QString relativeManifestPath = "config/portable-runtime-manifest.txt";
+    const QString appDirPath = QCoreApplication::applicationDirPath();
+    const QString currentDirPath = QDir::currentPath();
+    const QStringList candidatePaths = {
+        QDir(appDirPath).filePath(relativeManifestPath),
+        QDir(appDirPath).filePath("../" + relativeManifestPath),
+        QDir(appDirPath).filePath("../../" + relativeManifestPath),
+        QDir(currentDirPath).filePath(relativeManifestPath),
+        QDir(currentDirPath).filePath("../" + relativeManifestPath),
+        QDir(currentDirPath).filePath("../../" + relativeManifestPath)
+    };
+
+    for (const QString &candidatePath : candidatePaths) {
+        QFile file(candidatePath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+
+        QStringList paths;
+        QTextStream stream(&file);
+        while (!stream.atEnd()) {
+            QString line = stream.readLine().trimmed();
+            if (line.isEmpty() || line.startsWith('#')) {
+                continue;
+            }
+            paths.append(line.replace('\\', '/'));
+        }
+        if (!paths.isEmpty()) {
+            return paths;
+        }
+    }
+
+    return {};
+}
+
+void createStandaloneRuntimeFixture(const QString &root, const QStringList &requiredPaths) {
+    for (const QString &relativePath : requiredPaths) {
+        const QString fullPath = QDir(root).filePath(relativePath);
+        QVERIFY(QDir().mkpath(QFileInfo(fullPath).absolutePath()));
+        QFile file(fullPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+    }
+}
+}
 
 class DependencyDiagnosticsTest : public QObject {
     Q_OBJECT
@@ -40,44 +89,33 @@ private slots:
 
         const auto missing = DependencyDiagnostics::checkStandaloneRuntime(dir.path());
 
-        QVERIFY(missing.contains("airplay_receiver.exe"));
-        QVERIFY(missing.contains("Qt6Core.dll"));
-        QVERIFY(missing.contains("gstreamer-plugins/libgstapp.dll"));
-        QVERIFY(missing.contains("libqmdnsengine.dll"));
+        const QStringList requiredPaths = requiredStandaloneRuntimePaths();
+        QVERIFY(!requiredPaths.isEmpty());
+        QCOMPARE(missing, requiredPaths);
     }
 
     void acceptsCompleteStandaloneRuntimeFiles() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
 
-        const QStringList requiredPaths = {
-            "airplay_receiver.exe",
-            "Qt6Core.dll",
-            "Qt6Gui.dll",
-            "Qt6Widgets.dll",
-            "platforms/qwindows.dll",
-            "libgcc_s_seh-1.dll",
-            "libstdc++-6.dll",
-            "libwinpthread-1.dll",
-            "libgstreamer-1.0-0.dll",
-            "gstreamer-plugins/libgstapp.dll",
-            "gstreamer-plugins/libgstplayback.dll",
-            "gstreamer-plugins/libgstautodetect.dll",
-            "gstreamer-plugins/libgstvideoparsersbad.dll",
-            "gstreamer-plugins/libgstlibav.dll",
-            "gstreamer-plugins/libgstd3d11.dll",
-            "gstreamer-plugins/libgstwasapi.dll",
-            "libqmdnsengine.dll"
-        };
-
-        for (const QString &relativePath : requiredPaths) {
-            const QString fullPath = QDir(dir.path()).filePath(relativePath);
-            QVERIFY(QDir().mkpath(QFileInfo(fullPath).absolutePath()));
-            QFile file(fullPath);
-            QVERIFY(file.open(QIODevice::WriteOnly));
-        }
+        const QStringList requiredPaths = requiredStandaloneRuntimePaths();
+        QVERIFY(!requiredPaths.isEmpty());
+        createStandaloneRuntimeFixture(dir.path(), requiredPaths);
 
         QVERIFY(DependencyDiagnostics::checkStandaloneRuntime(dir.path()).isEmpty());
+    }
+
+    void reportsMissingGStreamerRegistryInStandaloneRuntime() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        QStringList requiredPaths = requiredStandaloneRuntimePaths();
+        QVERIFY(requiredPaths.removeOne("gstreamer-1.0/registry.x86_64.bin"));
+        createStandaloneRuntimeFixture(dir.path(), requiredPaths);
+
+        const auto missing = DependencyDiagnostics::checkStandaloneRuntime(dir.path());
+
+        QCOMPARE(missing, QStringList({"gstreamer-1.0/registry.x86_64.bin"}));
     }
 
     void skipsStandaloneRuntimeCheckInMsys2PathMode() {
