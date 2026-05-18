@@ -79,6 +79,18 @@ RECT nativeClientRectFor(HWND hwnd) {
     return RECT{clientPoints[0].x, clientPoints[0].y, clientPoints[1].x, clientPoints[1].y};
 }
 
+double windowAspectRatio(const QWidget &widget) {
+    return static_cast<double>(widget.width()) / widget.height();
+}
+
+void verifyWindowAspectRatio(const QWidget &widget, double expectedRatio) {
+    const double diff = qAbs(windowAspectRatio(widget) - expectedRatio);
+    QVERIFY2(diff < 0.01,
+             qPrintable(QStringLiteral("actual=%1 expected=%2")
+                            .arg(windowAspectRatio(widget))
+                            .arg(expectedRatio)));
+}
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -1044,6 +1056,67 @@ private slots:
         button->setChecked(true);
 
         QCOMPARE(window.width(), 250);
+    }
+
+    void decodedFrameSizeOverridesReportedVideoSizeForAspectLock() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        receiver.emitVideoSize(1170, 2532);
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+
+        QImage frame(1920, 1080, QImage::Format_RGBA8888);
+        receiver.frameCallback()(frame);
+
+        verifyWindowAspectRatio(window, 16.0 / 9.0);
+    }
+
+    void reportedVideoSizeDoesNotOverrideKnownDecodedFrameSize() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+
+        QImage frame(1920, 1080, QImage::Format_RGBA8888);
+        receiver.frameCallback()(frame);
+        receiver.emitVideoSize(1170, 2532);
+
+        verifyWindowAspectRatio(window, 16.0 / 9.0);
+    }
+
+    void decodedFrameSizeChangeReappliesAspectLock() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+
+        QImage firstFrame(1920, 1080, QImage::Format_RGBA8888);
+        receiver.frameCallback()(firstFrame);
+
+        QImage rotatedFrame(1170, 2532, QImage::Format_RGBA8888);
+        receiver.frameCallback()(rotatedFrame);
+
+        verifyWindowAspectRatio(window, 1170.0 / 2532.0);
+    }
+
+    void decodedFrameSizeClearsWhenReceiverReturnsToDiscoverable() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+
+        auto *button = window.findChild<QToolButton *>("aspectRatioButton");
+        button->setChecked(true);
+
+        QImage frame(1170, 2532, QImage::Format_RGBA8888);
+        receiver.frameCallback()(frame);
+        verifyWindowAspectRatio(window, 1170.0 / 2532.0);
+
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+        receiver.emitVideoSize(1920, 1080);
+
+        verifyWindowAspectRatio(window, 16.0 / 9.0);
     }
 
     void nativeAspectSizingAdjustsPendingRightEdgeRect() {

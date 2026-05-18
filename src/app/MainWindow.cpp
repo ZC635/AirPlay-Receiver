@@ -108,14 +108,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
 
     if (receiver_ != nullptr) {
         connect(receiver_, &AirPlayReceiver::videoSizeChanged, this, [this](int width, int height) {
-            if (width <= 0 || height <= 0) return;
-            videoWidth_ = width;
-            videoHeight_ = height;
-            if (aspectRatioLock_) {
-                enforceAspectRatio();
+            if (!decodedFrameSizeKnown_) {
+                updateAspectVideoSize(width, height);
             }
         });
         receiver_->setVideoFrameCallback([this](QImage frame) {
+            updateAspectVideoSizeFromFrame(frame);
             videoSurface_->onFrameReady(frame);
         });
         updateReceiverState(receiver_->state());
@@ -444,6 +442,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
     case ReceiverState::Starting:
     case ReceiverState::Discoverable:
         if (state == ReceiverState::Discoverable || (wasSessionActive && !receiverSessionActive_)) {
+            clearDecodedFrameSizeForAspectLock();
             videoSurface_->reset();
         }
         statusLabel_->setText("Ready for AirPlay");
@@ -523,6 +522,34 @@ void MainWindow::applyVideoFitMode(bool enabled) {
     if (changed && !saveSettings()) {
         statusLabel_->setText("Could not save settings");
     }
+}
+
+void MainWindow::updateAspectVideoSize(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    const bool changed = (videoWidth_ != width || videoHeight_ != height);
+    videoWidth_ = width;
+    videoHeight_ = height;
+    if (changed && aspectRatioLock_) {
+        enforceAspectRatio();
+    }
+}
+
+void MainWindow::updateAspectVideoSizeFromFrame(const QImage &frame) {
+    if (frame.width() <= 0 || frame.height() <= 0) {
+        return;
+    }
+
+    decodedFrameSizeKnown_ = true;
+    updateAspectVideoSize(frame.width(), frame.height());
+}
+
+void MainWindow::clearDecodedFrameSizeForAspectLock() {
+    decodedFrameSizeKnown_ = false;
+    videoWidth_ = 0;
+    videoHeight_ = 0;
 }
 
 void MainWindow::enforceAspectRatio() {

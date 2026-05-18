@@ -12,6 +12,7 @@ class AirPlayReceiver;
 class ToolbarWidget;
 class HotkeyService;
 class QLabel;
+class QImage;
 class VideoSurfaceWidget;
 
 class MainWindow final : public QMainWindow {
@@ -45,6 +46,9 @@ private:
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void applyAspectRatioLock(bool enabled);
     void applyVideoFitMode(bool enabled);
+    void updateAspectVideoSize(int width, int height);
+    void updateAspectVideoSizeFromFrame(const QImage &frame);
+    void clearDecodedFrameSizeForAspectLock();
     void enforceAspectRatio();
 
     ToolbarWidget *toolbar_;
@@ -61,6 +65,7 @@ private:
     bool receiverSessionActive_ = false;
     int videoWidth_ = 0;
     int videoHeight_ = 0;
+    bool decodedFrameSizeKnown_ = false;
     bool aspectRatioLock_ = false;
     bool alwaysOnTopEnabled_ = false;
     bool videoFitMode_ = false;
