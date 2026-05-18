@@ -1,6 +1,6 @@
 # AirPlay Receiver
 
-AirPlay Receiver is a Windows desktop receiver for native iPhone AirPlay Screen Mirroring. It discovers and receives AirPlay mirroring streams, displays the mirrored video, plays synchronized audio, and provides a compact toolbar for volume, always-on-top, settings, and configurable global shortcuts.
+AirPlay Receiver is a Windows desktop receiver for native iPhone AirPlay Screen Mirroring. It advertises itself over mDNS, receives mirroring streams, displays the mirrored video, plays synchronized audio, and provides a compact toolbar for volume, always-on-top, aspect-ratio, video-fit, settings, and configurable global shortcuts.
 
 This project was developed with assistance from OpenCode, Codex, and DeepSeek. It builds on UxPlay and GStreamer for AirPlay protocol handling and media playback, with a Qt-based Windows desktop interface around the receiver experience.
 
@@ -17,7 +17,7 @@ Download the newest Windows portable build from the [latest release](https://git
 ### Prerequisites
 
 - Windows 10 or 11
-- MSYS2 installed; the build script detects the UCRT64 prefix and can install missing MSYS2 packages (including QMdnsEngine for in-process mDNS discovery) after confirmation
+- MSYS2 installed; the build script prefers the UCRT64 prefix and can install missing MSYS2 packages, including Qt 6, GStreamer, libplist, OpenSSL, and QMdnsEngine, after confirmation
 
 
 ### Clone
@@ -53,6 +53,7 @@ Quick build with UxPlay enabled and dependency bootstrap:
 .\scripts\build.ps1 -Clean    # Wipe build dir first
 .\scripts\build.ps1 -Deploy   # Build + bundle local runtime files
 .\scripts\build.ps1 -All      # Build deployed and portable variants
+.\scripts\build.ps1 -Run      # Build + launch
 ```
 
 Bootstrap options:
@@ -85,7 +86,7 @@ ctest --test-dir build --output-on-failure
 
 ### Portable Build
 
-A portable build is a fully self-contained deployment that does not require MSYS2 to run. The build bundles all required DLLs, GStreamer plugins, and a pre-built GStreamer registry into a single directory. The resulting folder is larger (~200MB+) but can be copied to any Windows machine and run by simply double-clicking `airplay_receiver.exe`.
+A portable build is a self-contained deployment that does not require MSYS2 to run. The build bundles the required DLLs, GStreamer plugins, QMdnsEngine, a portable runtime manifest, and a pre-built GStreamer registry into a single directory. In the current build outputs, `build-uxplay-portable\` is about 3.98 MB larger than `build-uxplay\` (427.82 MB vs 423.83 MB). The portable folder can be copied to another Windows machine and run by double-clicking `airplay_receiver.exe`.
 
 ```powershell
 .\scripts\build.ps1 -Portable   # Build the portable bundle
@@ -108,6 +109,7 @@ When `build-uxplay` contains deployed runtime files, `run.ps1` launches in stand
 Or launch the built receiver directly:
 
 ```powershell
+$env:AIRPLAY_MSYS2_PATH_MODE = "1"
 $env:GST_PLUGIN_PATH = "C:\msys64\ucrt64\lib\gstreamer-1.0"
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 .\build-uxplay\airplay_receiver.exe
@@ -118,11 +120,13 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 ## Features
 
 - Native iPhone AirPlay Screen Mirroring discovery and connection via UxPlay/GStreamer
-- Mirrored video display through a Qt `QOpenGLWidget` with texture upload and resize artifact reduction
+- Mirrored video display through an appsink-to-`QImage` bridge and a Qt `QWidget`/`QPainter` surface with cached-frame repainting to reduce resize artifacts
 - Synchronized audio playback
+- Bidirectional volume synchronization between iPhone AirPlay volume callbacks and the toolbar slider
 - Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, and settings button
-- Settings dialog for receiver name and configurable shortcuts:
+- Settings dialog for receiver name, video quality, and configurable shortcuts:
   - Receiver name shown in the iPhone Screen Mirroring list
+  - Video quality: 540p, 720p, or 1080p; 15, 30, or 60 fps
   - Toggle always on top (`Ctrl+Alt+T`)
   - Volume up (`Ctrl+Alt+Up`)
   - Volume down (`Ctrl+Alt+Down`)
@@ -131,9 +135,10 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
   - Toggle video fit (`Ctrl+Alt+F`)
   - Reset hotkey bindings to defaults
 - Global hotkey registration via the Windows hotkey API
-- Windows-native window handling for always-on-top state, aspect-ratio resizing, and reduced resize flicker
-- Portable Windows bundle with Qt, GStreamer plugins, QMdnsEngine, and a pre-built GStreamer registry
-- Dependency diagnostics for missing runtimes
+- Windows-native window handling for always-on-top state, decoded-frame aspect-ratio resizing, and reduced resize flicker
+- Settings persistence in `airplay-settings.json` beside the executable
+- Portable Windows bundle with Qt, GStreamer plugins, QMdnsEngine, a runtime manifest, and a pre-built GStreamer registry
+- Standalone dependency diagnostics for missing portable runtime files
 
 ## Project Structure
 
@@ -143,6 +148,7 @@ src/
   backend/      Receiver abstraction and UxPlay/GStreamer integration
   platform/     Windows hotkeys, diagnostics, mDNS helpers, window sizing support
 cmake/          UxPlay, QMdnsEngine, and renderer dependency integration
+config/         Portable runtime manifest
 scripts/        PowerShell build, deploy, portable packaging, and run helpers
 docs/           Project overview and maintenance notes
 third_party/
@@ -151,6 +157,7 @@ tests/
   app/          UI tests
   backend/      Backend tests
   platform/     Platform tests
+  scripts/      PowerShell packaging and run-script tests
 ```
 
 ## License
