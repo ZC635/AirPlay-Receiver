@@ -12,6 +12,8 @@ This project is Windows-only. The application, build scripts, tests, and runtime
 
 Download the newest Windows portable build from the [latest release](https://github.com/ZC635/AirPlay-Receiver/releases/latest). Extract the archive, run `airplay_receiver.exe`, then open Control Center on an iPhone, choose Screen Mirroring, and select the advertised receiver name. Keep the iPhone and Windows PC on the same network, and allow the receiver through the Windows firewall if prompted.
 
+Default global shortcuts are available as soon as the receiver starts: `Ctrl+Alt+T` toggles always-on-top, `Ctrl+Alt+Up` and `Ctrl+Alt+Down` adjust volume, `Ctrl+Alt+B` toggles toolbar visibility, `Ctrl+Alt+A` toggles aspect-ratio lock, and `Ctrl+Alt+F` toggles video fit. Open the toolbar settings button to customize shortcut bindings or reset them to defaults.
+
 ## Usage
 
 ### Prerequisites
