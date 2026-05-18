@@ -13,6 +13,7 @@ class ToolbarWidget;
 class HotkeyService;
 class QLabel;
 class QImage;
+class QCloseEvent;
 class VideoSurfaceWidget;
 
 class MainWindow final : public QMainWindow {
@@ -34,6 +35,9 @@ private:
     void applyShortcutTooltips();
     bool registerHotkeys();
     bool saveSettings() const;
+    void restoreWindowState();
+    bool saveWindowState() const;
+    void closeEvent(QCloseEvent *event) override;
     void setReceiverVolume(int value);
     void syncVolumeFromReceiver(double volume);
     void handleReceiverNameChange(const QString &receiverName);
@@ -61,6 +65,7 @@ private:
     QPointer<AirPlayReceiver> receiver_;
     QString currentError_;
     QString settingsPath_;
+    QString windowStatePath_;
     bool receiverConnected_ = false;
     bool receiverSessionActive_ = false;
     int videoWidth_ = 0;

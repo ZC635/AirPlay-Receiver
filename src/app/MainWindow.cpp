@@ -4,12 +4,16 @@
 #include "app/SettingsDialog.h"
 #include "app/ToolbarWidget.h"
 #include "app/VideoSurfaceWidget.h"
+#include "app/WindowStateStore.h"
 #include "backend/AirPlayReceiver.h"
 #include "platform/AspectRatioSizing.h"
 #include "platform/HotkeyService.h"
 #include "platform/WindowsWindowBehavior.h"
 
 #include <algorithm>
+#include <QCloseEvent>
+#include <QDir>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QIcon>
 #include <QKeySequence>
@@ -24,6 +28,7 @@
 namespace {
 constexpr double kAirPlayMinimumVolumeDb = -30.0;
 constexpr double kAirPlayMaximumVolumeDb = 0.0;
+constexpr auto kWindowStateFileName = "airplay-window-state.dat";
 
 double volumeGainFromSliderPercent(int value) {
     const int clamped = std::clamp(value, 0, 100);
@@ -46,6 +51,13 @@ int sliderPercentFromVolumeGain(double volume) {
     const double sliderFraction = (db - kAirPlayMinimumVolumeDb) /
         (kAirPlayMaximumVolumeDb - kAirPlayMinimumVolumeDb);
     return std::clamp(static_cast<int>(std::lround(sliderFraction * 100.0)), 0, 100);
+}
+
+QString windowStatePathForSettingsPath(const QString &settingsPath) {
+    if (settingsPath.isEmpty()) {
+        return QString();
+    }
+    return QFileInfo(settingsPath).absoluteDir().filePath(kWindowStateFileName);
 }
 
 }
@@ -77,6 +89,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     setWindowIcon(QIcon(":/icons/app-icon.ico"));
     setWindowTitle("AirPlay Receiver");
     resize(960, 540);
+    windowStatePath_ = windowStatePathForSettingsPath(settingsPath_);
     alwaysOnTopEnabled_ = windowFlags().testFlag(Qt::WindowStaysOnTopHint);
 
     statusLabel_->setObjectName("receiverStatusLabel");
@@ -168,6 +181,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
             statusLabel_->setText("Could not apply video quality; will retry");
         }
     });
+
+    restoreWindowState();
 }
 
 bool MainWindow::isToolbarVisible() const {
@@ -277,6 +292,32 @@ bool MainWindow::saveSettings() const {
         return true;
     }
     return AppSettingsStore(settingsPath_).save(settings_);
+}
+
+void MainWindow::restoreWindowState() {
+    if (windowStatePath_.isEmpty()) {
+        return;
+    }
+
+    const std::optional<WindowStateSnapshot> snapshot = WindowStateStore(windowStatePath_).load();
+    if (!snapshot.has_value()) {
+        return;
+    }
+
+    restoreGeometry(snapshot->geometry);
+    restoreState(snapshot->state);
+}
+
+bool MainWindow::saveWindowState() const {
+    if (windowStatePath_.isEmpty()) {
+        return true;
+    }
+    return WindowStateStore(windowStatePath_).save({saveGeometry(), saveState()});
+}
+
+void MainWindow::closeEvent(QCloseEvent *event) {
+    saveWindowState();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::setReceiverVolume(int value) {

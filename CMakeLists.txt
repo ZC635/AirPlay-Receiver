@@ -36,6 +36,8 @@ add_library(airplay_app_lib
     src/app/VideoRenderGeometry.h
     src/app/VideoSurfaceWidget.cpp
     src/app/VideoSurfaceWidget.h
+    src/app/WindowStateStore.cpp
+    src/app/WindowStateStore.h
     src/backend/AirPlayReceiver.h
     src/backend/DiscoveryRestartController.cpp
     src/backend/DiscoveryRestartController.h

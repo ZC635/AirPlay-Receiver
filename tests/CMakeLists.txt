@@ -27,6 +27,10 @@ add_executable(AppSettingsStoreTest app/AppSettingsStoreTest.cpp)
 target_link_libraries(AppSettingsStoreTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AppSettingsStoreTest COMMAND AppSettingsStoreTest)
 
+add_executable(WindowStateStoreTest app/WindowStateStoreTest.cpp)
+target_link_libraries(WindowStateStoreTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME WindowStateStoreTest COMMAND WindowStateStoreTest)
+
 add_executable(ShortcutActionKeyTest app/ShortcutActionKeyTest.cpp)
 target_link_libraries(ShortcutActionKeyTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME ShortcutActionKeyTest COMMAND ShortcutActionKeyTest)
@@ -136,6 +140,7 @@ set(AIRPLAY_QT_TESTS
     MainWindowSmokeTest
     AppSettingsTest
     AppSettingsStoreTest
+    WindowStateStoreTest
     ShortcutActionKeyTest
     ToolbarWidgetTest
     SettingsDialogTest

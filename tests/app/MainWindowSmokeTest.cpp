@@ -5,6 +5,7 @@
 #include "app/SettingsDialog.h"
 #include "app/ShortcutAction.h"
 #include "app/VideoSurfaceWidget.h"
+#include "app/WindowStateStore.h"
 #include "backend/FakeAirPlayReceiver.h"
 #include "backend/ReceiverState.h"
 #include "platform/FakeHotkeyService.h"
@@ -1534,6 +1535,39 @@ private slots:
         MainWindow window(settings, nullptr, nullptr, path);
 
         QVERIFY(!QFile::exists(path));
+    }
+
+    void closePersistsWindowStateBesideSettingsFile() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString settingsPath = dir.filePath("airplay-settings.json");
+        const QString windowStatePath = dir.filePath("airplay-window-state.dat");
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        window.resize(640, 360);
+
+        QVERIFY(window.close());
+
+        const std::optional<WindowStateSnapshot> saved = WindowStateStore(windowStatePath).load();
+        QVERIFY(saved.has_value());
+        QVERIFY(!saved->geometry.isEmpty());
+    }
+
+    void constructionRestoresSavedWindowGeometry() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString settingsPath = dir.filePath("airplay-settings.json");
+        const QString windowStatePath = dir.filePath("airplay-window-state.dat");
+        {
+            MainWindow source(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+            source.resize(640, 360);
+            QVERIFY(WindowStateStore(windowStatePath).save({source.saveGeometry(), source.saveState()}));
+        }
+
+        MainWindow restored(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+
+        QCOMPARE(restored.size(), QSize(640, 360));
     }
 };
 
