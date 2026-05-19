@@ -83,6 +83,14 @@ if(AIRPLAY_WITH_UXPLAY)
 endif()
 add_test(NAME UxPlayReceiverConfigTest COMMAND UxPlayReceiverConfigTest)
 
+add_executable(UxPlayDiscoveryTest backend/UxPlayDiscoveryTest.cpp)
+target_link_libraries(UxPlayDiscoveryTest PRIVATE airplay_app_lib Qt6::Test)
+if(AIRPLAY_WITH_UXPLAY)
+    target_include_directories(UxPlayDiscoveryTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
+    target_link_libraries(UxPlayDiscoveryTest PRIVATE renderers)
+endif()
+add_test(NAME UxPlayDiscoveryTest COMMAND UxPlayDiscoveryTest)
+
 add_executable(VideoRendererLifecycleTest backend/VideoRendererLifecycleTest.cpp)
 target_link_libraries(VideoRendererLifecycleTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
@@ -153,6 +161,7 @@ set(AIRPLAY_QT_TESTS
     ReceiverStatePolicyTest
     AirPlayReceiverTest
     UxPlayReceiverConfigTest
+    UxPlayDiscoveryTest
     VideoRendererLifecycleTest
     VideoSurfaceWidgetTest
     VideoFrameBridgeTest

@@ -1,7 +1,3 @@
-#if AIRPLAY_WITH_UXPLAY
-#include <winsock2.h>
-#endif
-
 #include <QtTest/QtTest>
 #include <QFile>
 
@@ -75,50 +71,6 @@ extern "C" void *video_renderer_get_pipeline(void);
 extern "C" void video_renderer_set_force_aspect_ratio(bool enabled);
 extern "C" bool video_renderer_get_force_aspect_ratio(void);
 
-class TcpPortBlocker {
-public:
-    ~TcpPortBlocker() { close(); }
-
-    bool start(unsigned short port) {
-        m_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (m_socket == INVALID_SOCKET) {
-            m_error = QString("socket failed: %1").arg(WSAGetLastError());
-            return false;
-        }
-
-        BOOL exclusive = TRUE;
-        setsockopt(m_socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char *>(&exclusive), sizeof(exclusive));
-
-        sockaddr_in address = {};
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_ANY);
-        address.sin_port = htons(port);
-        if (bind(m_socket, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == SOCKET_ERROR) {
-            m_error = QString("bind failed: %1").arg(WSAGetLastError());
-            close();
-            return false;
-        }
-        if (::listen(m_socket, 1) == SOCKET_ERROR) {
-            m_error = QString("listen failed: %1").arg(WSAGetLastError());
-            close();
-            return false;
-        }
-        return true;
-    }
-
-    void close() {
-        if (m_socket != INVALID_SOCKET) {
-            closesocket(m_socket);
-            m_socket = INVALID_SOCKET;
-        }
-    }
-
-    QString errorString() const { return m_error; }
-
-private:
-    SOCKET m_socket = INVALID_SOCKET;
-    QString m_error;
-};
 #endif
 
 class UxPlayReceiverConfigTest : public QObject {
@@ -242,8 +194,6 @@ private slots:
         }
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         QVERIFY(receiver.m_config.mdnsPublisher == nullptr);
-        QVERIFY(receiver.m_mdnsPublisher != nullptr);
-        QVERIFY(receiver.m_ownsMdnsPublisher);
 
         receiver.stop();
 #endif
@@ -598,89 +548,6 @@ private slots:
 #endif
     }
 
-    void restartDiscoveryFailureClearsStaleBroadcast() {
-#if AIRPLAY_WITH_UXPLAY
-        UxPlayReceiverConfig config;
-        config.serverName = "AirPlay Receiver Restart Failure Test";
-        config.videoSink = "fakesink";
-        config.audioSink = "fakesink";
-        UxPlayReceiver receiver(config);
-
-        receiver.start();
-        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
-        QVERIFY(receiver.m_dnssd != nullptr);
-        QVERIFY(receiver.m_raopPort != 0);
-
-        const unsigned short port = receiver.m_raopPort;
-        raop_stop_httpd(static_cast<raop_t *>(receiver.m_raop));
-        receiver.m_raopHttpdStarted = false;
-
-        TcpPortBlocker blocker;
-        QVERIFY2(blocker.start(port), qPrintable(blocker.errorString()));
-
-        const bool scheduled = receiver.restartDiscoveryBroadcast();
-        const bool goodbyeSent = receiver.m_dnssd != nullptr;
-        const bool timerPending = receiver.m_discoveryRestartController->pending();
-        blocker.close();
-        receiver.stop();
-
-        QVERIFY(scheduled);
-        QVERIFY(goodbyeSent);
-        QVERIFY(!receiver.m_discoveryRestartController->pending());
-#endif
-    }
-
-    void restartDiscoveryGuardClearsExistingBroadcast() {
-#if AIRPLAY_WITH_UXPLAY
-        UxPlayReceiverConfig config;
-        config.serverName = "AirPlay Receiver Restart Guard Test";
-        config.videoSink = "fakesink";
-        config.audioSink = "fakesink";
-        UxPlayReceiver receiver(config);
-        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
-
-        receiver.start();
-        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
-        QVERIFY(receiver.m_dnssd != nullptr);
-
-        receiver.m_raopPort = 0;
-        const bool restarted = receiver.restartDiscoveryBroadcast();
-        const bool staleBroadcastLeft = receiver.m_dnssd != nullptr;
-        const bool httpdLeftRunning = receiver.m_raopHttpdStarted;
-        receiver.stop();
-
-        QVERIFY(!restarted);
-        QVERIFY(!staleBroadcastLeft);
-        QVERIFY(!httpdLeftRunning);
-        QVERIFY(errorSpy.count() > 0);
-#endif
-    }
-
-    void restartDiscoveryRegisterFailureStopsHttpdAndClearsBroadcast() {
-#if AIRPLAY_WITH_UXPLAY
-        UxPlayReceiverConfig config;
-        config.serverName = "AirPlay Receiver Register Failure Test";
-        config.videoSink = "fakesink";
-        config.audioSink = "fakesink";
-        UxPlayReceiver receiver(config);
-        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
-
-        receiver.start();
-        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
-        QVERIFY(receiver.m_raopHttpdStarted);
-        QVERIFY(receiver.m_dnssd != nullptr);
-
-        receiver.m_config.serverName = QString(300, QLatin1Char('A'));
-        const bool scheduled = receiver.restartDiscoveryBroadcast();
-        const bool goodbyeSent = receiver.m_dnssd != nullptr;
-        receiver.stop();
-
-        QVERIFY(scheduled);
-        QVERIFY(goodbyeSent);
-        QVERIFY(!receiver.m_discoveryRestartController->pending());
-#endif
-    }
-
     void disconnectRestartTracksStoppedVideoRendererAtomically() {
 #if AIRPLAY_WITH_UXPLAY
         UxPlayReceiverConfig config;
@@ -828,46 +695,11 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
 
         QVERIFY(receiver.applyReceiverName("AirPlay First Rename"));
-        QVERIFY(receiver.m_discoveryRestartController->pending());
-        QCOMPARE(receiver.m_discoveryRestartController->recoveryName(), QString("AirPlay Receiver Double Rename Test"));
         QVERIFY(receiver.applyReceiverName("AirPlay Second Rename"));
-        QVERIFY(receiver.m_discoveryRestartController->pending());
-        QCOMPARE(receiver.m_discoveryRestartController->recoveryName(), QString("AirPlay Receiver Double Rename Test"));
 
         QCOMPARE(receiver.receiverName(), QString("AirPlay Second Rename"));
         QCOMPARE(errorSpy.count(), 0);
 
-        receiver.stop();
-        QVERIFY(!receiver.m_discoveryRestartController->pending());
-#endif
-    }
-
-    void asyncRestartFailureWithoutRecoverySetsError() {
-#if AIRPLAY_WITH_UXPLAY
-        UxPlayReceiverConfig config;
-        config.serverName = "AirPlay Async Fail Test";
-        config.videoSink = "fakesink";
-        config.audioSink = "fakesink";
-        UxPlayReceiver receiver(config);
-        QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
-
-        receiver.start();
-        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
-
-        QVERIFY(receiver.restartDiscoveryBroadcast());
-        QVERIFY(receiver.m_discoveryRestartController->pending());
-        QVERIFY(receiver.m_discoveryRestartController != nullptr);
-
-        void *raop = receiver.m_raop;
-        receiver.m_raop = nullptr;
-
-        receiver.m_discoveryRestartController->trigger();
-
-        QTRY_COMPARE_WITH_TIMEOUT(errorSpy.count(), 1, 5000);
-        QCOMPARE(receiver.state(), ReceiverState::Error);
-        QVERIFY(errorSpy.at(0).at(0).toString().contains("Failed to create"));
-
-        receiver.m_raop = raop;
         receiver.stop();
 #endif
     }
@@ -1167,9 +999,6 @@ private slots:
 
         receiver.start();
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
-        QVERIFY(receiver.m_dnssd != nullptr);
-        uint64_t featuresBefore = dnssd_get_airplay_features(static_cast<dnssd_t *>(receiver.m_dnssd));
-        QVERIFY((featuresBefore >> 42) & 1ULL);
 
         VideoQualitySettings quality;
         quality.resolution = VideoResolution::P720;
@@ -1178,39 +1007,6 @@ private slots:
 
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         QCOMPARE(receiver.m_config.videoQuality.resolution, VideoResolution::P720);
-
-        if (receiver.m_discoveryRestartController && receiver.m_discoveryRestartController->pending()) {
-            receiver.m_discoveryRestartController->trigger();
-        }
-
-        QVERIFY(receiver.m_dnssd != nullptr);
-        uint64_t featuresAfter = dnssd_get_airplay_features(static_cast<dnssd_t *>(receiver.m_dnssd));
-        QVERIFY((featuresAfter >> 42) & 1ULL);
-
-        receiver.stop();
-#endif
-    }
-
-    void applyVideoQualityReturnsFalseOnSyncFailure() {
-#if AIRPLAY_WITH_UXPLAY
-        UxPlayReceiverConfig config;
-        config.serverName = "AirPlay Receiver Quality Failure Test";
-        config.videoSink = "fakesink";
-        config.audioSink = "fakesink";
-        UxPlayReceiver receiver(config);
-
-        receiver.start();
-        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
-
-        const auto originalQuality = receiver.m_config.videoQuality;
-
-        receiver.m_raopPort = 0;
-
-        VideoQualitySettings quality;
-        quality.resolution = VideoResolution::P720;
-        QVERIFY(!receiver.applyVideoQuality(quality));
-
-        QCOMPARE(receiver.m_config.videoQuality, originalQuality);
 
         receiver.stop();
 #endif
@@ -1239,10 +1035,6 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         QCOMPARE(receiver.m_config.videoQuality.resolution, VideoResolution::P720);
         QCOMPARE(receiver.m_config.videoQuality.frameRate, VideoFrameRate::Fps15);
-
-        QVERIFY(receiver.m_dnssd != nullptr);
-        uint64_t features = dnssd_get_airplay_features(static_cast<dnssd_t *>(receiver.m_dnssd));
-        QVERIFY((features >> 42) & 1ULL);
 
         receiver.stop();
 #endif

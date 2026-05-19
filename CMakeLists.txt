@@ -49,6 +49,8 @@ add_library(airplay_app_lib
     src/backend/ReceiverStatePolicy.cpp
     src/backend/UxPlayCallbackDispatch.cpp
     src/backend/UxPlayCallbackDispatch.h
+    src/backend/UxPlayDiscovery.cpp
+    src/backend/UxPlayDiscovery.h
     src/backend/UxPlayReceiver.cpp
     src/backend/UxPlayReceiver.h
     src/backend/GstAppSinkFrameSource.cpp
