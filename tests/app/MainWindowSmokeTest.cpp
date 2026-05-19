@@ -62,9 +62,29 @@ bool windowHasNativeTopmostState(const QWidget &widget) {
     return (GetWindowLongPtr(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 }
 
+RECT nativeClientRectFor(HWND hwnd);
+
 HWND windowFromWidgetCenter(const QWidget &widget) {
-    const QPoint globalCenter = widget.mapToGlobal(widget.rect().center());
-    return WindowFromPoint(POINT{globalCenter.x(), globalCenter.y()});
+    const QWidget *window = widget.window();
+    if (window == nullptr || window->width() <= 0 || window->height() <= 0) {
+        const QPoint globalCenter = widget.mapToGlobal(widget.rect().center());
+        return WindowFromPoint(POINT{globalCenter.x(), globalCenter.y()});
+    }
+
+    const HWND windowHwnd = reinterpret_cast<HWND>(window->winId());
+    const RECT client = nativeClientRectFor(windowHwnd);
+    const int clientWidth = client.right - client.left;
+    const int clientHeight = client.bottom - client.top;
+    if (clientWidth <= 0 || clientHeight <= 0) {
+        const QPoint globalCenter = widget.mapToGlobal(widget.rect().center());
+        return WindowFromPoint(POINT{globalCenter.x(), globalCenter.y()});
+    }
+
+    const QPoint logicalCenter = widget.mapTo(window, widget.rect().center());
+    const POINT nativeCenter{
+        client.left + static_cast<LONG>(std::lround(logicalCenter.x() * static_cast<double>(clientWidth) / window->width())),
+        client.top + static_cast<LONG>(std::lround(logicalCenter.y() * static_cast<double>(clientHeight) / window->height()))};
+    return WindowFromPoint(nativeCenter);
 }
 
 RECT nativeClientRectFor(HWND hwnd) {
