@@ -1,7 +1,7 @@
 #include "backend/UxPlayReceiver.h"
-#include "backend/DiscoveryRestartController.h"
 #include "backend/ReceiverConfigurationChange.h"
 #include "backend/ReceiverStatePolicy.h"
+#include "backend/UxPlayDiscovery.h"
 #include "backend/VideoFrameBridge.h"
 
 #include <QByteArray>
@@ -22,10 +22,8 @@
 #include <utility>
 
 #if AIRPLAY_WITH_UXPLAY
-#include "lib/dnssd.h"
 #include "lib/logger.h"
 #include "lib/raop.h"
-#include "platform/MdnsPublisher.h"
 #include <glib.h>
 #include "renderers/audio_renderer.h"
 #include "renderers/video_renderer.h"
@@ -69,10 +67,6 @@ void logConnectionReset(const char *message) {
 
 QByteArray defaultDeviceId() {
     return QByteArrayLiteral("02:00:00:00:00:01");
-}
-
-QByteArray defaultHardwareAddress() {
-    return QByteArray::fromHex("020000000001");
 }
 
 double volumeFromAirPlayDb(float volume) {
@@ -316,8 +310,15 @@ UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
 #endif
 {
 #if AIRPLAY_WITH_UXPLAY
-    m_discoveryRestartController = new DiscoveryRestartController(2000, this);
-    m_mdnsPublisher = m_config.mdnsPublisher;
+    UxPlayDiscoveryConfig discoveryConfig;
+    discoveryConfig.receiverName = m_config.serverName;
+    discoveryConfig.videoQuality = m_config.videoQuality;
+    discoveryConfig.mdnsPublisher = m_config.mdnsPublisher;
+    m_discovery = new UxPlayDiscovery(std::move(discoveryConfig), this);
+    QObject::connect(m_discovery, &UxPlayDiscovery::failed, this, [this](const QString &message) {
+        setError(message);
+        setState(ReceiverState::Error);
+    });
 #endif
 }
 
@@ -474,34 +475,9 @@ void UxPlayReceiver::start() {
         setState(ReceiverState::Error);
         return;
     }
-    m_raopHttpdInitialized = true;
-
     unsigned short port = static_cast<unsigned short>(m_config.basePort > 0 ? m_config.basePort : kDynamicPort);
-    raop_set_port(raop, port);
-    m_raopPort = port;
-
-    raop_set_plist(raop, "width", videoQualityWidth(m_config.videoQuality.resolution));
-    raop_set_plist(raop, "height", videoQualityHeight(m_config.videoQuality.resolution));
-    raop_set_plist(raop, "refreshRate", videoQualityRefreshRate(m_config.videoQuality.frameRate));
-    raop_set_plist(raop, "maxFPS", videoQualityMaxFPS(m_config.videoQuality.frameRate));
-
-    if (!createDiscoveryBroadcast()) {
-        cleanupUxPlay();
-        setState(ReceiverState::Error);
-        return;
-    }
-
-    if (raop_start_httpd(raop, &port) < 0) {
-        setError("Failed to start RAOP HTTP server");
-        cleanupUxPlay();
-        setState(ReceiverState::Error);
-        return;
-    }
-    m_raopHttpdStarted = true;
-    raop_set_port(raop, port);
-    m_raopPort = port;
-
-    if (!registerDiscoveryBroadcast(m_raopPort)) {
+    if (!m_discovery->start(m_raop, port)) {
+        setError(m_discovery->lastError());
         cleanupUxPlay();
         setState(ReceiverState::Error);
         return;
@@ -566,25 +542,30 @@ bool UxPlayReceiver::applyReceiverName(const QString &name) {
     ReceiverNameChangeOperations operations;
     operations.storeName = [&](const QString &requestedName) {
         m_config.serverName = requestedName;
+#if AIRPLAY_WITH_UXPLAY
+        if (m_discovery) {
+            m_discovery->setReceiverName(requestedName);
+        }
+#endif
         debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(requestedName), static_cast<int>(m_state));
     };
     operations.restartDiscovery = [&] {
 #if AIRPLAY_WITH_UXPLAY
-        return restartDiscoveryBroadcast();
+        return m_discovery && m_discovery->restart();
 #else
         return true;
 #endif
     };
     operations.restartDiscoveryWithRecovery = [&](const QString &recoveryName) {
 #if AIRPLAY_WITH_UXPLAY
-        return restartDiscoveryBroadcast(recoveryName);
+        return m_discovery && m_discovery->restart(recoveryName);
 #else
         Q_UNUSED(recoveryName);
         return true;
 #endif
     };
     operations.reportRecoveryFailure = [&](const QString &message) {
-        debugLog("applyReceiverName: recovery restartDiscoveryBroadcast() also failed");
+        debugLog("applyReceiverName: recovery discovery restart also failed");
         setError(message);
         setState(ReceiverState::Error);
     };
@@ -596,15 +577,16 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
     VideoQualityChangeOperations operations;
     operations.storeQuality = [&](const VideoQualitySettings &requestedQuality) {
         m_config.videoQuality = requestedQuality;
+#if AIRPLAY_WITH_UXPLAY
+        if (m_discovery) {
+            m_discovery->setVideoQuality(requestedQuality);
+        }
+#endif
     };
     operations.updateActiveAdvertisement = [&](const VideoQualitySettings &requestedQuality) {
 #if AIRPLAY_WITH_UXPLAY
-        if (m_raop) {
-            auto *raop = static_cast<raop_t *>(m_raop);
-            raop_set_plist(raop, "width", videoQualityWidth(requestedQuality.resolution));
-            raop_set_plist(raop, "height", videoQualityHeight(requestedQuality.resolution));
-            raop_set_plist(raop, "refreshRate", videoQualityRefreshRate(requestedQuality.frameRate));
-            raop_set_plist(raop, "maxFPS", videoQualityMaxFPS(requestedQuality.frameRate));
+        if (m_discovery) {
+            m_discovery->setVideoQuality(requestedQuality);
         }
 #else
         Q_UNUSED(requestedQuality);
@@ -612,7 +594,7 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
     };
     operations.restartDiscovery = [&] {
 #if AIRPLAY_WITH_UXPLAY
-        return restartDiscoveryBroadcast();
+        return m_discovery && m_discovery->restart();
 #else
         return true;
 #endif
@@ -1030,189 +1012,6 @@ void UxPlayReceiver::setError(QString error) {
 }
 
 #if AIRPLAY_WITH_UXPLAY
-bool UxPlayReceiver::createDiscoveryBroadcast() {
-    if (!m_raop) {
-        setError("Cannot initialize DNS-SD before RAOP initialization");
-        return false;
-    }
-    if (m_dnssd) {
-        return true;
-    }
-
-    int dnssdError = 0;
-    const QByteArray serverName = m_config.serverName.toUtf8();
-    const QByteArray hwAddress = defaultHardwareAddress();
-    debugLog("createDiscoveryBroadcast: name=\"%s\", port=%u", serverName.constData(), m_raopPort);
-    auto *dnssd = dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(), &dnssdError, 0);
-    if (dnssdError || !dnssd) {
-        debugLog("createDiscoveryBroadcast: dnssd_init failed, error=%d", dnssdError);
-        setError(QString("Failed to initialize DNS-SD: %1").arg(dnssdError));
-        return false;
-    }
-
-    m_dnssd = dnssd;
-    raop_set_dnssd(static_cast<raop_t *>(m_raop), dnssd);
-    const bool h265Support = videoQualityH265Support();
-    dnssd_set_airplay_features(dnssd, 42, h265Support ? 1 : 0);
-    debugLog("createDiscoveryBroadcast: success");
-    return true;
-}
-
-bool UxPlayReceiver::registerDiscoveryBroadcast(unsigned short port) {
-    if (!m_dnssd) {
-        debugLog("registerDiscoveryBroadcast: no DNS-SD object");
-        setError("Cannot register DNS-SD services before DNS-SD initialization");
-        return false;
-    }
-
-    debugLog("registerDiscoveryBroadcast: port=%u", port);
-    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
-    int registerError = dnssd_register_raop(dnssd, port);
-    if (registerError == 0) {
-        registerError = dnssd_register_airplay(dnssd, port);
-    }
-    if (registerError != 0) {
-        debugLog("registerDiscoveryBroadcast: failed, error=%d", registerError);
-        setError(QString("Failed to register DNS-SD services: %1").arg(registerError));
-        return false;
-    }
-
-    int raopTxtLength = 0;
-    const char *raopTxt = dnssd_get_raop_txt(dnssd, &raopTxtLength);
-    int airplayTxtLength = 0;
-    const char *airplayTxt = dnssd_get_airplay_txt(dnssd, &airplayTxtLength);
-
-    if (!m_mdnsPublisher) {
-        m_mdnsPublisher = new MdnsPublisher(this);
-        m_ownsMdnsPublisher = true;
-    }
-    const QByteArray hwAddress = defaultHardwareAddress();
-    if (!m_mdnsPublisher->publish(m_config.serverName, hwAddress, port,
-                                  raopTxt, raopTxtLength,
-                                  airplayTxt, airplayTxtLength)) {
-        debugLog("registerDiscoveryBroadcast: MdnsPublishing::publish failed");
-        setError("Failed to publish mDNS services");
-        return false;
-    }
-
-    debugLog("registerDiscoveryBroadcast: success");
-    return true;
-}
-
-void UxPlayReceiver::stopDiscoveryBroadcast() {
-    if (m_mdnsPublisher) {
-        m_mdnsPublisher->stop();
-    }
-
-    if (!m_dnssd) {
-        return;
-    }
-
-    debugLog("stopDiscoveryBroadcast");
-    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
-    dnssd_unregister_raop(dnssd);
-    dnssd_unregister_airplay(dnssd);
-    dnssd_destroy(dnssd);
-    m_dnssd = nullptr;
-}
-
-void UxPlayReceiver::unregisterDiscoveryBroadcast() {
-    if (m_mdnsPublisher) {
-        m_mdnsPublisher->stop();
-    }
-
-    if (!m_dnssd) {
-        return;
-    }
-
-    debugLog("unregisterDiscoveryBroadcast (Goodbye sent, handle kept alive)");
-    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
-    dnssd_unregister_raop(dnssd);
-    dnssd_unregister_airplay(dnssd);
-}
-
-void UxPlayReceiver::destroyDiscoveryBroadcast() {
-    if (m_mdnsPublisher) {
-        m_mdnsPublisher->stop();
-        if (m_ownsMdnsPublisher) {
-            delete m_mdnsPublisher;
-            m_mdnsPublisher = nullptr;
-            m_ownsMdnsPublisher = false;
-        }
-    }
-
-    if (!m_dnssd) {
-        return;
-    }
-
-    debugLog("destroyDiscoveryBroadcast");
-    auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
-    dnssd_destroy(dnssd);
-    m_dnssd = nullptr;
-}
-
-bool UxPlayReceiver::restartDiscoveryBroadcast(const QString &recoveryName) {
-    const bool shouldStartHttpd = m_raopHttpdStarted || m_state == ReceiverState::Discoverable;
-
-    DiscoveryRestartOperations ops;
-    const auto guarded = QPointer<UxPlayReceiver>(this);
-
-    ops.canRestart = [this] {
-        return m_raop != nullptr && m_raopPort != 0;
-    };
-    ops.stopHttpdIfStarted = [this] {
-        if (m_raop && m_raopHttpdStarted) {
-            raop_stop_httpd(static_cast<raop_t *>(m_raop));
-            m_raopHttpdStarted = false;
-        }
-    };
-    ops.unregisterBroadcast = [this] {
-        unregisterDiscoveryBroadcast();
-    };
-    ops.destroyBroadcast = [this, guarded] {
-        if (!guarded) return;
-        destroyDiscoveryBroadcast();
-    };
-    ops.createBroadcast = [this, guarded] {
-        if (!guarded) return false;
-        if (!m_raop) return false;
-        return createDiscoveryBroadcast();
-    };
-    ops.startHttpdIfNeeded = [this, guarded] {
-        if (!guarded) return false;
-        if (!m_raop) return false;
-        unsigned short port = m_raopPort;
-        if (raop_start_httpd(static_cast<raop_t *>(m_raop), &port) < 0) {
-            return false;
-        }
-        raop_set_port(static_cast<raop_t *>(m_raop), port);
-        m_raopPort = port;
-        m_raopHttpdStarted = true;
-        return true;
-    };
-    ops.registerBroadcast = [this, guarded] {
-        if (!guarded) return false;
-        if (!m_raop) return false;
-        return registerDiscoveryBroadcast(m_raopPort);
-    };
-    ops.restoreReceiverName = [this](QString name) {
-        m_config.serverName = std::move(name);
-    };
-    ops.fail = [this](QString msg) {
-        setError(std::move(msg));
-        setState(ReceiverState::Error);
-    };
-    ops.canContinue = [guarded, this] {
-        return guarded && m_acceptingCallbacks.load();
-    };
-
-    const bool scheduled = m_discoveryRestartController->schedule(recoveryName, shouldStartHttpd, std::move(ops));
-    if (!scheduled) {
-        stopDiscoveryBroadcast();
-    }
-    return scheduled;
-}
-
 void UxPlayReceiver::cleanupUxPlay() {
     m_acceptingCallbacks.store(false);
     m_callbackGeneration.fetch_add(1);
@@ -1221,24 +1020,18 @@ void UxPlayReceiver::cleanupUxPlay() {
         m_callbackContext = nullptr;
     }
 
-    m_discoveryRestartController->cancel();
-
     if (m_glibTimer) {
         static_cast<QTimer *>(m_glibTimer)->stop();
         delete static_cast<QTimer *>(m_glibTimer);
         m_glibTimer = nullptr;
     }
 
-    if (m_raop && m_raopHttpdStarted) {
-        raop_stop_httpd(static_cast<raop_t *>(m_raop));
-        m_raopHttpdStarted = false;
+    if (m_discovery) {
+        m_discovery->stop();
     }
-    stopDiscoveryBroadcast();
-    m_raopPort = 0;
     if (m_raop) {
         raop_destroy(static_cast<raop_t *>(m_raop));
         m_raop = nullptr;
-        m_raopHttpdInitialized = false;
     }
     {
         QMutexLocker rendererLocker(&m_rendererMutex);

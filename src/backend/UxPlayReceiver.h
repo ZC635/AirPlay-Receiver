@@ -12,8 +12,8 @@
 #include "backend/AirPlayReceiver.h"
 #include "backend/UxPlayCallbackDispatch.h"
 
-class DiscoveryRestartController;
 class MdnsPublishing;
+class UxPlayDiscovery;
 class VideoFrameBridge;
 
 struct UxPlayReceiverConfig {
@@ -113,12 +113,6 @@ private:
     void applyVideoFitModeToRenderer();
     void resetVideoFrameBridge();
     void attachVideoFrameBridgeToCurrentPipeline();
-    bool createDiscoveryBroadcast();
-    bool registerDiscoveryBroadcast(unsigned short port);
-    void stopDiscoveryBroadcast();
-    void unregisterDiscoveryBroadcast();
-    void destroyDiscoveryBroadcast();
-    bool restartDiscoveryBroadcast(const QString &recoveryName = {});
 #endif
 
     UxPlayReceiverConfig m_config;
@@ -130,11 +124,7 @@ private:
     VideoFrameBridge *m_videoFrameBridge = nullptr;
 #if AIRPLAY_WITH_UXPLAY
     void *m_raop = nullptr;
-    void *m_dnssd = nullptr;
     void *m_logger = nullptr;
-    bool m_raopHttpdInitialized = false;
-    bool m_raopHttpdStarted = false;
-    unsigned short m_raopPort = 0;
     std::atomic_bool m_renderersStarted = false;
     std::atomic_bool m_videoRendererStopped = false;
     std::atomic_bool m_audioRendererStarted = false;
@@ -145,8 +135,6 @@ private:
     UxPlayCallbackDispatch m_callbackDispatch;
     CallbackContext *m_callbackContext = nullptr;
     std::vector<std::unique_ptr<CallbackContext>> m_callbackContexts;
-    DiscoveryRestartController *m_discoveryRestartController = nullptr;
-    MdnsPublishing *m_mdnsPublisher = nullptr;
-    bool m_ownsMdnsPublisher = false;
+    UxPlayDiscovery *m_discovery = nullptr;
 #endif
 };
