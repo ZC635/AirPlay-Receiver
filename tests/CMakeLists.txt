@@ -121,6 +121,14 @@ add_test(NAME VideoFrameBridgeTest COMMAND VideoFrameBridgeTest)
 if(AIRPLAY_WITH_UXPLAY)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GST_PBUTILS REQUIRED IMPORTED_TARGET gstreamer-pbutils-1.0)
+    add_executable(GstSampleQueueTest backend/GstSampleQueueTest.cpp)
+    target_link_libraries(GstSampleQueueTest PRIVATE
+        airplay_app_lib
+        Qt6::Test
+        renderers
+    )
+    add_test(NAME GstSampleQueueTest COMMAND GstSampleQueueTest)
+
     add_executable(RecordingMuxFeasibilityTest backend/RecordingMuxFeasibilityTest.cpp)
     target_link_libraries(RecordingMuxFeasibilityTest PRIVATE
         airplay_app_lib
@@ -195,7 +203,7 @@ set(AIRPLAY_QT_TESTS
     VideoRenderGeometryTest
 )
 if(AIRPLAY_WITH_UXPLAY)
-    list(APPEND AIRPLAY_QT_TESTS RecordingMuxFeasibilityTest)
+    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest)
 endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
@@ -205,7 +213,7 @@ foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
 endforeach()
 
 if(AIRPLAY_WITH_UXPLAY)
-    set_tests_properties(RecordingMuxFeasibilityTest PROPERTIES
+    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
