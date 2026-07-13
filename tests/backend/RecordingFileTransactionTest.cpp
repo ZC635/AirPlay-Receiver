@@ -403,6 +403,8 @@ private slots:
         QVERIFY(directory.isValid());
         const RecordingFileReservation reservation = reserveOrFail(directory.path());
         writeBytes(reservation.videoSpoolPath, "video spool");
+        QCOMPARE(RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath),
+                 QString());
         writeBytes(reservation.audioSpoolPath, "audio spool");
         writeBytes(reservation.temporaryMp4Path, "final mp4");
 #ifdef Q_OS_WIN
@@ -521,6 +523,8 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        QCOMPARE(RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath),
+                 QString());
         writeBytes(reservation.audioSpoolPath, "optional audio");
 
         RecordingFileTransaction::discard(reservation);
@@ -529,6 +533,142 @@ private slots:
         QVERIFY(!QFileInfo::exists(reservation.audioSpoolPath));
         QVERIFY(!QFileInfo::exists(reservation.temporaryMp4Path));
         QVERIFY(!QFileInfo::exists(reservation.finalPath));
+    }
+
+    void claimOptionalAudioCreatesHiddenEmptyFileAndDuplicateDoesNotTruncate() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+
+        QCOMPARE(RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath),
+                 QString());
+
+        const QFileInfo audioInfo(reservation.audioSpoolPath);
+        QVERIFY(audioInfo.isFile());
+        QCOMPARE(audioInfo.size(), 0);
+#ifdef Q_OS_WIN
+        const DWORD attributes = GetFileAttributesW(
+            QDir::toNativeSeparators(reservation.audioSpoolPath).toStdWString().c_str());
+        QVERIFY(attributes != INVALID_FILE_ATTRIBUTES);
+        QVERIFY(attributes & FILE_ATTRIBUTE_HIDDEN);
+#endif
+        writeBytes(reservation.audioSpoolPath, "claimed audio bytes");
+
+        const QString duplicateError =
+            RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath);
+
+        QVERIFY2(!duplicateError.isEmpty(), qPrintable(duplicateError));
+        QVERIFY2(duplicateError.contains(reservation.audioSpoolPath), qPrintable(duplicateError));
+        QCOMPARE(readBytes(reservation.audioSpoolPath), QByteArray("claimed audio bytes"));
+        RecordingFileTransaction::discard(reservation);
+    }
+
+    void claimOptionalAudioRequiresMatchingActiveReservationLock() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString audioPath = directory.filePath(
+            QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(kId));
+
+        const QString error = RecordingFileTransaction::claimOptionalAudioSpool(audioPath);
+
+        QVERIFY2(error.contains(QStringLiteral("lock"), Qt::CaseInsensitive), qPrintable(error));
+        QVERIFY2(error.contains(audioPath), qPrintable(error));
+        QVERIFY(!QFileInfo::exists(audioPath));
+    }
+
+    void foreignAudioCreatedAfterReserveCannotBeClaimedOrDeletedByDiscard() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        writeBytes(reservation.audioSpoolPath, "foreign after reserve");
+
+        const QString error =
+            RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath);
+
+        QVERIFY2(!error.isEmpty(), qPrintable(error));
+        QVERIFY2(error.contains(reservation.audioSpoolPath), qPrintable(error));
+        QCOMPARE(readBytes(reservation.audioSpoolPath), QByteArray("foreign after reserve"));
+        RecordingFileTransaction::discard(reservation);
+        QCOMPARE(readBytes(reservation.audioSpoolPath), QByteArray("foreign after reserve"));
+
+        QTemporaryDir directoryDirectory;
+        QVERIFY(directoryDirectory.isValid());
+        const RecordingFileReservation directoryReservation =
+            reserveOrFail(directoryDirectory.path(),
+                          QUuid(QStringLiteral("33333333-3333-3333-3333-333333333333")));
+        QVERIFY(QDir().mkdir(directoryReservation.audioSpoolPath));
+
+        const QString directoryError = RecordingFileTransaction::claimOptionalAudioSpool(
+            directoryReservation.audioSpoolPath);
+
+        QVERIFY2(!directoryError.isEmpty(), qPrintable(directoryError));
+        QVERIFY(QFileInfo(directoryReservation.audioSpoolPath).isDir());
+        RecordingFileTransaction::discard(directoryReservation);
+        QVERIFY(QFileInfo(directoryReservation.audioSpoolPath).isDir());
+    }
+
+    void videoOnlyCommitPreservesUnclaimedForeignAudioCreatedAfterReserve() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        writeBytes(reservation.audioSpoolPath, "unclaimed foreign audio");
+        writeBytes(reservation.temporaryMp4Path, "video only mp4");
+
+        QCOMPARE(RecordingFileTransaction::commit(reservation), QString());
+
+        QCOMPARE(readBytes(reservation.finalPath), QByteArray("video only mp4"));
+        QCOMPARE(readBytes(reservation.audioSpoolPath), QByteArray("unclaimed foreign audio"));
+    }
+
+    void commitTreatsExternallyRemovedClaimedAudioAsSuccessfulCleanup() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        QCOMPARE(RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath),
+                 QString());
+        QVERIFY(QFile::remove(reservation.audioSpoolPath));
+        writeBytes(reservation.temporaryMp4Path, "no audio remains");
+
+        QCOMPARE(RecordingFileTransaction::commit(reservation), QString());
+
+        QCOMPARE(readBytes(reservation.finalPath), QByteArray("no audio remains"));
+        QVERIFY(!QFileInfo::exists(reservation.audioSpoolPath));
+    }
+
+    void claimedAudioCleanupFailureRetainsOwnershipForCommitRetry() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        QCOMPARE(RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath),
+                 QString());
+        QVERIFY(QFile::remove(reservation.audioSpoolPath));
+        QVERIFY(QDir().mkdir(reservation.audioSpoolPath));
+        writeBytes(reservation.temporaryMp4Path, "retry audio cleanup");
+
+        const QString error = RecordingFileTransaction::commit(reservation);
+
+        QVERIFY2(error.contains(reservation.audioSpoolPath), qPrintable(error));
+        QVERIFY(!QFileInfo::exists(reservation.finalPath));
+        QVERIFY(QFileInfo(reservation.audioSpoolPath).isDir());
+        QDir(reservation.audioSpoolPath).removeRecursively();
+
+        QCOMPARE(RecordingFileTransaction::commit(reservation), QString());
+        QCOMPARE(readBytes(reservation.finalPath), QByteArray("retry audio cleanup"));
+    }
+
+    void cleanupSkipsClaimedAudioWhileReservationIsActive() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        QCOMPARE(RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath),
+                 QString());
+
+        const QStringList deleted =
+            RecordingFileTransaction::cleanupStaleTemporaryFiles(directory.path());
+
+        QVERIFY(deleted.isEmpty());
+        QVERIFY(QFileInfo::exists(reservation.audioSpoolPath));
+        RecordingFileTransaction::discard(reservation);
     }
 
     void cleanupDeletesOnlyExactRegularTemporaryFilePatternsInSortedOrder() {
