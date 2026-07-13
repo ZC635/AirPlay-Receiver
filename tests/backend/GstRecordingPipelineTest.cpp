@@ -13,6 +13,7 @@
 #include <gst/video/video.h>
 
 #include <cmath>
+#include <atomic>
 #include <future>
 #include <type_traits>
 
@@ -21,6 +22,13 @@
 #endif
 
 namespace {
+
+std::atomic<int> g_asyncProbeFinalizations{0};
+
+void countAsyncProbeFinalization(gpointer, GObject *)
+{
+    g_asyncProbeFinalizations.fetch_add(1, std::memory_order_relaxed);
+}
 
 const QSet<QString> kRequiredFactories{
     QStringLiteral("matroskamux"), QStringLiteral("matroskademux"),
@@ -269,6 +277,8 @@ private slots:
     void capabilityProbeClassifiesMissingFactories_data();
     void capabilityProbeClassifiesMissingFactories();
     void realCapabilityProbeUsesInstalledOpenH264Fallback();
+    void realReadyProbeRejectsAsyncTimeoutAndReleasesElement_data();
+    void realReadyProbeRejectsAsyncTimeoutAndReleasesElement();
     void startRejectsMissingRequiredCapabilityWithoutTouchingPlaceholder_data();
     void startRejectsMissingRequiredCapabilityWithoutTouchingPlaceholder();
     void startSkipsEncoderThatFailsReadyProbe();
@@ -390,6 +400,87 @@ void GstRecordingPipelineTest::realCapabilityProbeUsesInstalledOpenH264Fallback(
     const GstRecordingCapabilityResult result = GstRecordingPipeline::probeCapabilities(hooks);
     QVERIFY2(result.available, qPrintable(result.error));
     QCOMPARE(result.preferredEncoder, QStringLiteral("openh264enc"));
+}
+
+void GstRecordingPipelineTest::realReadyProbeRejectsAsyncTimeoutAndReleasesElement()
+{
+    QFETCH(int, requestedValue);
+    QFETCH(int, settledValue);
+    QFETCH(int, settledStateValue);
+    QFETCH(bool, expectedAvailable);
+    QFETCH(QString, errorToken);
+    GstRecordingPipelineHooks hooks;
+    hooks.factoryExists = [](const QString &name) {
+        return name != QStringLiteral("airplaymissingprobe");
+    };
+    hooks.encoderFactoryAlias = [](const QString &logical) {
+        return logical == QStringLiteral("mfh264enc")
+            ? QStringLiteral("fakesink")
+            : QStringLiteral("airplaymissingprobe");
+    };
+    hooks.factoryReadyDeadline = 5 * GST_MSECOND;
+    GstClockTime observedDeadline = GST_CLOCK_TIME_NONE;
+    hooks.factoryReadySetState = [requestedValue](GstElement *, GstState state) {
+        return state == GST_STATE_READY
+            ? static_cast<GstStateChangeReturn>(requestedValue)
+            : GST_STATE_CHANGE_FAILURE;
+    };
+    hooks.factoryReadyGetState = [&observedDeadline, settledValue, settledStateValue]
+        (GstElement *, GstState *state, GstState *pending, GstClockTime deadline)
+        -> GstStateChangeReturn {
+        observedDeadline = deadline;
+        *state = static_cast<GstState>(settledStateValue);
+        *pending = GST_STATE_READY;
+        return static_cast<GstStateChangeReturn>(settledValue);
+    };
+    hooks.factoryReadyElementCreated = [](GstElement *element) {
+        g_object_weak_ref(G_OBJECT(element), countAsyncProbeFinalization, nullptr);
+    };
+    const int finalizedBefore = g_asyncProbeFinalizations.load(std::memory_order_relaxed);
+    QElapsedTimer timer;
+    timer.start();
+    const GstRecordingCapabilityResult result =
+        GstRecordingPipeline::probeCapabilities(hooks);
+    QCOMPARE(result.available, expectedAvailable);
+    if (expectedAvailable) {
+        QCOMPARE(result.preferredEncoder, QStringLiteral("mfh264enc"));
+        QVERIFY(result.error.isEmpty());
+    } else {
+        QVERIFY(result.error.contains(QStringLiteral("READY")));
+        QVERIFY(result.error.contains(errorToken, Qt::CaseInsensitive));
+    }
+    if (requestedValue == GST_STATE_CHANGE_FAILURE) {
+        QCOMPARE(observedDeadline, GST_CLOCK_TIME_NONE);
+    } else {
+        QCOMPARE(observedDeadline, 5 * GST_MSECOND);
+    }
+    QVERIFY(timer.elapsed() < 200);
+    QCOMPARE(g_asyncProbeFinalizations.load(std::memory_order_relaxed),
+             finalizedBefore + 1);
+}
+
+void GstRecordingPipelineTest::realReadyProbeRejectsAsyncTimeoutAndReleasesElement_data()
+{
+    QTest::addColumn<int>("requestedValue");
+    QTest::addColumn<int>("settledValue");
+    QTest::addColumn<int>("settledStateValue");
+    QTest::addColumn<bool>("expectedAvailable");
+    QTest::addColumn<QString>("errorToken");
+    QTest::newRow("async-timeout")
+        << int(GST_STATE_CHANGE_ASYNC) << int(GST_STATE_CHANGE_ASYNC)
+        << int(GST_STATE_NULL) << false << QStringLiteral("timeout");
+    QTest::newRow("async-settles-ready")
+        << int(GST_STATE_CHANGE_ASYNC) << int(GST_STATE_CHANGE_SUCCESS)
+        << int(GST_STATE_READY) << true << QString();
+    QTest::newRow("async-settles-non-ready")
+        << int(GST_STATE_CHANGE_ASYNC) << int(GST_STATE_CHANGE_SUCCESS)
+        << int(GST_STATE_PAUSED) << false << QStringLiteral("non-READY");
+    QTest::newRow("settlement-failure")
+        << int(GST_STATE_CHANGE_ASYNC) << int(GST_STATE_CHANGE_FAILURE)
+        << int(GST_STATE_NULL) << false << QStringLiteral("settlement failed");
+    QTest::newRow("request-failure")
+        << int(GST_STATE_CHANGE_FAILURE) << int(GST_STATE_CHANGE_SUCCESS)
+        << int(GST_STATE_READY) << false << QStringLiteral("request failed");
 }
 
 void GstRecordingPipelineTest::startRejectsMissingRequiredCapabilityWithoutTouchingPlaceholder_data()

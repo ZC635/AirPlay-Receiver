@@ -40,6 +40,11 @@ struct GstRecordingEncoderConfiguration {
 struct GstRecordingPipelineHooks {
     std::function<bool(const QString &)> factoryExists;
     std::function<bool(const QString &, QString *)> factoryReady;
+    GstClockTime factoryReadyDeadline = 500 * GST_MSECOND;
+    std::function<GstStateChangeReturn(GstElement *, GstState)> factoryReadySetState;
+    std::function<GstStateChangeReturn(GstElement *, GstState *, GstState *, GstClockTime)>
+        factoryReadyGetState;
+    std::function<void(GstElement *)> factoryReadyElementCreated;
     std::function<bool(const QString &, QString *)> encoderBuildAllowed;
     std::function<bool(const QString &, const QString &, QString *)> encoderStageAllowed;
     std::function<QString(const QString &)> encoderFactoryAlias;
