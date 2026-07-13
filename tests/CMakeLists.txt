@@ -107,6 +107,20 @@ if(AIRPLAY_WITH_UXPLAY)
 endif()
 add_test(NAME VideoFrameBridgeTest COMMAND VideoFrameBridgeTest)
 
+if(AIRPLAY_WITH_UXPLAY)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GST_PBUTILS REQUIRED IMPORTED_TARGET gstreamer-pbutils-1.0)
+    add_executable(RecordingMuxFeasibilityTest backend/RecordingMuxFeasibilityTest.cpp)
+    target_link_libraries(RecordingMuxFeasibilityTest PRIVATE
+        airplay_app_lib
+        Qt6::Test
+        renderers
+        PkgConfig::GST_PBUTILS
+    )
+    add_test(NAME RecordingMuxFeasibilityTest COMMAND RecordingMuxFeasibilityTest)
+    get_filename_component(AIRPLAY_GSTREAMER_BIN_DIR "${PKG_CONFIG_EXECUTABLE}" DIRECTORY)
+endif()
+
 add_executable(VideoSurfaceWidgetTest app/VideoSurfaceWidgetTest.cpp)
 target_link_libraries(VideoSurfaceWidgetTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoSurfaceWidgetTest COMMAND VideoSurfaceWidgetTest)
@@ -167,12 +181,24 @@ set(AIRPLAY_QT_TESTS
     VideoFrameBridgeTest
     VideoRenderGeometryTest
 )
+if(AIRPLAY_WITH_UXPLAY)
+    list(APPEND AIRPLAY_QT_TESTS RecordingMuxFeasibilityTest)
+endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
 endforeach()
+
+if(AIRPLAY_WITH_UXPLAY)
+    set_tests_properties(RecordingMuxFeasibilityTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+        TIMEOUT 30
+    )
+endif()
 
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     set_tests_properties(MainWindowTopmostFlickerTest PROPERTIES
