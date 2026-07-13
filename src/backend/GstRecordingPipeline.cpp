@@ -25,18 +25,51 @@ bool realFactoryExists(const QString &name)
     return true;
 }
 
-bool realFactoryReady(const QString &name, QString *error)
+bool realFactoryReady(
+    const QString &name,
+    GstClockTime deadline,
+    const std::function<GstStateChangeReturn(GstElement *, GstState)> &setReadyState,
+    const std::function<GstStateChangeReturn(
+        GstElement *, GstState *, GstState *, GstClockTime)> &getReadyState,
+    const std::function<void(GstElement *)> &elementCreated,
+    QString *error)
 {
     GstElement *element = gst_element_factory_make(name.toUtf8().constData(), nullptr);
     if (!element) {
         if (error) *error = QStringLiteral("factory create failed");
         return false;
     }
-    const GstStateChangeReturn state = gst_element_set_state(element, GST_STATE_READY);
+    if (elementCreated) elementCreated(element);
+    const GstStateChangeReturn requested = setReadyState(element, GST_STATE_READY);
+    GstState settledState = GST_STATE_VOID_PENDING;
+    GstState pendingState = GST_STATE_VOID_PENDING;
+    GstStateChangeReturn settled = GST_STATE_CHANGE_FAILURE;
+    if (requested != GST_STATE_CHANGE_FAILURE) {
+        settled = getReadyState(element, &settledState, &pendingState, deadline);
+    }
     gst_element_set_state(element, GST_STATE_NULL);
     gst_object_unref(element);
-    if (state == GST_STATE_CHANGE_FAILURE) {
-        if (error) *error = QStringLiteral("READY state failed");
+    if (requested == GST_STATE_CHANGE_FAILURE) {
+        if (error) *error = QStringLiteral("READY state request failed");
+        return false;
+    }
+    if (settled == GST_STATE_CHANGE_ASYNC) {
+        if (error) {
+            *error = QStringLiteral("READY state timeout after %1 ms (state=%2 pending=%3)")
+                         .arg(GST_TIME_AS_MSECONDS(deadline))
+                         .arg(settledState).arg(pendingState);
+        }
+        return false;
+    }
+    if (settled == GST_STATE_CHANGE_FAILURE) {
+        if (error) *error = QStringLiteral("READY state settlement failed");
+        return false;
+    }
+    if (settledState != GST_STATE_READY) {
+        if (error) {
+            *error = QStringLiteral("READY probe settled in non-READY state %1 (pending=%2 result=%3)")
+                         .arg(settledState).arg(pendingState).arg(settled);
+        }
         return false;
     }
     return true;
@@ -45,7 +78,30 @@ bool realFactoryReady(const QString &name, QString *error)
 GstRecordingPipelineHooks completedHooks(GstRecordingPipelineHooks hooks)
 {
     if (!hooks.factoryExists) hooks.factoryExists = realFactoryExists;
-    if (!hooks.factoryReady) hooks.factoryReady = realFactoryReady;
+    if (!hooks.factoryReady) {
+        const GstClockTime deadline = hooks.factoryReadyDeadline > 0
+            ? hooks.factoryReadyDeadline : 500 * GST_MSECOND;
+        const auto setReadyState = hooks.factoryReadySetState
+            ? hooks.factoryReadySetState
+            : std::function<GstStateChangeReturn(GstElement *, GstState)>(
+                  [](GstElement *element, GstState state) {
+                      return gst_element_set_state(element, state);
+                  });
+        const auto getReadyState = hooks.factoryReadyGetState
+            ? hooks.factoryReadyGetState
+            : std::function<GstStateChangeReturn(
+                  GstElement *, GstState *, GstState *, GstClockTime)>(
+                  [](GstElement *element, GstState *state, GstState *pending,
+                     GstClockTime timeout) {
+                      return gst_element_get_state(element, state, pending, timeout);
+                  });
+        const auto elementCreated = hooks.factoryReadyElementCreated;
+        hooks.factoryReady = [deadline, setReadyState, getReadyState, elementCreated]
+            (const QString &name, QString *error) {
+            return realFactoryReady(name, deadline, setReadyState, getReadyState,
+                                    elementCreated, error);
+        };
+    }
     if (!hooks.busTimedPop) {
         hooks.busTimedPop = [](GstBus *bus, GstClockTime timeout) {
             return gst_bus_timed_pop_filtered(
