@@ -16,11 +16,18 @@
 
 namespace {
 
-QString createTemporaryFile(const QString &path) {
+struct TemporaryFileCreationResult {
+    bool ownedFileRemains = false;
+    bool hideFailed = false;
+    QString error;
+};
+
+TemporaryFileCreationResult createTemporaryFile(const QString &path) {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-        return QStringLiteral("Could not exclusively create temporary recording file \"%1\": %2")
-            .arg(path, file.errorString());
+        return {false, false,
+                QStringLiteral("Could not exclusively create temporary recording file \"%1\": %2")
+                    .arg(path, file.errorString())};
     }
     file.close();
 
@@ -30,13 +37,14 @@ QString createTemporaryFile(const QString &path) {
     if (attributes == INVALID_FILE_ATTRIBUTES ||
         !SetFileAttributesW(nativePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)) {
         const DWORD error = GetLastError();
-        QFile::remove(path);
-        return QStringLiteral("Could not hide temporary recording file \"%1\" (Windows error %2)")
-            .arg(path)
-            .arg(error);
+        const bool removed = QFile::remove(path);
+        return {!removed, true,
+                QStringLiteral("Could not hide temporary recording file \"%1\" (Windows error %2)")
+                    .arg(path)
+                    .arg(error)};
     }
 #endif
-    return {};
+    return {true, false, {}};
 }
 
 void removeExistingFile(const QString &path) {
@@ -83,9 +91,23 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
     QStringList created;
     for (const QString &path : {reservation.videoSpoolPath, reservation.audioSpoolPath,
                                 reservation.temporaryMp4Path}) {
-        const QString error = createTemporaryFile(path);
-        if (!error.isEmpty()) {
-            for (const QString &createdPath : created) QFile::remove(createdPath);
+        const TemporaryFileCreationResult creation = createTemporaryFile(path);
+        if (!creation.error.isEmpty()) {
+            if (creation.ownedFileRemains) created.append(path);
+            QStringList cleanupFailures;
+            for (const QString &createdPath : created) {
+                const QFileInfo info(createdPath);
+                if ((info.exists() || info.isSymLink()) && !QFile::remove(createdPath)) {
+                    cleanupFailures.append(createdPath);
+                }
+            }
+            QString error = creation.error;
+            if (creation.hideFailed && cleanupFailures.isEmpty()) {
+                error += QStringLiteral("; temporary file cleanup succeeded");
+            } else if (!cleanupFailures.isEmpty()) {
+                error += QStringLiteral("; temporary file cleanup also failed; owned temporary files remain: %1")
+                             .arg(cleanupFailures.join(QStringLiteral(", ")));
+            }
             return {{}, error};
         }
         created.append(path);
@@ -95,8 +117,12 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
 
 QString RecordingFileTransaction::commit(const RecordingFileReservation &reservation) {
     const QFileInfo mp4Info(reservation.temporaryMp4Path);
-    if (!mp4Info.exists() || !mp4Info.isFile() || mp4Info.isSymLink()) {
-        return QStringLiteral("Temporary MP4 result is missing or is not a regular file: \"%1\"")
+    if (mp4Info.isSymLink() || (mp4Info.exists() && !mp4Info.isFile())) {
+        return QStringLiteral("Temporary MP4 result is not a regular file: \"%1\"")
+            .arg(reservation.temporaryMp4Path);
+    }
+    if (!mp4Info.exists()) {
+        return QStringLiteral("Temporary MP4 result is missing: \"%1\"")
             .arg(reservation.temporaryMp4Path);
     }
     if (mp4Info.size() <= 0) {

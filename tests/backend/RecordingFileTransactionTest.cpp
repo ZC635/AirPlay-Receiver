@@ -47,9 +47,10 @@ RecordingFileReservation reserveOrFail(const QString &directory, const QUuid &uu
 }
 
 #ifdef Q_OS_WIN
-class DirectoryWriteDeny {
+class DirectoryAccessDeny {
 public:
-    explicit DirectoryWriteDeny(const QString &path) : m_path(QDir::toNativeSeparators(path).toStdWString()) {
+    DirectoryAccessDeny(const QString &path, DWORD permissions, DWORD inheritance)
+        : m_path(QDir::toNativeSeparators(path).toStdWString()) {
         const DWORD query = GetNamedSecurityInfoW(
             m_path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
             nullptr, nullptr, &m_originalDacl, nullptr, &m_descriptor);
@@ -72,9 +73,9 @@ public:
             return;
         }
         EXPLICIT_ACCESSW deny{};
-        deny.grfAccessPermissions = FILE_ADD_FILE;
+        deny.grfAccessPermissions = permissions;
         deny.grfAccessMode = DENY_ACCESS;
-        deny.grfInheritance = NO_INHERITANCE;
+        deny.grfInheritance = inheritance;
         deny.Trustee.TrusteeForm = TRUSTEE_IS_SID;
         deny.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
         deny.Trustee.ptstrName = static_cast<LPWSTR>(m_worldSid);
@@ -94,7 +95,7 @@ public:
         m_active = true;
     }
 
-    ~DirectoryWriteDeny() {
+    ~DirectoryAccessDeny() {
         restore();
         if (m_deniedDacl) LocalFree(m_deniedDacl);
         if (m_worldSid) FreeSid(m_worldSid);
@@ -132,7 +133,33 @@ class RecordingFileTransactionTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void reserveUsesTimestampAndNextAvailableSuffixWithoutTouchingExistingFiles() {
+    void reserveUsesBaseNameInEmptyDirectory() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+
+        QCOMPARE(reservation.finalPath,
+                 directory.filePath(QStringLiteral("AirPlay Recording 2026-07-13 09-08-07.mp4")));
+        RecordingFileTransaction::discard(reservation);
+    }
+
+    void reserveUsesSecondNameWhenBaseExistsWithoutTouchingIt() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString base = directory.filePath(QStringLiteral("AirPlay Recording 2026-07-13 09-08-07.mp4"));
+        writeBytes(base, "base bytes");
+
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+
+        QCOMPARE(reservation.finalPath,
+                 directory.filePath(QStringLiteral("AirPlay Recording 2026-07-13 09-08-07-2.mp4")));
+        QCOMPARE(readBytes(base), QByteArray("base bytes"));
+        RecordingFileTransaction::discard(reservation);
+        QCOMPARE(readBytes(base), QByteArray("base bytes"));
+    }
+
+    void reserveUsesThirdNameWhenBaseAndSecondExistWithoutTouchingThem() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString base = directory.filePath(QStringLiteral("AirPlay Recording 2026-07-13 09-08-07.mp4"));
@@ -148,6 +175,8 @@ private slots:
         QCOMPARE(readBytes(second), QByteArray("second bytes"));
         QVERIFY(!QFileInfo::exists(reservation.finalPath));
         RecordingFileTransaction::discard(reservation);
+        QCOMPARE(readBytes(base), QByteArray("base bytes"));
+        QCOMPARE(readBytes(second), QByteArray("second bytes"));
     }
 
     void reserveCreatesDirectoryAndThreeExclusiveTemporaryFiles() {
@@ -198,7 +227,7 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 #ifdef Q_OS_WIN
-        DirectoryWriteDeny deny(directory.path());
+        DirectoryAccessDeny deny(directory.path(), FILE_ADD_FILE, NO_INHERITANCE);
         QVERIFY2(deny.active(), qPrintable(deny.error()));
         const RecordingFileReservationResult result =
             RecordingFileTransaction::reserve(directory.path(), kLocalNow, kUuid);
@@ -215,6 +244,31 @@ private slots:
         QFile::setPermissions(directory.path(), original);
         QVERIFY(!result.reservation.has_value());
         QVERIFY(!result.error.isEmpty());
+#endif
+    }
+
+    void reserveReportsRealHideFailureAndCleansAllCreatedFiles() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+#ifdef Q_OS_WIN
+        DirectoryAccessDeny deny(directory.path(), FILE_WRITE_ATTRIBUTES,
+                                 SUB_OBJECTS_ONLY_INHERIT);
+        QVERIFY2(deny.active(), qPrintable(deny.error()));
+
+        const RecordingFileReservationResult result =
+            RecordingFileTransaction::reserve(directory.path(), kLocalNow, kUuid);
+        deny.restore();
+
+        QVERIFY(!result.reservation.has_value());
+        QVERIFY2(result.error.contains(QStringLiteral("hide"), Qt::CaseInsensitive),
+                 qPrintable(result.error));
+        QVERIFY2(result.error.contains(QStringLiteral("cleanup succeeded"), Qt::CaseInsensitive),
+                 qPrintable(result.error));
+        QVERIFY2(result.error.contains(
+                     QStringLiteral(".airplay-recording-%1.video.mkv.part").arg(kId)),
+                 qPrintable(result.error));
+        QCOMPARE(QDir(directory.path()).entryList(
+                     QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
 #endif
     }
 
@@ -239,26 +293,46 @@ private slots:
         QVERIFY(!QFileInfo::exists(mp4));
     }
 
-    void commitRejectsMissingEmptyAndNonRegularMp4Results() {
+    void commitRejectsEmptyMp4ResultWithSpecificPathAndReason() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         RecordingFileReservation empty = reserveOrFail(directory.path());
-        QVERIFY(!RecordingFileTransaction::commit(empty).isEmpty());
+        const QString error = RecordingFileTransaction::commit(empty);
+        QVERIFY2(error.contains(QStringLiteral("empty"), Qt::CaseInsensitive), qPrintable(error));
+        QVERIFY2(error.contains(empty.temporaryMp4Path), qPrintable(error));
         QVERIFY(QFileInfo::exists(empty.temporaryMp4Path));
         RecordingFileTransaction::discard(empty);
+    }
+
+    void commitRejectsMissingMp4ResultWithSpecificPathAndReason() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
 
         RecordingFileReservation missing = reserveOrFail(
             directory.path(), QUuid(QStringLiteral("11111111-1111-1111-1111-111111111111")));
         QVERIFY(QFile::remove(missing.temporaryMp4Path));
-        QVERIFY(!RecordingFileTransaction::commit(missing).isEmpty());
+        const QString error = RecordingFileTransaction::commit(missing);
+        QVERIFY2(error.contains(QStringLiteral("missing"), Qt::CaseInsensitive), qPrintable(error));
+        QVERIFY2(!error.contains(QStringLiteral("not a regular file"), Qt::CaseInsensitive),
+                 qPrintable(error));
+        QVERIFY2(error.contains(missing.temporaryMp4Path), qPrintable(error));
         QVERIFY(!QFileInfo::exists(missing.finalPath));
         RecordingFileTransaction::discard(missing);
+    }
+
+    void commitRejectsNonRegularMp4ResultWithSpecificPathAndReason() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
 
         RecordingFileReservation nonRegular = reserveOrFail(
             directory.path(), QUuid(QStringLiteral("22222222-2222-2222-2222-222222222222")));
         QVERIFY(QFile::remove(nonRegular.temporaryMp4Path));
         QVERIFY(QDir().mkdir(nonRegular.temporaryMp4Path));
-        QVERIFY(!RecordingFileTransaction::commit(nonRegular).isEmpty());
+        const QString error = RecordingFileTransaction::commit(nonRegular);
+        QVERIFY2(error.contains(QStringLiteral("not a regular file"), Qt::CaseInsensitive),
+                 qPrintable(error));
+        QVERIFY2(!error.contains(QStringLiteral("missing"), Qt::CaseInsensitive), qPrintable(error));
+        QVERIFY2(error.contains(nonRegular.temporaryMp4Path), qPrintable(error));
         QVERIFY(!QFileInfo::exists(nonRegular.finalPath));
         QDir(nonRegular.temporaryMp4Path).removeRecursively();
         RecordingFileTransaction::discard(nonRegular);
@@ -292,7 +366,7 @@ private slots:
 
         const QString error = RecordingFileTransaction::commit(reservation);
 
-        QVERIFY(!error.isEmpty());
+        QVERIFY2(error.contains(reservation.finalPath), qPrintable(error));
         QCOMPARE(readBytes(reservation.finalPath), QByteArray("external mp4"));
         QCOMPARE(readBytes(reservation.temporaryMp4Path), QByteArray("new mp4"));
 
@@ -313,7 +387,9 @@ private slots:
 
         const QString error = RecordingFileTransaction::commit(reservation);
 
-        QVERIFY(!error.isEmpty());
+        QVERIFY2(error.contains(QStringLiteral("cleanup"), Qt::CaseInsensitive), qPrintable(error));
+        QVERIFY2(error.contains(QStringLiteral("failed"), Qt::CaseInsensitive), qPrintable(error));
+        QVERIFY2(error.contains(reservation.videoSpoolPath), qPrintable(error));
         QCOMPARE(readBytes(reservation.finalPath), QByteArray("committed"));
         QVERIFY(!QFileInfo::exists(reservation.temporaryMp4Path));
         QVERIFY(QFileInfo(reservation.videoSpoolPath).isDir());
