@@ -4,9 +4,48 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <thread>
+#include <utility>
+
+static_assert(noexcept(std::declval<GstSampleQueue &>().tryPushBorrowed(nullptr)),
+              "sample-tap callbacks must not observe queue allocation exceptions");
 
 namespace {
+
+class ThreadJoiner
+{
+public:
+    explicit ThreadJoiner(std::thread &thread)
+        : m_thread(thread)
+    {
+    }
+
+    ~ThreadJoiner()
+    {
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+    }
+
+    ThreadJoiner(const ThreadJoiner &) = delete;
+    ThreadJoiner &operator=(const ThreadJoiner &) = delete;
+
+private:
+    std::thread &m_thread;
+};
+
+struct SampleUnref
+{
+    void operator()(GstSample *sample) const noexcept
+    {
+        if (sample) {
+            gst_sample_unref(sample);
+        }
+    }
+};
+
+using OwnedSample = std::unique_ptr<GstSample, SampleUnref>;
 
 void countFinalization(gpointer userData, GstMiniObject *)
 {
@@ -171,10 +210,10 @@ void GstSampleQueueTest::fullPushDoesNotRetainRejectedSample()
 void GstSampleQueueTest::fullPushesDoNotWaitForSleepingConsumer()
 {
     GstSampleQueue queue(1);
-    GstSample *initial = makeSample(1);
-    GstSample *probe = makeSample(2);
-    QVERIFY(queue.tryPushBorrowed(initial));
-    gst_sample_unref(initial);
+    OwnedSample initial(makeSample(1));
+    OwnedSample probe(makeSample(2));
+    QVERIFY(queue.tryPushBorrowed(initial.get()));
+    initial.reset();
 
     std::atomic<bool> consumerHasPopped{false};
     std::thread consumer([&] {
@@ -183,14 +222,15 @@ void GstSampleQueueTest::fullPushesDoNotWaitForSleepingConsumer()
         std::this_thread::sleep_for(std::chrono::seconds(1));
         gst_sample_unref(owned);
     });
+    ThreadJoiner consumerJoiner(consumer);
 
     QTRY_VERIFY_WITH_TIMEOUT(consumerHasPopped.load(std::memory_order_acquire), 250);
-    QVERIFY(queue.tryPushBorrowed(probe));
+    QVERIFY(queue.tryPushBorrowed(probe.get()));
     QElapsedTimer timer;
     timer.start();
     int rejected = 0;
     for (int index = 0; index < 10'000; ++index) {
-        rejected += queue.tryPushBorrowed(probe) ? 0 : 1;
+        rejected += queue.tryPushBorrowed(probe.get()) ? 0 : 1;
     }
     const qint64 elapsedMs = timer.elapsed();
 
@@ -199,7 +239,6 @@ void GstSampleQueueTest::fullPushesDoNotWaitForSleepingConsumer()
     QVERIFY2(elapsedMs < 250,
              qPrintable(QStringLiteral("10,000 full pushes took %1 ms").arg(elapsedMs)));
     queue.clear();
-    gst_sample_unref(probe);
 }
 
 void GstSampleQueueTest::concurrentPushPopAndClearReleaseEverySample()
@@ -223,6 +262,7 @@ void GstSampleQueueTest::concurrentPushPopAndClearReleaseEverySample()
             }
             producerDone.store(true, std::memory_order_release);
         });
+        ThreadJoiner producerJoiner(producer);
 
         std::thread consumer([&] {
             while (!producerDone.load(std::memory_order_acquire) || queue.size() != 0) {
@@ -233,6 +273,7 @@ void GstSampleQueueTest::concurrentPushPopAndClearReleaseEverySample()
                 }
             }
         });
+        ThreadJoiner consumerJoiner(consumer);
 
         std::thread clearer([&] {
             while (!producerDone.load(std::memory_order_acquire)) {
@@ -243,6 +284,7 @@ void GstSampleQueueTest::concurrentPushPopAndClearReleaseEverySample()
             // releases every item accepted after the previous clear linearization point.
             queue.clear();
         });
+        ThreadJoiner clearerJoiner(clearer);
 
         producer.join();
         clearer.join();
