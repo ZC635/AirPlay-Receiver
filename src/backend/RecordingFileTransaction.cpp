@@ -200,9 +200,17 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
         finalRecordingPath(outputDirectory, localNow),
     };
 
+    const QFileInfo optionalAudioInfo(reservation.audioSpoolPath);
+    if (optionalAudioInfo.exists() || optionalAudioInfo.isSymLink()) {
+        QString error = QStringLiteral("Optional audio spool path is already occupied: \"%1\"")
+                            .arg(reservation.audioSpoolPath);
+        const QString lockCleanupError = releaseReservationLock(transactionLockPath);
+        if (!lockCleanupError.isEmpty()) error += QStringLiteral("; ") + lockCleanupError;
+        return {{}, error};
+    }
+
     QStringList created;
-    for (const QString &path : {reservation.videoSpoolPath, reservation.audioSpoolPath,
-                                reservation.temporaryMp4Path}) {
+    for (const QString &path : {reservation.videoSpoolPath, reservation.temporaryMp4Path}) {
         const TemporaryFileCreationResult creation = createTemporaryFile(path);
         if (!creation.error.isEmpty()) {
             if (creation.ownedFileRemains) created.append(path);
