@@ -81,6 +81,10 @@ target_include_directories(airplay_app_lib PUBLIC src)
 target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>)
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
 if(AIRPLAY_WITH_UXPLAY)
+    target_sources(airplay_app_lib PRIVATE
+        src/backend/GstSampleQueue.cpp
+        src/backend/GstSampleQueue.h
+    )
     target_link_libraries(airplay_app_lib PRIVATE uxplay_dependency)
     if(TARGET qmdnsengine)
         get_target_property(_qmdns_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
