@@ -75,6 +75,13 @@ add_executable(AirPlayReceiverTest backend/AirPlayReceiverTest.cpp)
 target_link_libraries(AirPlayReceiverTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)
 
+add_executable(RecordingFileTransactionTest backend/RecordingFileTransactionTest.cpp)
+target_link_libraries(RecordingFileTransactionTest PRIVATE airplay_app_lib Qt6::Test)
+if(WIN32)
+    target_link_libraries(RecordingFileTransactionTest PRIVATE advapi32)
+endif()
+add_test(NAME RecordingFileTransactionTest COMMAND RecordingFileTransactionTest)
+
 add_executable(UxPlayReceiverConfigTest backend/UxPlayReceiverConfigTest.cpp)
 target_link_libraries(UxPlayReceiverConfigTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
@@ -174,6 +181,7 @@ set(AIRPLAY_QT_TESTS
     DiscoveryRestartControllerTest
     ReceiverStatePolicyTest
     AirPlayReceiverTest
+    RecordingFileTransactionTest
     UxPlayReceiverConfigTest
     UxPlayDiscoveryTest
     VideoRendererLifecycleTest
