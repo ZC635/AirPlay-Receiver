@@ -39,6 +39,7 @@ add_library(airplay_app_lib
     src/app/WindowStateStore.cpp
     src/app/WindowStateStore.h
     src/backend/AirPlayReceiver.h
+    src/backend/RecordingTypes.h
     src/backend/DiscoveryRestartController.cpp
     src/backend/DiscoveryRestartController.h
     src/backend/FakeAirPlayReceiver.h

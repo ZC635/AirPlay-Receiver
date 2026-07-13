@@ -56,6 +56,97 @@ private slots:
         QVERIFY(receiver.applyVideoQuality(otherQuality));
         QCOMPARE(receiver.lastAppliedVideoQuality, otherQuality);
     }
+
+    void fakeStartsAndStopsRecording() {
+        FakeAirPlayReceiver receiver;
+        QSignalSpy availabilitySpy(&receiver, &AirPlayReceiver::recordingAvailabilityChanged);
+        QSignalSpy stateSpy(&receiver, &AirPlayReceiver::recordingStateChanged);
+        QSignalSpy finishedSpy(&receiver, &AirPlayReceiver::recordingFinished);
+
+        QVERIFY(!receiver.recordingAvailable());
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+
+        receiver.setRecordingAvailableForTest(true);
+
+        QVERIFY(receiver.recordingAvailable());
+        QCOMPARE(availabilitySpy.count(), 1);
+
+        const RecordingOptions options{QStringLiteral("recordings"), RecordingFormat::Mp4};
+        const RecordingStartResult startResult = receiver.startRecording(options);
+
+        QVERIFY(startResult.accepted);
+        QCOMPARE(receiver.startRecordingCount, 1);
+        QCOMPARE(receiver.lastRecordingOptions.outputDirectory, options.outputDirectory);
+        QCOMPARE(receiver.lastRecordingOptions.format, options.format);
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        QCOMPARE(stateSpy.count(), 1);
+
+        const RecordingStartResult duplicateStartResult = receiver.startRecording(options);
+
+        QVERIFY(!duplicateStartResult.accepted);
+        QCOMPARE(receiver.startRecordingCount, 1);
+
+        receiver.stopRecording();
+
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+        QCOMPARE(stateSpy.count(), 2);
+
+        receiver.stopRecording();
+
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+
+        receiver.completeRecordingForTest({QStringLiteral("saved.mp4"), {}});
+
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(stateSpy.count(), 3);
+        QCOMPARE(finishedSpy.count(), 1);
+        const RecordingResult result = qvariant_cast<RecordingResult>(finishedSpy.takeFirst().at(0));
+        QCOMPARE(result.finalPath, QStringLiteral("saved.mp4"));
+    }
+
+    void fakeRejectsStartWithoutAvailability() {
+        FakeAirPlayReceiver receiver;
+
+        const RecordingStartResult result = receiver.startRecording({QStringLiteral("recordings")});
+
+        QVERIFY(!result.accepted);
+        QVERIFY(!result.error.isEmpty());
+        QCOMPARE(receiver.startRecordingCount, 0);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+    }
+
+    void fakeFinalizingIgnoresDuplicateStop() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({QStringLiteral("recordings")}).accepted);
+
+        receiver.stopRecording();
+        receiver.stopRecording();
+
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+    }
+
+    void fakeDiscardReturnsIdleWithoutFinishedSignal() {
+        FakeAirPlayReceiver receiver;
+        QSignalSpy finishedSpy(&receiver, &AirPlayReceiver::recordingFinished);
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({QStringLiteral("recordings")}).accepted);
+
+        receiver.discardRecording();
+
+        QCOMPARE(receiver.discardRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(finishedSpy.count(), 0);
+
+        receiver.discardRecording();
+
+        QCOMPARE(receiver.discardRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(finishedSpy.count(), 0);
+    }
 };
 
 QTEST_MAIN(AirPlayReceiverTest)

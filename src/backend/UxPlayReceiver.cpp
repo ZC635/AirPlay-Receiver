@@ -608,6 +608,25 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
     return applyVideoQualityConfigurationChange(m_state, m_config.videoQuality, quality, operations);
 }
 
+bool UxPlayReceiver::recordingAvailable() const {
+    return false;
+}
+
+RecordingState UxPlayReceiver::recordingState() const {
+    return RecordingState::Idle;
+}
+
+RecordingStartResult UxPlayReceiver::startRecording(const RecordingOptions &options) {
+    Q_UNUSED(options);
+    return {false, QStringLiteral("Recording is not available")};
+}
+
+void UxPlayReceiver::stopRecording() {
+}
+
+void UxPlayReceiver::discardRecording() {
+}
+
 #if AIRPLAY_WITH_UXPLAY
 void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state) {
     setStateFromUxPlayCallback(state, m_callbackDispatch.currentGeneration());

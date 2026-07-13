@@ -58,8 +58,72 @@ public:
         return applyVideoQualityConfigurationChange(m_state, lastAppliedVideoQuality, quality, operations);
     }
 
+    bool recordingAvailable() const override { return m_recordingAvailable; }
+
+    RecordingState recordingState() const override { return m_recordingState; }
+
+    RecordingStartResult startRecording(const RecordingOptions &options) override {
+        if (!m_recordingAvailable) {
+            return {false, QStringLiteral("Recording is not available")};
+        }
+        if (m_recordingState != RecordingState::Idle) {
+            return {false, QStringLiteral("Recording is already active")};
+        }
+
+        lastRecordingOptions = options;
+        ++startRecordingCount;
+        setRecordingState(RecordingState::Recording);
+        return {true, {}};
+    }
+
+    void stopRecording() override {
+        if (m_recordingState != RecordingState::Recording) {
+            return;
+        }
+
+        ++stopRecordingCount;
+        setRecordingState(RecordingState::Finalizing);
+    }
+
+    void discardRecording() override {
+        if (m_recordingState != RecordingState::Recording && m_recordingState != RecordingState::Finalizing) {
+            return;
+        }
+
+        ++discardRecordingCount;
+        setRecordingState(RecordingState::Idle);
+    }
+
+    void setRecordingAvailableForTest(bool available) {
+        if (m_recordingAvailable == available) {
+            return;
+        }
+
+        m_recordingAvailable = available;
+        emit recordingAvailabilityChanged(m_recordingAvailable);
+    }
+
+    void completeRecordingForTest(const RecordingResult &result) {
+        if (m_recordingState != RecordingState::Finalizing) {
+            return;
+        }
+
+        setRecordingState(RecordingState::Idle);
+        emit recordingFinished(result);
+    }
+
+    void failRecordingForTest(const QString &error) {
+        if (m_recordingState != RecordingState::Recording && m_recordingState != RecordingState::Finalizing) {
+            return;
+        }
+
+        setRecordingState(RecordingState::Idle);
+        emit recordingFailed(error);
+    }
+
     VideoQualitySettings lastAppliedVideoQuality;
     QVector<VideoQualitySettings> rejectedVideoQualities;
+    RecordingOptions lastRecordingOptions;
 
     WId videoSurfaceId() const { return m_videoSurfaceId; }
 
@@ -101,12 +165,24 @@ public:
     int broadcastRestartCount = 0;
     int startCount = 0;
     int stopCount = 0;
+    int startRecordingCount = 0;
+    int stopRecordingCount = 0;
+    int discardRecordingCount = 0;
 
     void emitVideoSize(int width, int height) {
         emit videoSizeChanged(width, height);
     }
 
 private:
+    void setRecordingState(RecordingState state) {
+        if (m_recordingState == state) {
+            return;
+        }
+
+        m_recordingState = state;
+        emit recordingStateChanged(m_recordingState);
+    }
+
     void setState(ReceiverState state) {
         if (m_state == state) {
             return;
@@ -122,4 +198,6 @@ private:
     WId m_videoSurfaceId = 0;
     FrameCallback m_frameCallback;
     bool m_videoFitMode = false;
+    bool m_recordingAvailable = false;
+    RecordingState m_recordingState = RecordingState::Idle;
 };

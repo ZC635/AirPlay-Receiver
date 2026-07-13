@@ -42,6 +42,11 @@ public:
     QString receiverName() const override;
     bool applyReceiverName(const QString &name) override;
     bool applyVideoQuality(const VideoQualitySettings &quality) override;
+    bool recordingAvailable() const override;
+    RecordingState recordingState() const override;
+    RecordingStartResult startRecording(const RecordingOptions &options) override;
+    void stopRecording() override;
+    void discardRecording() override;
 #if AIRPLAY_WITH_UXPLAY
     struct CallbackContext {
         CallbackContext(UxPlayReceiver *receiver, quint64 generation);
