@@ -7,6 +7,7 @@
 #include <functional>
 
 #include "backend/ReceiverState.h"
+#include "backend/RecordingTypes.h"
 #include "backend/VideoQualitySettings.h"
 
 class AirPlayReceiver : public QObject {
@@ -26,10 +27,19 @@ public:
     virtual void setVideoFrameCallback(FrameCallback callback) { Q_UNUSED(callback); }
     virtual void setVideoFitMode(bool enabled) { Q_UNUSED(enabled); }
     virtual bool applyVideoQuality(const VideoQualitySettings &quality) { Q_UNUSED(quality); return true; }
+    virtual bool recordingAvailable() const = 0;
+    virtual RecordingState recordingState() const = 0;
+    virtual RecordingStartResult startRecording(const RecordingOptions &options) = 0;
+    virtual void stopRecording() = 0;
+    virtual void discardRecording() = 0;
 
 signals:
     void stateChanged(ReceiverState state);
     void errorChanged(QString error);
     void volumeChanged(double volume);
     void videoSizeChanged(int width, int height);
+    void recordingAvailabilityChanged(bool available);
+    void recordingStateChanged(RecordingState state);
+    void recordingFinished(RecordingResult result);
+    void recordingFailed(QString error);
 };
