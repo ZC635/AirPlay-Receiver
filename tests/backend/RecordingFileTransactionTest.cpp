@@ -2,10 +2,14 @@
 
 #include "backend/RecordingFileTransaction.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
+#include <QRegularExpression>
 #include <QTemporaryDir>
+#include <QTextStream>
 
 #include <string>
 
@@ -22,6 +26,18 @@ namespace {
 const QDateTime kLocalNow(QDate(2026, 7, 13), QTime(9, 8, 7));
 const QUuid kUuid(QStringLiteral("01234567-89ab-cdef-0123-456789abcdef"));
 const QString kId = QStringLiteral("0123456789abcdef0123456789abcdef");
+
+QString lockPath(const QString &directory, const QString &id = kId) {
+    return QDir(directory).filePath(QStringLiteral(".airplay-recording-%1.lock").arg(id));
+}
+
+QStringList temporaryPaths(const QString &directory, const QString &id) {
+    return {
+        QDir(directory).filePath(QStringLiteral(".airplay-recording-%1.video.mkv.part").arg(id)),
+        QDir(directory).filePath(QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(id)),
+        QDir(directory).filePath(QStringLiteral(".airplay-recording-%1.mp4.part").arg(id)),
+    };
+}
 
 void writeBytes(const QString &path, const QByteArray &bytes) {
     QFile file(path);
@@ -254,6 +270,8 @@ private slots:
         DirectoryAccessDeny deny(directory.path(), FILE_WRITE_ATTRIBUTES,
                                  SUB_OBJECTS_ONLY_INHERIT);
         QVERIFY2(deny.active(), qPrintable(deny.error()));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("Could not remove our own lock file.*")));
 
         const RecordingFileReservationResult result =
             RecordingFileTransaction::reserve(directory.path(), kLocalNow, kUuid);
@@ -267,8 +285,13 @@ private slots:
         QVERIFY2(result.error.contains(
                      QStringLiteral(".airplay-recording-%1.video.mkv.part").arg(kId)),
                  qPrintable(result.error));
-        QCOMPARE(QDir(directory.path()).entryList(
-                     QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
+        QVERIFY2(result.error.contains(QStringLiteral("lock cleanup failed"), Qt::CaseInsensitive),
+                 qPrintable(result.error));
+        QStringList temporaryFiles = QDir(directory.path()).entryList(
+            {QStringLiteral("*.part")}, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+        QVERIFY(temporaryFiles.isEmpty());
+        QVERIFY(QFileInfo::exists(lockPath(directory.path())));
+        QVERIFY(QFile::remove(lockPath(directory.path())));
 #endif
     }
 
@@ -291,6 +314,7 @@ private slots:
         QVERIFY(!QFileInfo::exists(video));
         QCOMPARE(readBytes(audio), QByteArray("foreign"));
         QVERIFY(!QFileInfo::exists(mp4));
+        QVERIFY(!QFileInfo::exists(lockPath(directory.path())));
     }
 
     void commitRejectsEmptyMp4ResultWithSpecificPathAndReason() {
@@ -345,16 +369,32 @@ private slots:
         writeBytes(reservation.videoSpoolPath, "video spool");
         writeBytes(reservation.audioSpoolPath, "audio spool");
         writeBytes(reservation.temporaryMp4Path, "final mp4");
+#ifdef Q_OS_WIN
+        const std::wstring nativeTemporary =
+            QDir::toNativeSeparators(reservation.temporaryMp4Path).toStdWString();
+        const DWORD temporaryAttributes = GetFileAttributesW(nativeTemporary.c_str());
+        QVERIFY(temporaryAttributes != INVALID_FILE_ATTRIBUTES);
+        QVERIFY(SetFileAttributesW(nativeTemporary.c_str(),
+                                   temporaryAttributes | FILE_ATTRIBUTE_HIDDEN |
+                                       FILE_ATTRIBUTE_ARCHIVE));
+#endif
 
         QCOMPARE(RecordingFileTransaction::commit(reservation), QString());
 
         QCOMPARE(readBytes(reservation.finalPath), QByteArray("final mp4"));
+#ifdef Q_OS_WIN
+        const DWORD finalAttributes = GetFileAttributesW(
+            QDir::toNativeSeparators(reservation.finalPath).toStdWString().c_str());
+        QVERIFY(finalAttributes != INVALID_FILE_ATTRIBUTES);
+        QCOMPARE(finalAttributes & FILE_ATTRIBUTE_HIDDEN, DWORD(0));
+        QVERIFY(finalAttributes & FILE_ATTRIBUTE_ARCHIVE);
+#endif
         QVERIFY(!QFileInfo::exists(reservation.temporaryMp4Path));
         QVERIFY(!QFileInfo::exists(reservation.videoSpoolPath));
         QVERIFY(!QFileInfo::exists(reservation.audioSpoolPath));
 
         RecordingFileTransaction::discard(reservation);
-        QVERIFY(!QFileInfo::exists(reservation.finalPath));
+        QCOMPARE(readBytes(reservation.finalPath), QByteArray("final mp4"));
     }
 
     void externalFinalCollisionPreservesBothFilesAndDiscardDoesNotDeleteExternalFinal() {
@@ -377,7 +417,21 @@ private slots:
         QVERIFY(!QFileInfo::exists(reservation.audioSpoolPath));
     }
 
-    void commitReportsSpoolCleanupFailureWithoutUndoingFinal() {
+    void discardWithMissingTempNeverDeletesExternalFinal() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        QVERIFY(QFile::remove(reservation.temporaryMp4Path));
+        writeBytes(reservation.finalPath, "external survives");
+
+        RecordingFileTransaction::discard(reservation);
+
+        QCOMPARE(readBytes(reservation.finalPath), QByteArray("external survives"));
+        QVERIFY(!QFileInfo::exists(reservation.videoSpoolPath));
+        QVERIFY(!QFileInfo::exists(reservation.audioSpoolPath));
+    }
+
+    void commitCleanupFailureDoesNotPublishFinalAndCanBeRetried() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const RecordingFileReservation reservation = reserveOrFail(directory.path());
@@ -390,10 +444,40 @@ private slots:
         QVERIFY2(error.contains(QStringLiteral("cleanup"), Qt::CaseInsensitive), qPrintable(error));
         QVERIFY2(error.contains(QStringLiteral("failed"), Qt::CaseInsensitive), qPrintable(error));
         QVERIFY2(error.contains(reservation.videoSpoolPath), qPrintable(error));
-        QCOMPARE(readBytes(reservation.finalPath), QByteArray("committed"));
-        QVERIFY(!QFileInfo::exists(reservation.temporaryMp4Path));
+        QVERIFY(!QFileInfo::exists(reservation.finalPath));
+        QCOMPARE(readBytes(reservation.temporaryMp4Path), QByteArray("committed"));
+#ifdef Q_OS_WIN
+        const DWORD temporaryAttributes = GetFileAttributesW(
+            QDir::toNativeSeparators(reservation.temporaryMp4Path).toStdWString().c_str());
+        QVERIFY(temporaryAttributes != INVALID_FILE_ATTRIBUTES);
+        QVERIFY(temporaryAttributes & FILE_ATTRIBUTE_HIDDEN);
+#endif
         QVERIFY(QFileInfo(reservation.videoSpoolPath).isDir());
+        QVERIFY(!QFileInfo::exists(reservation.audioSpoolPath));
         QDir(reservation.videoSpoolPath).removeRecursively();
+
+        QCOMPARE(RecordingFileTransaction::commit(reservation), QString());
+        QCOMPARE(readBytes(reservation.finalPath), QByteArray("committed"));
+    }
+
+    void renameFailureRestoresHiddenTemporaryMp4() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        RecordingFileReservation reservation = reserveOrFail(directory.path());
+        writeBytes(reservation.temporaryMp4Path, "retryable");
+        reservation.finalPath = directory.filePath(QStringLiteral("missing/final.mp4"));
+
+        const QString error = RecordingFileTransaction::commit(reservation);
+
+        QVERIFY2(error.contains(reservation.finalPath), qPrintable(error));
+        QVERIFY(!QFileInfo::exists(reservation.finalPath));
+        QCOMPARE(readBytes(reservation.temporaryMp4Path), QByteArray("retryable"));
+#ifdef Q_OS_WIN
+        const DWORD attributes = GetFileAttributesW(
+            QDir::toNativeSeparators(reservation.temporaryMp4Path).toStdWString().c_str());
+        QVERIFY(attributes != INVALID_FILE_ATTRIBUTES);
+        QVERIFY(attributes & FILE_ATTRIBUTE_HIDDEN);
+#endif
         RecordingFileTransaction::discard(reservation);
     }
 
@@ -446,7 +530,113 @@ private slots:
             QVERIFY2(readBytes(directory.filePath(name)) == QByteArray("keep"), qPrintable(name));
         }
     }
+
+    void cleanupEmptyOrWhitespaceDirectoryIsNoOpInsteadOfUsingCurrentDirectory() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString previousCurrent = QDir::currentPath();
+        const QString stale = directory.filePath(QStringLiteral(
+            ".airplay-recording-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.mp4.part"));
+        writeBytes(stale, "must stay");
+        QVERIFY(QDir::setCurrent(directory.path()));
+
+        const QStringList emptyResult =
+            RecordingFileTransaction::cleanupStaleTemporaryFiles(QString());
+        const QStringList whitespaceResult =
+            RecordingFileTransaction::cleanupStaleTemporaryFiles(QStringLiteral("   "));
+        const bool restored = QDir::setCurrent(previousCurrent);
+
+        QVERIFY(restored);
+        QVERIFY(emptyResult.isEmpty());
+        QVERIFY(whitespaceResult.isEmpty());
+        QCOMPARE(readBytes(stale), QByteArray("must stay"));
+    }
+
+    void cleanupSkipsReservationHeldByCurrentProcessAndDiscardReleasesLock() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const RecordingFileReservation reservation = reserveOrFail(directory.path());
+
+        const QStringList deleted =
+            RecordingFileTransaction::cleanupStaleTemporaryFiles(directory.path());
+        const bool allTempsRemain =
+            QFileInfo::exists(reservation.videoSpoolPath) &&
+            QFileInfo::exists(reservation.audioSpoolPath) &&
+            QFileInfo::exists(reservation.temporaryMp4Path);
+        const bool lockExistsWhileReserved = QFileInfo::exists(lockPath(directory.path()));
+#ifdef Q_OS_WIN
+        const DWORD lockAttributes = GetFileAttributesW(
+            QDir::toNativeSeparators(lockPath(directory.path())).toStdWString().c_str());
+        const bool lockIsHidden = lockAttributes != INVALID_FILE_ATTRIBUTES &&
+                                  (lockAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+#endif
+        RecordingFileTransaction::discard(reservation);
+
+        QVERIFY(deleted.isEmpty());
+        QVERIFY(allTempsRemain);
+        QVERIFY(lockExistsWhileReserved);
+#ifdef Q_OS_WIN
+        QVERIFY(lockIsHidden);
+#endif
+        QVERIFY(!QFileInfo::exists(lockPath(directory.path())));
+    }
+
+    void cleanupSkipsOtherProcessLiveLockThenReclaimsCrashStaleLock() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString helperId = QStringLiteral("dddddddddddddddddddddddddddddddd");
+        const QString helperUuid = QStringLiteral("dddddddd-dddd-dddd-dddd-dddddddddddd");
+        QProcess helper;
+        helper.setProcessChannelMode(QProcess::MergedChannels);
+        helper.start(QCoreApplication::applicationFilePath(),
+                     {QStringLiteral("--recording-lock-helper"), directory.path(), helperUuid});
+        const bool started = helper.waitForStarted(5000);
+        const bool ready = started && helper.waitForReadyRead(5000);
+        const QByteArray helperOutput = helper.readAll();
+        if (!ready || !helperOutput.contains("READY")) {
+            helper.kill();
+            helper.waitForFinished(5000);
+        }
+        QVERIFY2(started && ready && helperOutput.contains("READY"), helperOutput.constData());
+
+        const QStringList activeDeleted =
+            RecordingFileTransaction::cleanupStaleTemporaryFiles(directory.path());
+        const RecordingFileReservationResult competingReservation =
+            RecordingFileTransaction::reserve(directory.path(), kLocalNow, QUuid(helperUuid));
+        const QStringList expectedTemps = temporaryPaths(directory.path(), helperId);
+        bool allTempsRemain = true;
+        for (const QString &path : expectedTemps) allTempsRemain &= QFileInfo::exists(path);
+        helper.kill();
+        QVERIFY(helper.waitForFinished(5000));
+
+        QVERIFY(activeDeleted.isEmpty());
+        QVERIFY(!competingReservation.reservation.has_value());
+        QVERIFY2(competingReservation.error.contains(QStringLiteral("lock"), Qt::CaseInsensitive),
+                 qPrintable(competingReservation.error));
+        QVERIFY(allTempsRemain);
+        QStringList expectedDeleted = expectedTemps;
+        expectedDeleted.sort();
+        QCOMPARE(RecordingFileTransaction::cleanupStaleTemporaryFiles(directory.path()),
+                 expectedDeleted);
+        QVERIFY(!QFileInfo::exists(lockPath(directory.path(), helperId)));
+    }
 };
 
-QTEST_GUILESS_MAIN(RecordingFileTransactionTest)
+int main(int argc, char **argv) {
+    QCoreApplication application(argc, argv);
+    const QStringList arguments = application.arguments();
+    if (arguments.size() == 4 && arguments.at(1) == QStringLiteral("--recording-lock-helper")) {
+        const RecordingFileReservationResult result = RecordingFileTransaction::reserve(
+            arguments.at(2), QDateTime::currentDateTime(), QUuid(arguments.at(3)));
+        QTextStream output(stdout);
+        if (!result.reservation.has_value()) {
+            output << "ERROR: " << result.error << Qt::endl;
+            return 2;
+        }
+        output << "READY" << Qt::endl;
+        return application.exec();
+    }
+    RecordingFileTransactionTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "RecordingFileTransactionTest.moc"
