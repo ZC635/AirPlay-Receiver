@@ -53,11 +53,23 @@ GstRecordingPipelineHooks completedHooks(GstRecordingPipelineHooks hooks)
                 static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
         };
     }
+    if (!hooks.labeledBusTimedPop) {
+        const auto legacyWait = hooks.busTimedPop;
+        hooks.labeledBusTimedPop = [legacyWait](const QString &, GstBus *bus,
+                                                GstClockTime timeout) {
+            return legacyWait(bus, timeout);
+        };
+    }
     if (!hooks.monotonicMilliseconds) {
         hooks.monotonicMilliseconds = [] {
             return std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now().time_since_epoch())
                 .count();
+        };
+    }
+    if (!hooks.encoderFactoryAlias) {
+        hooks.encoderFactoryAlias = [](const QString &logicalFactory) {
+            return logicalFactory;
         };
     }
     return hooks;
@@ -85,6 +97,49 @@ constexpr RequiredFactory kRequiredFactories[] = {
     {"filesink", "filesink"},
     {"identity", "identity"},
 };
+
+struct CapabilityProbeDetails {
+    GstRecordingCapabilityResult result;
+    QStringList readyEncoders;
+};
+
+CapabilityProbeDetails probeCapabilityDetails(GstRecordingPipelineHooks hooks)
+{
+    hooks = completedHooks(std::move(hooks));
+    for (const RequiredFactory &required : kRequiredFactories) {
+        if (!hooks.factoryExists(QString::fromLatin1(required.name))) {
+            return {{false, {},
+                     QStringLiteral("%1 unavailable: required factory %2 is missing")
+                         .arg(QString::fromLatin1(required.classification),
+                              QString::fromLatin1(required.name))},
+                    {}};
+        }
+    }
+
+    QStringList encoderFailures;
+    QStringList readyEncoders;
+    for (const QString &encoder : {QStringLiteral("mfh264enc"),
+                                   QStringLiteral("openh264enc")}) {
+        const QString actualEncoder = hooks.encoderFactoryAlias(encoder);
+        if (!hooks.factoryExists(actualEncoder)) {
+            encoderFailures.append(QStringLiteral("%1 missing").arg(encoder));
+            continue;
+        }
+        QString readyError;
+        if (hooks.factoryReady(actualEncoder, &readyError)) {
+            readyEncoders.append(encoder);
+        } else {
+            encoderFailures.append(QStringLiteral("%1 READY failed: %2").arg(encoder, readyError));
+        }
+    }
+    if (!readyEncoders.isEmpty()) {
+        return {{true, readyEncoders.constFirst(), {}}, readyEncoders};
+    }
+    return {{false, {},
+             QStringLiteral("H.264 encoder unavailable: %1")
+                 .arg(encoderFailures.join(QStringLiteral("; ")))},
+            {}};
+}
 
 void unrefElements(std::initializer_list<GstElement *> elements)
 {
@@ -308,11 +363,18 @@ public:
         return false;
     }
 
+    void destroyPipeline(const QString &label, GstElement *pipeline)
+    {
+        if (!pipeline) return;
+        gst_element_set_state(pipeline, GST_STATE_NULL);
+        if (hooks.pipelineStateObserved) hooks.pipelineStateObserved(label, GST_STATE_NULL);
+        gst_object_unref(pipeline);
+    }
+
     void cleanupVideo()
     {
         if (videoPipeline) {
-            gst_element_set_state(videoPipeline, GST_STATE_NULL);
-            gst_object_unref(videoPipeline);
+            destroyPipeline(QStringLiteral("video-spool"), videoPipeline);
         }
         videoPipeline = nullptr;
         videoSource = nullptr;
@@ -322,8 +384,7 @@ public:
     void cleanupAudio()
     {
         if (audioPipeline) {
-            gst_element_set_state(audioPipeline, GST_STATE_NULL);
-            gst_object_unref(audioPipeline);
+            destroyPipeline(QStringLiteral("audio-spool"), audioPipeline);
         }
         audioPipeline = nullptr;
         audioSource = nullptr;
@@ -338,11 +399,15 @@ public:
     bool buildVideo(const QString &encoderName, QString *error)
     {
         cleanupVideo();
+        const QString actualEncoderName = hooks.encoderFactoryAlias(encoderName);
+        const GstRecordingEncoderConfiguration encoderConfiguration =
+            GstRecordingPipeline::encoderConfiguration(
+                actualEncoderName, config.videoBitrateBitsPerSecond);
         GstElement *pipeline = gst_pipeline_new("recording_video_spool");
         GstElement *source = gst_element_factory_make("appsrc", "recording_video_source");
         GstElement *convert = gst_element_factory_make("videoconvert", "recording_video_convert");
         GstElement *inputCapsFilter = gst_element_factory_make("capsfilter", "recording_video_input_caps");
-        GstElement *encoder = gst_element_factory_make(encoderName.toUtf8().constData(), "recording_video_encoder");
+        GstElement *encoder = gst_element_factory_make(actualEncoderName.toUtf8().constData(), "recording_video_encoder");
         GstElement *parser = gst_element_factory_make("h264parse", "recording_video_parser");
         GstElement *outputCapsFilter = gst_element_factory_make("capsfilter", "recording_video_output_caps");
         GstElement *mux = gst_element_factory_make("matroskamux", "recording_video_mux");
@@ -352,13 +417,13 @@ public:
             if (error) *error = QStringLiteral("Video spool factory creation failed for %1").arg(encoderName);
             unrefElements({source, convert, inputCapsFilter, encoder, parser,
                            outputCapsFilter, mux, sink});
-            if (pipeline) gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
         if (!stageAllowed(encoderName, QStringLiteral("factory"), error)) {
             unrefElements({source, convert, inputCapsFilter, encoder, parser,
                            outputCapsFilter, mux, sink});
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
 
@@ -370,7 +435,7 @@ public:
         GstCaps *sourceCaps = gst_caps_from_string(inputCapsString.constData());
         GstCaps *encoderInputCaps = gst_caps_new_simple(
             "video/x-raw", "format", G_TYPE_STRING,
-            encoderName == QStringLiteral("mfh264enc") ? "NV12" : "I420", nullptr);
+            encoderConfiguration.inputFormat.toUtf8().constData(), nullptr);
         GstCaps *outputCaps = gst_caps_from_string(
             "video/x-h264,stream-format=avc,alignment=au");
         if (!sourceCaps || !encoderInputCaps || !outputCaps) {
@@ -380,7 +445,7 @@ public:
             if (outputCaps) gst_caps_unref(outputCaps);
             unrefElements({source, convert, inputCapsFilter, encoder, parser,
                            outputCapsFilter, mux, sink});
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
 
@@ -395,34 +460,37 @@ public:
         gst_caps_unref(encoderInputCaps);
         gst_caps_unref(outputCaps);
 
-        if (encoderName == QStringLiteral("mfh264enc")) {
+        if (actualEncoderName == QStringLiteral("mfh264enc")) {
             if (!setUnsignedProperty(encoder, "bitrate",
-                                     static_cast<guint>(config.videoBitrateBitsPerSecond / 1000), error) ||
-                !setEnumProperty(encoder, "rc-mode", "cbr", error)) {
+                                     static_cast<guint>(encoderConfiguration.bitratePropertyValue), error) ||
+                !setEnumProperty(encoder, "rc-mode",
+                                 encoderConfiguration.rateControl.toUtf8().constData(), error)) {
                 unrefElements({source, convert, inputCapsFilter, encoder, parser,
                                outputCapsFilter, mux, sink});
-                gst_object_unref(pipeline);
+                destroyPipeline(QStringLiteral("video-spool"), pipeline);
                 return false;
             }
-            observe(encoderName, QStringLiteral("bitrate"),
-                    QString::number(config.videoBitrateBitsPerSecond / 1000));
-            observe(encoderName, QStringLiteral("rc-mode"), QStringLiteral("cbr"));
-            observe(encoderName, QStringLiteral("input-format"), QStringLiteral("NV12"));
+            observe(actualEncoderName, QStringLiteral("bitrate"),
+                    QString::number(encoderConfiguration.bitratePropertyValue));
+            observe(actualEncoderName, QStringLiteral("rc-mode"), encoderConfiguration.rateControl);
+            observe(actualEncoderName, QStringLiteral("input-format"), encoderConfiguration.inputFormat);
         } else {
             if (!setUnsignedProperty(encoder, "bitrate",
-                                     static_cast<guint>(config.videoBitrateBitsPerSecond), error) ||
-                !setEnumProperty(encoder, "rate-control", "bitrate", error) ||
-                !setEnumProperty(encoder, "usage-type", "screen", error)) {
+                                     static_cast<guint>(encoderConfiguration.bitratePropertyValue), error) ||
+                !setEnumProperty(encoder, "rate-control",
+                                 encoderConfiguration.rateControl.toUtf8().constData(), error) ||
+                !setEnumProperty(encoder, "usage-type",
+                                 encoderConfiguration.usageType.toUtf8().constData(), error)) {
                 unrefElements({source, convert, inputCapsFilter, encoder, parser,
                                outputCapsFilter, mux, sink});
-                gst_object_unref(pipeline);
+                destroyPipeline(QStringLiteral("video-spool"), pipeline);
                 return false;
             }
-            observe(encoderName, QStringLiteral("bitrate"),
-                    QString::number(config.videoBitrateBitsPerSecond));
-            observe(encoderName, QStringLiteral("rate-control"), QStringLiteral("bitrate"));
-            observe(encoderName, QStringLiteral("usage-type"), QStringLiteral("screen"));
-            observe(encoderName, QStringLiteral("input-format"), QStringLiteral("I420"));
+            observe(actualEncoderName, QStringLiteral("bitrate"),
+                    QString::number(encoderConfiguration.bitratePropertyValue));
+            observe(actualEncoderName, QStringLiteral("rate-control"), encoderConfiguration.rateControl);
+            observe(actualEncoderName, QStringLiteral("usage-type"), encoderConfiguration.usageType);
+            observe(actualEncoderName, QStringLiteral("input-format"), encoderConfiguration.inputFormat);
         }
         observe(QStringLiteral("video-appsrc"), QStringLiteral("caps"),
                 capsText(inputCapsString.constData()));
@@ -434,26 +502,27 @@ public:
         if (!stageAllowed(encoderName, QStringLiteral("caps"), error)) {
             unrefElements({source, convert, inputCapsFilter, encoder, parser,
                            outputCapsFilter, mux, sink});
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
 
         gst_bin_add_many(GST_BIN(pipeline), source, convert, inputCapsFilter, encoder,
                          parser, outputCapsFilter, mux, sink, nullptr);
-        if (!stageAllowed(encoderName, QStringLiteral("link"), error) ||
-            !gst_element_link_many(source, convert, inputCapsFilter, encoder, parser,
+        if (!gst_element_link_many(source, convert, inputCapsFilter, encoder, parser,
                                    outputCapsFilter, mux, sink, nullptr)) {
             if (error && error->isEmpty()) {
                 *error = QStringLiteral("Video spool link/caps failure for %1").arg(encoderName);
             }
-            gst_element_set_state(pipeline, GST_STATE_NULL);
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
+            return false;
+        }
+        if (!stageAllowed(encoderName, QStringLiteral("link"), error)) {
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
         HiddenFileLease visibility(config.videoSpoolPath);
         if (!visibility.makeVisible(error)) {
-            gst_element_set_state(pipeline, GST_STATE_NULL);
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
         const GstStateChangeReturn ready = gst_element_set_state(pipeline, GST_STATE_READY);
@@ -465,24 +534,20 @@ public:
                     ? restoreError
                     : QStringLiteral("Video spool READY state failure for %1").arg(encoderName);
             }
-            gst_element_set_state(pipeline, GST_STATE_NULL);
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
         if (!stageAllowed(encoderName, QStringLiteral("ready"), error)) {
-            gst_element_set_state(pipeline, GST_STATE_NULL);
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
         if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
             if (error) *error = QStringLiteral("Video spool PLAYING state failure for %1").arg(encoderName);
-            gst_element_set_state(pipeline, GST_STATE_NULL);
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
         if (!stageAllowed(encoderName, QStringLiteral("playing"), error)) {
-            gst_element_set_state(pipeline, GST_STATE_NULL);
-            gst_object_unref(pipeline);
+            destroyPipeline(QStringLiteral("video-spool"), pipeline);
             return false;
         }
         videoPipeline = pipeline;
@@ -685,7 +750,7 @@ public:
                 deadlineMs - (hooks.monotonicMilliseconds() - deadlineStartMs);
             if (remainingMs <= 0) break;
             const GstClockTime slice = static_cast<GstClockTime>(qMin<qint64>(remainingMs, 10)) * GST_MSECOND;
-            GstMessage *message = hooks.busTimedPop(bus, slice);
+            GstMessage *message = hooks.labeledBusTimedPop(label, bus, slice);
             if (!message) continue;
             const GstMessageType type = GST_MESSAGE_TYPE(message);
             if (type == GST_MESSAGE_EOS) {
@@ -774,17 +839,20 @@ public:
             gst_bin_add_many(GST_BIN(pipeline), videoFile, videoDemux, videoParse,
                              videoIdentity, videoCapsFilter, mux, sink, nullptr);
         }
+        auto releaseRequestPad = [&](GstPad *pad, const QString &name) {
+            if (!pad) return;
+            gst_element_release_request_pad(mux, pad);
+            if (hooks.requestPadObserved) hooks.requestPadObserved(name, false);
+            gst_object_unref(pad);
+        };
         auto failOwnedPipeline = [&](const QString &failure, GstPad *videoPad, GstPad *audioPad) {
             if (error) *error = failure;
             gst_element_set_state(pipeline, GST_STATE_NULL);
-            if (videoPad) {
-                gst_element_release_request_pad(mux, videoPad);
-                gst_object_unref(videoPad);
+            if (hooks.pipelineStateObserved) {
+                hooks.pipelineStateObserved(QStringLiteral("mp4-remux"), GST_STATE_NULL);
             }
-            if (audioPad) {
-                gst_element_release_request_pad(mux, audioPad);
-                gst_object_unref(audioPad);
-            }
+            releaseRequestPad(videoPad, QStringLiteral("video_%u"));
+            releaseRequestPad(audioPad, QStringLiteral("audio_%u"));
             gst_object_unref(pipeline);
             return false;
         };
@@ -804,8 +872,14 @@ public:
         }
 
         GstPad *videoMuxPad = gst_element_request_pad_simple(mux, "video_%u");
+        if (videoMuxPad && hooks.requestPadObserved) {
+            hooks.requestPadObserved(QStringLiteral("video_%u"), true);
+        }
         if (hooks.elementCreated) hooks.elementCreated(QStringLiteral("video_%u"));
         GstPad *audioMuxPad = hasAudio ? gst_element_request_pad_simple(mux, "audio_%u") : nullptr;
+        if (audioMuxPad && hooks.requestPadObserved) {
+            hooks.requestPadObserved(QStringLiteral("audio_%u"), true);
+        }
         if (hasAudio && hooks.elementCreated) hooks.elementCreated(QStringLiteral("audio_%u"));
         GstPad *videoSrcPad = gst_element_get_static_pad(videoCapsFilter, "src");
         const GstPadLinkReturn videoLink = videoMuxPad && videoSrcPad
@@ -845,12 +919,11 @@ public:
         const bool completed = waitForEos(pipeline, deadlineMs, deadlineStartMs, cancelled,
                                           QStringLiteral("MP4 remux"), &waitError);
         gst_element_set_state(pipeline, GST_STATE_NULL);
-        gst_element_release_request_pad(mux, videoMuxPad);
-        gst_object_unref(videoMuxPad);
-        if (audioMuxPad) {
-            gst_element_release_request_pad(mux, audioMuxPad);
-            gst_object_unref(audioMuxPad);
+        if (hooks.pipelineStateObserved) {
+            hooks.pipelineStateObserved(QStringLiteral("mp4-remux"), GST_STATE_NULL);
         }
+        releaseRequestPad(videoMuxPad, QStringLiteral("video_%u"));
+        releaseRequestPad(audioMuxPad, QStringLiteral("audio_%u"));
         gst_object_unref(pipeline);
         if (!completed) {
             if (error) *error = waitError;
@@ -888,32 +961,21 @@ GstRecordingCapabilityResult GstRecordingPipeline::probeCapabilities()
 GstRecordingCapabilityResult GstRecordingPipeline::probeCapabilities(
     const GstRecordingPipelineHooks &suppliedHooks)
 {
-    const GstRecordingPipelineHooks hooks = completedHooks(suppliedHooks);
-    for (const RequiredFactory &required : kRequiredFactories) {
-        if (!hooks.factoryExists(QString::fromLatin1(required.name))) {
-            return {false, {},
-                    QStringLiteral("%1 unavailable: required factory %2 is missing")
-                        .arg(QString::fromLatin1(required.classification),
-                             QString::fromLatin1(required.name))};
-        }
-    }
+    return probeCapabilityDetails(suppliedHooks).result;
+}
 
-    QStringList encoderFailures;
-    for (const QString &encoder : {QStringLiteral("mfh264enc"),
-                                   QStringLiteral("openh264enc")}) {
-        if (!hooks.factoryExists(encoder)) {
-            encoderFailures.append(QStringLiteral("%1 missing").arg(encoder));
-            continue;
-        }
-        QString readyError;
-        if (hooks.factoryReady(encoder, &readyError)) {
-            return {true, encoder, {}};
-        }
-        encoderFailures.append(QStringLiteral("%1 READY failed: %2").arg(encoder, readyError));
+GstRecordingEncoderConfiguration GstRecordingPipeline::encoderConfiguration(
+    const QString &factory, int bitrateBitsPerSecond)
+{
+    if (factory == QStringLiteral("mfh264enc")) {
+        return {QStringLiteral("NV12"), bitrateBitsPerSecond / 1000,
+                QStringLiteral("cbr"), {}};
     }
-    return {false, {},
-            QStringLiteral("H.264 encoder unavailable: %1")
-                .arg(encoderFailures.join(QStringLiteral("; ")))};
+    if (factory == QStringLiteral("openh264enc")) {
+        return {QStringLiteral("I420"), bitrateBitsPerSecond,
+                QStringLiteral("bitrate"), QStringLiteral("screen")};
+    }
+    return {};
 }
 
 bool GstRecordingPipeline::start(const GstRecordingPipelineConfig &config,
@@ -929,6 +991,11 @@ bool GstRecordingPipeline::start(const GstRecordingPipelineConfig &config,
         if (error) *error = QStringLiteral("Invalid or duplicate recording pipeline start");
         return false;
     }
+    const CapabilityProbeDetails capabilities = probeCapabilityDetails(m_impl->hooks);
+    if (!capabilities.result.available) {
+        if (error) *error = capabilities.result.error;
+        return false;
+    }
     int stride = 0;
     gsize size = 0;
     if (!sampleHasVideoCaps(firstVideoSample, config.video, &stride, &size, error)) return false;
@@ -937,9 +1004,18 @@ bool GstRecordingPipeline::start(const GstRecordingPipelineConfig &config,
     m_impl->audioOriginPts = -1;
     m_impl->stride = stride;
     m_impl->blackBufferSize = size;
-    QStringList failures;
+    QStringList candidates;
+    if (capabilities.readyEncoders.contains(config.preferredEncoder)) {
+        candidates.append(config.preferredEncoder);
+    }
     for (const QString &encoder : {QStringLiteral("mfh264enc"),
                                    QStringLiteral("openh264enc")}) {
+        if (capabilities.readyEncoders.contains(encoder) && !candidates.contains(encoder)) {
+            candidates.append(encoder);
+        }
+    }
+    QStringList failures;
+    for (const QString &encoder : candidates) {
         if (m_impl->hooks.encoderAttempted) m_impl->hooks.encoderAttempted(encoder);
         QString attemptError;
         if (m_impl->hooks.encoderBuildAllowed &&
