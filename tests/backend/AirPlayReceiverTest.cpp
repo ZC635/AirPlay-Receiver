@@ -147,6 +147,112 @@ private slots:
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
         QCOMPARE(finishedSpy.count(), 0);
     }
+
+    void fakeFailureFromRecordingReturnsIdleBeforeFailureSignal() {
+        FakeAirPlayReceiver receiver;
+        QSignalSpy stateSpy(&receiver, &AirPlayReceiver::recordingStateChanged);
+        QSignalSpy failedSpy(&receiver, &AirPlayReceiver::recordingFailed);
+        QStringList events;
+        connect(&receiver, &AirPlayReceiver::recordingStateChanged, &receiver,
+                [&](RecordingState) { events.append(QStringLiteral("state")); });
+        connect(&receiver, &AirPlayReceiver::recordingFailed, &receiver,
+                [&](const QString &) { events.append(QStringLiteral("failed")); });
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({QStringLiteral("recordings")}).accepted);
+        stateSpy.clear();
+        events.clear();
+
+        receiver.failRecordingForTest(QStringLiteral("capture failed"));
+
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(stateSpy.count(), 1);
+        QCOMPARE(failedSpy.count(), 1);
+        QCOMPARE(failedSpy.at(0).at(0).toString(), QStringLiteral("capture failed"));
+        const QStringList expectedEvents{QStringLiteral("state"), QStringLiteral("failed")};
+        QCOMPARE(events, expectedEvents);
+
+        receiver.failRecordingForTest(QStringLiteral("ignored"));
+
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(stateSpy.count(), 1);
+        QCOMPARE(failedSpy.count(), 1);
+        QCOMPARE(events, expectedEvents);
+    }
+
+    void fakeFailureFromFinalizingReturnsIdleBeforeFailureSignal() {
+        FakeAirPlayReceiver receiver;
+        QSignalSpy stateSpy(&receiver, &AirPlayReceiver::recordingStateChanged);
+        QSignalSpy failedSpy(&receiver, &AirPlayReceiver::recordingFailed);
+        QStringList events;
+        connect(&receiver, &AirPlayReceiver::recordingStateChanged, &receiver,
+                [&](RecordingState) { events.append(QStringLiteral("state")); });
+        connect(&receiver, &AirPlayReceiver::recordingFailed, &receiver,
+                [&](const QString &) { events.append(QStringLiteral("failed")); });
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({QStringLiteral("recordings")}).accepted);
+        receiver.stopRecording();
+        stateSpy.clear();
+        events.clear();
+
+        receiver.failRecordingForTest(QStringLiteral("finalize failed"));
+
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(stateSpy.count(), 1);
+        QCOMPARE(failedSpy.count(), 1);
+        QCOMPARE(failedSpy.at(0).at(0).toString(), QStringLiteral("finalize failed"));
+        const QStringList expectedEvents{QStringLiteral("state"), QStringLiteral("failed")};
+        QCOMPARE(events, expectedEvents);
+
+        receiver.failRecordingForTest(QStringLiteral("ignored"));
+
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(stateSpy.count(), 1);
+        QCOMPARE(failedSpy.count(), 1);
+        QCOMPARE(events, expectedEvents);
+    }
+
+    void fakeCompletionIsIgnoredUntilFinalizing() {
+        FakeAirPlayReceiver receiver;
+        QSignalSpy stateSpy(&receiver, &AirPlayReceiver::recordingStateChanged);
+        QSignalSpy finishedSpy(&receiver, &AirPlayReceiver::recordingFinished);
+
+        receiver.completeRecordingForTest({QStringLiteral("idle.mp4"), {}});
+
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(stateSpy.count(), 0);
+        QCOMPARE(finishedSpy.count(), 0);
+
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({QStringLiteral("recordings")}).accepted);
+        stateSpy.clear();
+
+        receiver.completeRecordingForTest({QStringLiteral("recording.mp4"), {}});
+
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        QCOMPARE(stateSpy.count(), 0);
+        QCOMPARE(finishedSpy.count(), 0);
+    }
+
+    void fakeDiscardFromFinalizingReturnsIdleWithoutFinishedSignal() {
+        FakeAirPlayReceiver receiver;
+        QSignalSpy finishedSpy(&receiver, &AirPlayReceiver::recordingFinished);
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({QStringLiteral("recordings")}).accepted);
+        receiver.stopRecording();
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+
+        receiver.discardRecording();
+
+        QCOMPARE(receiver.discardRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(finishedSpy.count(), 0);
+
+        receiver.discardRecording();
+
+        QCOMPARE(receiver.discardRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(finishedSpy.count(), 0);
+    }
 };
 
 QTEST_MAIN(AirPlayReceiverTest)
