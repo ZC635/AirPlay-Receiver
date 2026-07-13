@@ -1,5 +1,9 @@
 #include <QtTest/QtTest>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include "app/AppSettings.h"
+#include "backend/RecordingTypes.h"
 #include "backend/VideoQualitySettings.h"
 
 class AppSettingsTest : public QObject {
@@ -27,18 +31,53 @@ private slots:
 
     void defaultShortcutsContainRequestedActions() {
         const AppSettings settings = AppSettings::defaults();
-        QCOMPARE(settings.shortcuts().size(), 6);
+        QCOMPARE(settings.shortcuts().size(), 7);
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::VolumeUp).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::VolumeDown).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleToolbar).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleAspectRatio).isValid());
         QVERIFY(settings.shortcutFor(ShortcutAction::ToggleVideoFit).isValid());
+        QVERIFY(settings.shortcutFor(ShortcutAction::ToggleRecording).isValid());
     }
 
     void defaultToggleVideoFitShortcutIsCorrect() {
         const AppSettings settings = AppSettings::defaults();
         QCOMPARE(settings.shortcutFor(ShortcutAction::ToggleVideoFit), QKeySequence("Ctrl+Alt+F"));
+    }
+
+    void recordingDefaultsAreMp4MoviesFolderAndCompletionMessage() {
+        const AppSettings settings = AppSettings::defaults();
+        const QString movies = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+        const QString expectedBase = movies.isEmpty()
+            ? QDir(QDir::homePath()).filePath("Videos")
+            : movies;
+
+        QCOMPARE(settings.recordingFormat(), RecordingFormat::Mp4);
+        QCOMPARE(settings.recordingOutputDirectory(),
+                 QDir::cleanPath(QDir(expectedBase).filePath("AirPlay Receiver Recording")));
+        QVERIFY(settings.showRecordingCompletionMessage());
+    }
+
+    void recordingSettersStoreValuesAndNormalizeOutputDirectory() {
+        AppSettings settings = AppSettings::defaults();
+        const QString path = QDir::current().filePath("recordings/../saved recordings");
+
+        settings.setRecordingFormat(RecordingFormat::Mp4);
+        settings.setRecordingOutputDirectory(path);
+        settings.setShowRecordingCompletionMessage(false);
+
+        QCOMPARE(settings.recordingFormat(), RecordingFormat::Mp4);
+        QCOMPARE(settings.recordingOutputDirectory(),
+                 QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+        QVERIFY(!settings.showRecordingCompletionMessage());
+    }
+
+    void defaultToggleRecordingShortcutIsCtrlAltR() {
+        const AppSettings settings = AppSettings::defaults();
+
+        QCOMPARE(settings.shortcuts().size(), 7);
+        QCOMPARE(settings.shortcutFor(ShortcutAction::ToggleRecording), QKeySequence("Ctrl+Alt+R"));
     }
 
     void rejectsDuplicateShortcuts() {

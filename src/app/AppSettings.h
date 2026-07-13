@@ -7,6 +7,7 @@
 #include <QVector>
 #include "app/ShortcutAction.h"
 #include "app/ShortcutBinding.h"
+#include "backend/RecordingTypes.h"
 #include "backend/VideoQualitySettings.h"
 
 class AppKeySequence : public QKeySequence {
@@ -34,6 +35,12 @@ public:
     void setVideoFitMode(bool enabled);
     VideoQualitySettings videoQuality() const;
     void setVideoQuality(VideoQualitySettings quality);
+    RecordingFormat recordingFormat() const;
+    void setRecordingFormat(RecordingFormat format);
+    QString recordingOutputDirectory() const;
+    void setRecordingOutputDirectory(QString path);
+    bool showRecordingCompletionMessage() const;
+    void setShowRecordingCompletionMessage(bool enabled);
     QStringList validateGeneral() const;
     QStringList validateShortcuts() const;
 
@@ -44,4 +51,7 @@ private:
     bool aspectRatioLock_ = false;
     bool videoFitMode_ = false;
     VideoQualitySettings videoQuality_;
+    RecordingFormat recordingFormat_ = RecordingFormat::Mp4;
+    QString recordingOutputDirectory_;
+    bool showRecordingCompletionMessage_ = true;
 };

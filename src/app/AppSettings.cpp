@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <utility>
+#include <QDir>
+#include <QFileInfo>
 #include <QSet>
+#include <QStandardPaths>
 
 bool AppKeySequence::isValid() const {
     return !isEmpty();
@@ -16,6 +19,12 @@ AppSettings AppSettings::defaults() {
     settings.setShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Alt+B"));
     settings.setShortcut(ShortcutAction::ToggleAspectRatio, QKeySequence("Ctrl+Alt+A"));
     settings.setShortcut(ShortcutAction::ToggleVideoFit, QKeySequence("Ctrl+Alt+F"));
+    settings.setShortcut(ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Alt+R"));
+    const QString movies = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    const QString outputBase = movies.isEmpty()
+        ? QDir(QDir::homePath()).filePath("Videos")
+        : movies;
+    settings.setRecordingOutputDirectory(QDir(outputBase).filePath("AirPlay Receiver Recording"));
     return settings;
 }
 
@@ -73,6 +82,30 @@ VideoQualitySettings AppSettings::videoQuality() const {
 
 void AppSettings::setVideoQuality(VideoQualitySettings quality) {
     videoQuality_ = quality;
+}
+
+RecordingFormat AppSettings::recordingFormat() const {
+    return recordingFormat_;
+}
+
+void AppSettings::setRecordingFormat(RecordingFormat format) {
+    recordingFormat_ = format;
+}
+
+QString AppSettings::recordingOutputDirectory() const {
+    return recordingOutputDirectory_;
+}
+
+void AppSettings::setRecordingOutputDirectory(QString path) {
+    recordingOutputDirectory_ = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+bool AppSettings::showRecordingCompletionMessage() const {
+    return showRecordingCompletionMessage_;
+}
+
+void AppSettings::setShowRecordingCompletionMessage(bool enabled) {
+    showRecordingCompletionMessage_ = enabled;
 }
 
 QStringList AppSettings::validateGeneral() const {

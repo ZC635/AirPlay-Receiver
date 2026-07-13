@@ -12,6 +12,7 @@ private slots:
         QCOMPARE(shortcutActionKey(ShortcutAction::ToggleToolbar), QString("toggleToolbar"));
         QCOMPARE(shortcutActionKey(ShortcutAction::ToggleAspectRatio), QString("toggleAspectRatio"));
         QCOMPARE(shortcutActionKey(ShortcutAction::ToggleVideoFit), QString("toggleVideoFit"));
+        QCOMPARE(shortcutActionKey(ShortcutAction::ToggleRecording), QString("toggleRecording"));
     }
 };
 

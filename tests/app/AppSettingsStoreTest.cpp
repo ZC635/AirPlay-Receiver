@@ -1,4 +1,5 @@
 #include <QtTest/QtTest>
+#include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -22,6 +23,141 @@ private slots:
 
         const AppSettings loaded = store.loadOrDefaults();
         QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+H"));
+    }
+
+    void savesAndLoadsRecordingSettings() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        const QString outputDirectory = dir.filePath("captures/../recordings");
+        AppSettings settings = AppSettings::defaults();
+        settings.setRecordingFormat(RecordingFormat::Mp4);
+        settings.setRecordingOutputDirectory(outputDirectory);
+        settings.setShowRecordingCompletionMessage(false);
+        settings.setShortcut(ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Shift+R"));
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        const AppSettings loaded = store.loadOrDefaults();
+        QCOMPARE(loaded.recordingFormat(), RecordingFormat::Mp4);
+        QCOMPARE(loaded.recordingOutputDirectory(), QDir::cleanPath(QFileInfo(outputDirectory).absoluteFilePath()));
+        QVERIFY(!loaded.showRecordingCompletionMessage());
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleRecording), QKeySequence("Ctrl+Shift+R"));
+    }
+
+    void savesRecordingJsonSchemaAndPortableShortcut() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setRecordingOutputDirectory(dir.filePath("recordings"));
+        settings.setShowRecordingCompletionMessage(false);
+        settings.setShortcut(ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Shift+R"));
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings));
+
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+        const QJsonObject recording = root.value("recording").toObject();
+        QCOMPARE(recording.keys(), QStringList({"format", "outputDirectory", "showCompletionMessage"}));
+        QCOMPARE(recording.value("format").toString(), QString("mp4"));
+        QCOMPARE(recording.value("outputDirectory").toString(), settings.recordingOutputDirectory());
+        QVERIFY(!recording.value("showCompletionMessage").toBool());
+        QCOMPARE(root.value("shortcuts").toObject().value("toggleRecording").toString(),
+                 QKeySequence("Ctrl+Shift+R").toString(QKeySequence::PortableText));
+    }
+
+    void oldJsonWithoutRecordingKeysUsesDefaults() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"receiverName":"Legacy Receiver","shortcuts":{}})") > 0);
+        file.close();
+
+        const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        const AppSettings defaults = AppSettings::defaults();
+        QCOMPARE(loaded.recordingFormat(), defaults.recordingFormat());
+        QCOMPARE(loaded.recordingOutputDirectory(), defaults.recordingOutputDirectory());
+        QCOMPARE(loaded.showRecordingCompletionMessage(), defaults.showRecordingCompletionMessage());
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleRecording),
+                 defaults.shortcutFor(ShortcutAction::ToggleRecording));
+    }
+
+    void unknownRecordingFormatFallsBackToMp4() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"recording":{"format":"webm"}})") > 0);
+        file.close();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().recordingFormat(), RecordingFormat::Mp4);
+    }
+
+    void nonStringRecordingFormatFallsBackToMp4() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"recording":{"format":42}})") > 0);
+        file.close();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().recordingFormat(), RecordingFormat::Mp4);
+    }
+
+    void recordingOutputDirectoryLoadsAsAbsoluteCleanPath() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"recording":{"outputDirectory":"captures/../recordings"}})") > 0);
+        file.close();
+
+        const QString expected = QDir::cleanPath(QFileInfo("captures/../recordings").absoluteFilePath());
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().recordingOutputDirectory(), expected);
+    }
+
+    void nonBooleanCompletionMessageFallsBackToDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"recording":{"showCompletionMessage":"no"}})") > 0);
+        file.close();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().showRecordingCompletionMessage(),
+                 AppSettings::defaults().showRecordingCompletionMessage());
+    }
+
+    void invalidToggleRecordingShortcutKeepsDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"shortcuts":{"toggleRecording":"not_a_hotkey"}})") > 0);
+        file.close();
+
+        const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleRecording),
+                 AppSettings::defaults().shortcutFor(ShortcutAction::ToggleRecording));
     }
 
     void savesShortcutsAsPortableText() {

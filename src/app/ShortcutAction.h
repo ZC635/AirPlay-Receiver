@@ -7,4 +7,5 @@ enum class ShortcutAction {
     ToggleToolbar,
     ToggleAspectRatio,
     ToggleVideoFit,
+    ToggleRecording,
 };
