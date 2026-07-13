@@ -30,17 +30,28 @@ struct GstRecordingFinalizeResult {
     QString error;
 };
 
+struct GstRecordingEncoderConfiguration {
+    QString inputFormat;
+    int bitratePropertyValue = 0;
+    QString rateControl;
+    QString usageType;
+};
+
 struct GstRecordingPipelineHooks {
     std::function<bool(const QString &)> factoryExists;
     std::function<bool(const QString &, QString *)> factoryReady;
     std::function<bool(const QString &, QString *)> encoderBuildAllowed;
     std::function<bool(const QString &, const QString &, QString *)> encoderStageAllowed;
+    std::function<QString(const QString &)> encoderFactoryAlias;
     std::function<void(const QString &)> encoderAttempted;
     std::function<void(const QString &)> elementCreated;
     std::function<void(const QString &, const QString &, const QString &)> configurationObserved;
     std::function<void(const QString &, GstBuffer *)> bufferPushed;
     std::function<GstMessage *(GstBus *, GstClockTime)> busTimedPop;
+    std::function<GstMessage *(const QString &, GstBus *, GstClockTime)> labeledBusTimedPop;
     std::function<qint64()> monotonicMilliseconds;
+    std::function<void(const QString &, GstState)> pipelineStateObserved;
+    std::function<void(const QString &, bool)> requestPadObserved;
 };
 
 class GstRecordingPipeline {
@@ -55,6 +66,8 @@ public:
 
     static GstRecordingCapabilityResult probeCapabilities();
     static GstRecordingCapabilityResult probeCapabilities(const GstRecordingPipelineHooks &hooks);
+    static GstRecordingEncoderConfiguration encoderConfiguration(
+        const QString &factory, int bitrateBitsPerSecond);
 
     bool start(const GstRecordingPipelineConfig &config,
                GstSample *firstVideoSample,

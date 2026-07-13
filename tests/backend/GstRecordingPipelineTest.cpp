@@ -245,6 +245,17 @@ bool firstDecodedRunningTimes(const QString &path, GstClockTime *video,
     return true;
 }
 
+GstMessage *injectedErrorMessage(GstBus *bus, const QString &message)
+{
+    const QByteArray utf8 = message.toUtf8();
+    GError *error = g_error_new_literal(GST_STREAM_ERROR, GST_STREAM_ERROR_FAILED,
+                                        utf8.constData());
+    GstMessage *result = gst_message_new_error(GST_OBJECT(bus), error,
+                                               "injected pipeline failure");
+    g_error_free(error);
+    return result;
+}
+
 } // namespace
 
 class GstRecordingPipelineTest : public QObject
@@ -258,9 +269,14 @@ private slots:
     void capabilityProbeClassifiesMissingFactories_data();
     void capabilityProbeClassifiesMissingFactories();
     void realCapabilityProbeUsesInstalledOpenH264Fallback();
+    void startRejectsMissingRequiredCapabilityWithoutTouchingPlaceholder_data();
+    void startRejectsMissingRequiredCapabilityWithoutTouchingPlaceholder();
+    void startSkipsEncoderThatFailsReadyProbe();
+    void startTriesValidPreferredEncoderFirstWithoutDuplicates();
     void videoStartRebuildsCleanlyFromMfhToOpenH264();
     void videoFallbackRebuildsAfterEveryMfhFailureStage_data();
     void videoFallbackRebuildsAfterEveryMfhFailureStage();
+    void encoderConfigurationUsesFactorySpecificUnitsAndFormats();
     void videoGraphUsesRequiredCapsAndEncoderUnits();
     void realVideoStartUsesFirstRunnableEncoder();
     void videoOnlyFinalizeCreatesHiddenMp4WithoutAudioBranch();
@@ -270,6 +286,10 @@ private slots:
     void invalidAudioAndDimensionChangeAreRejectedWithoutPush();
     void injectedDeadlineAndCancellationAbortPromptly();
     void injectedRemuxBusErrorIsSpecificAndReleasesPipeline();
+    void injectedTrackAndRemuxTimeouts_data();
+    void injectedTrackAndRemuxTimeouts();
+    void injectedPipelineBusErrorsAreClassified_data();
+    void injectedPipelineBusErrorsAreClassified();
 };
 
 void GstRecordingPipelineTest::initTestCase()
@@ -372,6 +392,89 @@ void GstRecordingPipelineTest::realCapabilityProbeUsesInstalledOpenH264Fallback(
     QCOMPARE(result.preferredEncoder, QStringLiteral("openh264enc"));
 }
 
+void GstRecordingPipelineTest::startRejectsMissingRequiredCapabilityWithoutTouchingPlaceholder_data()
+{
+    QTest::addColumn<QString>("missingFactory");
+    QTest::addColumn<QString>("classification");
+    QTest::newRow("mp4mux") << QStringLiteral("mp4mux") << QStringLiteral("MP4 muxer");
+    QTest::newRow("matroskademux") << QStringLiteral("matroskademux") << QStringLiteral("Matroska spool");
+    QTest::newRow("avenc_aac") << QStringLiteral("avenc_aac") << QStringLiteral("AAC encoder");
+}
+
+void GstRecordingPipelineTest::startRejectsMissingRequiredCapabilityWithoutTouchingPlaceholder()
+{
+    QFETCH(QString, missingFactory);
+    QFETCH(QString, classification);
+    ReservedFiles files;
+    QSet<QString> factories = kRequiredFactories;
+    factories.remove(missingFactory);
+    GstRecordingPipelineHooks hooks = availableHooks(factories);
+    QStringList created;
+    hooks.elementCreated = [&created](const QString &name) { created.append(name); };
+    GstRecordingPipeline pipeline(hooks);
+    GstSample *first = makeVideoSample(640, 360, 0);
+    QString error;
+    QVERIFY(!pipeline.start(configFor(files.reservation), first, &error));
+    gst_sample_unref(first);
+    QVERIFY(error.contains(classification));
+    QVERIFY(error.contains(missingFactory));
+    QVERIFY(created.isEmpty());
+    QVERIFY(isHiddenFile(files.reservation.videoSpoolPath));
+    QCOMPARE(QFileInfo(files.reservation.videoSpoolPath).size(), qint64(0));
+}
+
+void GstRecordingPipelineTest::startSkipsEncoderThatFailsReadyProbe()
+{
+    ReservedFiles files;
+    GstRecordingPipelineHooks hooks = availableHooks();
+    hooks.factoryReady = [](const QString &name, QString *error) {
+        if (name == QStringLiteral("mfh264enc")) {
+            *error = QStringLiteral("injected READY failure");
+            return false;
+        }
+        return true;
+    };
+    QStringList attempts;
+    hooks.encoderAttempted = [&attempts](const QString &name) { attempts.append(name); };
+    GstRecordingPipeline pipeline(hooks);
+    GstRecordingPipelineConfig config = configFor(files.reservation);
+    config.preferredEncoder = QStringLiteral("mfh264enc");
+    GstSample *first = makeVideoSample(640, 360, 0);
+    QString error;
+    QVERIFY2(pipeline.start(config, first, &error), qPrintable(error));
+    gst_sample_unref(first);
+    QCOMPARE(attempts, QStringList({QStringLiteral("openh264enc")}));
+    QCOMPARE(pipeline.encoderFactoryName(), QStringLiteral("openh264enc"));
+    pipeline.abort();
+}
+
+void GstRecordingPipelineTest::startTriesValidPreferredEncoderFirstWithoutDuplicates()
+{
+    ReservedFiles files;
+    GstRecordingPipelineHooks hooks = availableHooks();
+    QStringList attempts;
+    hooks.encoderAttempted = [&attempts](const QString &name) { attempts.append(name); };
+    hooks.encoderBuildAllowed = [](const QString &name, QString *error) {
+        if (name == QStringLiteral("openh264enc")) {
+            *error = QStringLiteral("injected preferred failure");
+            return false;
+        }
+        return true;
+    };
+    GstRecordingPipeline pipeline(hooks);
+    GstRecordingPipelineConfig config = configFor(files.reservation);
+    config.preferredEncoder = QStringLiteral("openh264enc");
+    GstSample *first = makeVideoSample(640, 360, 0);
+    QString error;
+    QVERIFY2(pipeline.start(config, first, &error), qPrintable(error));
+    gst_sample_unref(first);
+    QCOMPARE(attempts,
+             QStringList({QStringLiteral("openh264enc"), QStringLiteral("mfh264enc")}));
+    QCOMPARE(attempts.count(QStringLiteral("openh264enc")), 1);
+    QCOMPARE(attempts.count(QStringLiteral("mfh264enc")), 1);
+    pipeline.abort();
+}
+
 void GstRecordingPipelineTest::videoStartRebuildsCleanlyFromMfhToOpenH264()
 {
     ReservedFiles files;
@@ -390,7 +493,9 @@ void GstRecordingPipelineTest::videoStartRebuildsCleanlyFromMfhToOpenH264()
     GstRecordingPipeline pipeline(hooks);
     GstSample *first = makeVideoSample(640, 360, 7 * GST_SECOND);
     QString error;
-    QVERIFY2(pipeline.start(configFor(files.reservation), first, &error), qPrintable(error));
+    GstRecordingPipelineConfig config = configFor(files.reservation);
+    config.preferredEncoder = QStringLiteral("mfh264enc");
+    QVERIFY2(pipeline.start(config, first, &error), qPrintable(error));
     QCOMPARE(GST_BUFFER_PTS(gst_sample_get_buffer(first)), 7 * GST_SECOND);
     gst_sample_unref(first);
     QCOMPARE(attempts,
@@ -416,28 +521,64 @@ void GstRecordingPipelineTest::videoFallbackRebuildsAfterEveryMfhFailureStage()
     QFETCH(QString, stage);
     ReservedFiles files;
     QStringList attempts;
+    QStringList stageHits;
+    QStringList nullPipelines;
     GstRecordingPipelineHooks hooks;
     hooks.encoderAttempted = [&attempts](const QString &name) { attempts.append(name); };
-    hooks.encoderStageAllowed = [stage](const QString &encoder,
-                                        const QString &candidateStage,
-                                        QString *error) {
+    hooks.encoderFactoryAlias = [](const QString &logicalEncoder) {
+        return logicalEncoder == QStringLiteral("mfh264enc")
+            ? QStringLiteral("openh264enc") : logicalEncoder;
+    };
+    hooks.pipelineStateObserved = [&nullPipelines](const QString &pipeline, GstState state) {
+        if (state == GST_STATE_NULL) nullPipelines.append(pipeline);
+    };
+    hooks.encoderStageAllowed = [stage, &stageHits](const QString &encoder,
+                                                    const QString &candidateStage,
+                                                    QString *error) {
         if (encoder == QStringLiteral("mfh264enc") && candidateStage == stage) {
+            stageHits.append(candidateStage);
             *error = QStringLiteral("injected %1 failure").arg(stage);
             return false;
         }
+        if (encoder == QStringLiteral("mfh264enc")) stageHits.append(candidateStage);
         return true;
     };
     GstRecordingPipeline pipeline(hooks);
     GstSample *first = makeVideoSample(640, 360, 0);
     QString error;
-    QVERIFY2(pipeline.start(configFor(files.reservation), first, &error), qPrintable(error));
+    GstRecordingPipelineConfig config = configFor(files.reservation);
+    config.preferredEncoder = QStringLiteral("mfh264enc");
+    QVERIFY2(pipeline.start(config, first, &error), qPrintable(error));
     gst_sample_unref(first);
     QCOMPARE(attempts,
              QStringList({QStringLiteral("mfh264enc"), QStringLiteral("openh264enc")}));
     QCOMPARE(pipeline.encoderFactoryName(), QStringLiteral("openh264enc"));
+    const QStringList orderedStages{QStringLiteral("factory"), QStringLiteral("caps"),
+                                    QStringLiteral("link"), QStringLiteral("ready"),
+                                    QStringLiteral("playing")};
+    QCOMPARE(stageHits, orderedStages.mid(0, orderedStages.indexOf(stage) + 1));
+    QCOMPARE(nullPipelines.count(QStringLiteral("video-spool")), 1);
     QVERIFY(isHiddenFile(files.reservation.videoSpoolPath));
     pipeline.abort();
+    QVERIFY(nullPipelines.count(QStringLiteral("video-spool")) >= 2);
     QVERIFY(isHiddenFile(files.reservation.videoSpoolPath));
+}
+
+void GstRecordingPipelineTest::encoderConfigurationUsesFactorySpecificUnitsAndFormats()
+{
+    const GstRecordingEncoderConfiguration mfh =
+        GstRecordingPipeline::encoderConfiguration(QStringLiteral("mfh264enc"), 4'000'000);
+    QCOMPARE(mfh.inputFormat, QStringLiteral("NV12"));
+    QCOMPARE(mfh.bitratePropertyValue, 4000);
+    QCOMPARE(mfh.rateControl, QStringLiteral("cbr"));
+    QVERIFY(mfh.usageType.isEmpty());
+
+    const GstRecordingEncoderConfiguration openh264 =
+        GstRecordingPipeline::encoderConfiguration(QStringLiteral("openh264enc"), 4'000'000);
+    QCOMPARE(openh264.inputFormat, QStringLiteral("I420"));
+    QCOMPARE(openh264.bitratePropertyValue, 4'000'000);
+    QCOMPARE(openh264.rateControl, QStringLiteral("bitrate"));
+    QCOMPARE(openh264.usageType, QStringLiteral("screen"));
 }
 
 void GstRecordingPipelineTest::videoGraphUsesRequiredCapsAndEncoderUnits()
@@ -456,7 +597,9 @@ void GstRecordingPipelineTest::videoGraphUsesRequiredCapsAndEncoderUnits()
     GstRecordingPipeline pipeline(hooks);
     GstSample *first = makeVideoSample(640, 360, 0);
     QString error;
-    QVERIFY2(pipeline.start(configFor(files.reservation), first, &error), qPrintable(error));
+    GstRecordingPipelineConfig config = configFor(files.reservation);
+    config.preferredEncoder = QStringLiteral("mfh264enc");
+    QVERIFY2(pipeline.start(config, first, &error), qPrintable(error));
     gst_sample_unref(first);
 
     QVERIFY(observations.contains(QStringLiteral("video-appsrc:caps=video/x-raw,format=RGBA,width=640,height=360,framerate=30/1,pixel-aspect-ratio=1/1")));
@@ -482,7 +625,9 @@ void GstRecordingPipelineTest::realVideoStartUsesFirstRunnableEncoder()
     GstRecordingPipeline pipeline(hooks);
     GstSample *first = makeVideoSample(640, 360, 0);
     QString error;
-    QVERIFY2(pipeline.start(configFor(files.reservation), first, &error), qPrintable(error));
+    GstRecordingPipelineConfig config = configFor(files.reservation);
+    config.preferredEncoder = QStringLiteral("mfh264enc");
+    QVERIFY2(pipeline.start(config, first, &error), qPrintable(error));
     gst_sample_unref(first);
     if (pipeline.encoderFactoryName() == QStringLiteral("mfh264enc")) {
         QCOMPARE(attempts, QStringList({QStringLiteral("mfh264enc")}));
@@ -538,6 +683,8 @@ void GstRecordingPipelineTest::lateAudioCreatesClaimedHiddenSpoolAndPreservesOff
     ReservedFiles files;
     QStringList created;
     QStringList observations;
+    QStringList nullPipelines;
+    QStringList padEvents;
     GstRecordingPipelineHooks hooks;
     hooks.encoderBuildAllowed = [](const QString &name, QString *) {
         return name == QStringLiteral("openh264enc");
@@ -547,6 +694,13 @@ void GstRecordingPipelineTest::lateAudioCreatesClaimedHiddenSpoolAndPreservesOff
                                                    const QString &key,
                                                    const QString &value) {
         observations.append(element + QLatin1Char(':') + key + QLatin1Char('=') + value);
+    };
+    hooks.pipelineStateObserved = [&nullPipelines](const QString &name, GstState state) {
+        if (state == GST_STATE_NULL) nullPipelines.append(name);
+    };
+    hooks.requestPadObserved = [&padEvents](const QString &name, bool acquired) {
+        padEvents.append(name + (acquired ? QStringLiteral(":acquired")
+                                          : QStringLiteral(":released")));
     };
     GstRecordingPipeline pipeline(hooks);
     GstSample *first = makeVideoSample(640, 360, 0);
@@ -577,6 +731,13 @@ void GstRecordingPipelineTest::lateAudioCreatesClaimedHiddenSpoolAndPreservesOff
     std::atomic_bool cancelled{false};
     const GstRecordingFinalizeResult result = pipeline.finalize(30'000, cancelled);
     QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(nullPipelines.contains(QStringLiteral("video-spool")));
+    QVERIFY(nullPipelines.contains(QStringLiteral("audio-spool")));
+    QVERIFY(nullPipelines.contains(QStringLiteral("mp4-remux")));
+    QCOMPARE(padEvents.count(QStringLiteral("video_%u:acquired")), 1);
+    QCOMPARE(padEvents.count(QStringLiteral("video_%u:released")), 1);
+    QCOMPARE(padEvents.count(QStringLiteral("audio_%u:acquired")), 1);
+    QCOMPARE(padEvents.count(QStringLiteral("audio_%u:released")), 1);
     QVERIFY(isHiddenFile(files.reservation.audioSpoolPath));
     QVERIFY(isHiddenFile(files.reservation.temporaryMp4Path));
     const QString commitError = files.commit();
@@ -781,6 +942,143 @@ void GstRecordingPipelineTest::injectedRemuxBusErrorIsSpecificAndReleasesPipelin
     QVERIFY(result.error.contains(QStringLiteral("MP4 remux")));
     QVERIFY(result.error.contains(QStringLiteral("injected mux write failure")));
     QVERIFY(mp4HiddenDuringRemuxWait);
+    QVERIFY(isHiddenFile(files.reservation.temporaryMp4Path));
+}
+
+void GstRecordingPipelineTest::injectedTrackAndRemuxTimeouts_data()
+{
+    QTest::addColumn<QString>("targetLabel");
+    QTest::newRow("audio-spool") << QStringLiteral("Audio spool");
+    QTest::newRow("mp4-remux") << QStringLiteral("MP4 remux");
+}
+
+void GstRecordingPipelineTest::injectedTrackAndRemuxTimeouts()
+{
+    QFETCH(QString, targetLabel);
+    ReservedFiles files;
+    QString activeLabel;
+    qint64 injectedNow = 0;
+    QStringList nullPipelines;
+    QStringList padEvents;
+    GstRecordingPipelineHooks hooks;
+    hooks.encoderBuildAllowed = [](const QString &name, QString *) {
+        return name == QStringLiteral("openh264enc");
+    };
+    hooks.pipelineStateObserved = [&nullPipelines](const QString &name, GstState state) {
+        if (state == GST_STATE_NULL) nullPipelines.append(name);
+    };
+    hooks.requestPadObserved = [&padEvents](const QString &name, bool acquired) {
+        padEvents.append(name + (acquired ? QStringLiteral(":acquired")
+                                          : QStringLiteral(":released")));
+    };
+    hooks.monotonicMilliseconds = [&] {
+        return activeLabel == targetLabel ? injectedNow++ : qint64(0);
+    };
+    hooks.labeledBusTimedPop = [&](const QString &label, GstBus *bus,
+                                    GstClockTime timeout) -> GstMessage * {
+        activeLabel = label;
+        if (label == targetLabel) return nullptr;
+        return gst_bus_timed_pop_filtered(
+            bus, timeout, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+    };
+    GstRecordingPipeline pipeline(hooks);
+    GstSample *video = makeVideoSample(640, 360, 0);
+    QString error;
+    QVERIFY(pipeline.start(configFor(files.reservation), video, &error));
+    gst_sample_unref(video);
+    GstSample *audio = makeAudioSample(4 * GST_SECOND);
+    QVERIFY(pipeline.pushAudio(audio, 1'200'000'000, &error));
+    gst_sample_unref(audio);
+    std::atomic_bool cancelled{false};
+    const GstRecordingFinalizeResult result = pipeline.finalize(10, cancelled);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(targetLabel));
+    QVERIFY(result.error.contains(QStringLiteral("deadline"), Qt::CaseInsensitive));
+    QVERIFY(nullPipelines.contains(QStringLiteral("video-spool")));
+    QVERIFY(nullPipelines.contains(QStringLiteral("audio-spool")));
+    if (targetLabel == QStringLiteral("MP4 remux")) {
+        QVERIFY(nullPipelines.contains(QStringLiteral("mp4-remux")));
+        QCOMPARE(padEvents.count(QStringLiteral("video_%u:acquired")), 1);
+        QCOMPARE(padEvents.count(QStringLiteral("video_%u:released")), 1);
+        QCOMPARE(padEvents.count(QStringLiteral("audio_%u:acquired")), 1);
+        QCOMPARE(padEvents.count(QStringLiteral("audio_%u:released")), 1);
+    } else {
+        QVERIFY(padEvents.isEmpty());
+    }
+    QVERIFY(isHiddenFile(files.reservation.videoSpoolPath));
+    QVERIFY(isHiddenFile(files.reservation.audioSpoolPath));
+    QVERIFY(isHiddenFile(files.reservation.temporaryMp4Path));
+}
+
+void GstRecordingPipelineTest::injectedPipelineBusErrorsAreClassified_data()
+{
+    QTest::addColumn<QString>("targetLabel");
+    QTest::addColumn<QString>("injectedText");
+    QTest::addColumn<QString>("classification");
+    QTest::addColumn<bool>("withAudio");
+    QTest::newRow("video-encode") << QStringLiteral("Video spool")
+        << QStringLiteral("injected H.264 encode failure") << QStringLiteral("encode") << false;
+    QTest::newRow("video-write") << QStringLiteral("Video spool")
+        << QStringLiteral("injected video write failure") << QStringLiteral("write") << false;
+    QTest::newRow("audio-encode") << QStringLiteral("Audio spool")
+        << QStringLiteral("injected AAC encode failure") << QStringLiteral("encode") << true;
+    QTest::newRow("remux-demux") << QStringLiteral("MP4 remux")
+        << QStringLiteral("injected demux failure") << QStringLiteral("demux") << false;
+    QTest::newRow("remux-mux") << QStringLiteral("MP4 remux")
+        << QStringLiteral("injected mux failure") << QStringLiteral("mux") << false;
+}
+
+void GstRecordingPipelineTest::injectedPipelineBusErrorsAreClassified()
+{
+    QFETCH(QString, targetLabel);
+    QFETCH(QString, injectedText);
+    QFETCH(QString, classification);
+    QFETCH(bool, withAudio);
+    ReservedFiles files;
+    QStringList nullPipelines;
+    QStringList padEvents;
+    GstRecordingPipelineHooks hooks;
+    hooks.encoderBuildAllowed = [](const QString &name, QString *) {
+        return name == QStringLiteral("openh264enc");
+    };
+    hooks.pipelineStateObserved = [&nullPipelines](const QString &name, GstState state) {
+        if (state == GST_STATE_NULL) nullPipelines.append(name);
+    };
+    hooks.requestPadObserved = [&padEvents](const QString &name, bool acquired) {
+        padEvents.append(name + (acquired ? QStringLiteral(":acquired")
+                                          : QStringLiteral(":released")));
+    };
+    hooks.labeledBusTimedPop = [&](const QString &label, GstBus *bus,
+                                    GstClockTime timeout) -> GstMessage * {
+        if (label == targetLabel) return injectedErrorMessage(bus, injectedText);
+        return gst_bus_timed_pop_filtered(
+            bus, timeout, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+    };
+    GstRecordingPipeline pipeline(hooks);
+    GstSample *video = makeVideoSample(640, 360, 0);
+    QString error;
+    QVERIFY(pipeline.start(configFor(files.reservation), video, &error));
+    gst_sample_unref(video);
+    if (withAudio) {
+        GstSample *audio = makeAudioSample(4 * GST_SECOND);
+        QVERIFY(pipeline.pushAudio(audio, 1'200'000'000, &error));
+        gst_sample_unref(audio);
+    }
+    std::atomic_bool cancelled{false};
+    const GstRecordingFinalizeResult result = pipeline.finalize(30'000, cancelled);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(targetLabel));
+    QVERIFY(result.error.contains(classification, Qt::CaseInsensitive));
+    QVERIFY(nullPipelines.contains(QStringLiteral("video-spool")));
+    if (withAudio) QVERIFY(nullPipelines.contains(QStringLiteral("audio-spool")));
+    if (targetLabel == QStringLiteral("MP4 remux")) {
+        QVERIFY(nullPipelines.contains(QStringLiteral("mp4-remux")));
+        QCOMPARE(padEvents.count(QStringLiteral("video_%u:acquired")), 1);
+        QCOMPARE(padEvents.count(QStringLiteral("video_%u:released")), 1);
+    } else {
+        QVERIFY(padEvents.isEmpty());
+    }
+    QVERIFY(isHiddenFile(files.reservation.videoSpoolPath));
     QVERIFY(isHiddenFile(files.reservation.temporaryMp4Path));
 }
 
