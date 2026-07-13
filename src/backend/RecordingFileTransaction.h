@@ -24,6 +24,7 @@ public:
     static RecordingFileReservationResult reserve(const QString &directory,
                                                   const QDateTime &localNow,
                                                   const QUuid &uuid);
+    static QString claimOptionalAudioSpool(const QString &audioSpoolPath);
     static QString commit(const RecordingFileReservation &reservation);
     static void discard(const RecordingFileReservation &reservation);
     static QStringList cleanupStaleTemporaryFiles(const QString &directory);
