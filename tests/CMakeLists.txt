@@ -137,6 +137,15 @@ if(AIRPLAY_WITH_UXPLAY)
         PkgConfig::GST_PBUTILS
     )
     add_test(NAME RecordingMuxFeasibilityTest COMMAND RecordingMuxFeasibilityTest)
+
+    add_executable(GstRecordingPipelineTest backend/GstRecordingPipelineTest.cpp)
+    target_link_libraries(GstRecordingPipelineTest PRIVATE
+        airplay_app_lib
+        Qt6::Test
+        renderers
+        PkgConfig::GST_PBUTILS
+    )
+    add_test(NAME GstRecordingPipelineTest COMMAND GstRecordingPipelineTest)
     get_filename_component(AIRPLAY_GSTREAMER_BIN_DIR "${PKG_CONFIG_EXECUTABLE}" DIRECTORY)
 endif()
 
@@ -203,7 +212,7 @@ set(AIRPLAY_QT_TESTS
     VideoRenderGeometryTest
 )
 if(AIRPLAY_WITH_UXPLAY)
-    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest)
+    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest)
 endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
@@ -213,7 +222,7 @@ foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
 endforeach()
 
 if(AIRPLAY_WITH_UXPLAY)
-    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest PROPERTIES
+    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
