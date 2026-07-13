@@ -620,6 +620,51 @@ private slots:
                  expectedDeleted);
         QVERIFY(!QFileInfo::exists(lockPath(directory.path(), helperId)));
     }
+
+    void cleanupPreservesLiveLockWithoutPartsThenReclaimsOrphanLockOnly() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString helperId = QStringLiteral("ffffffffffffffffffffffffffffffff");
+        const QString helperUuid = QStringLiteral("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        QProcess helper;
+        helper.setProcessChannelMode(QProcess::MergedChannels);
+        helper.start(QCoreApplication::applicationFilePath(),
+                     {QStringLiteral("--recording-lock-helper"), directory.path(), helperUuid});
+        const bool started = helper.waitForStarted(5000);
+        const bool ready = started && helper.waitForReadyRead(5000);
+        const QByteArray helperOutput = helper.readAll();
+        if (!ready || !helperOutput.contains("READY")) {
+            helper.kill();
+            helper.waitForFinished(5000);
+        }
+        QVERIFY2(started && ready && helperOutput.contains("READY"), helperOutput.constData());
+
+        for (const QString &path : temporaryPaths(directory.path(), helperId)) {
+            QVERIFY2(QFile::remove(path), qPrintable(path));
+        }
+        const QString exactLock = lockPath(directory.path(), helperId);
+        const QString nearLock = directory.filePath(QStringLiteral(
+            ".airplay-recording-gggggggggggggggggggggggggggggggg.lock"));
+        const QString suffixedLock = exactLock + QStringLiteral(".bak");
+        writeBytes(nearLock, "near lock");
+        writeBytes(suffixedLock, "suffixed lock");
+
+        const QStringList liveDeleted =
+            RecordingFileTransaction::cleanupStaleTemporaryFiles(directory.path());
+        const bool liveLockRemained = QFileInfo::exists(exactLock);
+        helper.kill();
+        QVERIFY(helper.waitForFinished(5000));
+
+        const QStringList orphanDeleted =
+            RecordingFileTransaction::cleanupStaleTemporaryFiles(directory.path());
+
+        QVERIFY(liveDeleted.isEmpty());
+        QVERIFY(liveLockRemained);
+        QVERIFY(orphanDeleted.isEmpty());
+        QVERIFY(!QFileInfo::exists(exactLock));
+        QCOMPARE(readBytes(nearLock), QByteArray("near lock"));
+        QCOMPARE(readBytes(suffixedLock), QByteArray("suffixed lock"));
+    }
 };
 
 int main(int argc, char **argv) {
