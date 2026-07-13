@@ -33,7 +33,10 @@ void RecordingTimeline::reset() {
     m_started = false;
     m_originPts = 0;
     m_lockedDescription = {};
-    m_frameDuration = 0;
+    m_frameDurationQuotient = 0;
+    m_frameDurationRemainder = 0;
+    m_frameDurationDivisor = 1;
+    m_frameRemainderAccumulator = 0;
     m_lastEmittedPts.reset();
     m_lastRealArrival.reset();
     m_blackAnchorPts.reset();
@@ -58,8 +61,16 @@ bool RecordingTimeline::start(qint64 firstPts,
     description.pixelAspectNumerator = 1;
     description.pixelAspectDenominator = 1;
 
-    const qint64 numerator = qint64(kNanosecondsPerSecond) * description.fpsDenominator;
-    m_frameDuration = std::max<qint64>(1, numerator / description.fpsNumerator);
+    const qint64 durationNumerator =
+        qint64(kNanosecondsPerSecond) * description.fpsDenominator;
+    m_frameDurationQuotient = durationNumerator / description.fpsNumerator;
+    m_frameDurationRemainder = durationNumerator % description.fpsNumerator;
+    m_frameDurationDivisor = description.fpsNumerator;
+    if (m_frameDurationQuotient == 0) {
+        m_frameDurationQuotient = 1;
+        m_frameDurationRemainder = 0;
+        m_frameDurationDivisor = 1;
+    }
     m_originPts = firstPts;
     m_lockedDescription = description;
     m_lastRealArrival = firstArrival;
@@ -92,6 +103,7 @@ std::optional<qint64> RecordingTimeline::normalizeAudio(qint64 sourcePts) const 
 
 void RecordingTimeline::scheduleBlackAfterReal(qint64 normalizedPts) {
     m_blackAnchorPts = normalizedPts;
+    m_frameRemainderAccumulator = 0;
     qint64 next = 0;
     if (addWithoutOverflow(normalizedPts, kNanosecondsPerSecond, &next)) {
         m_nextBlackPts = next;
@@ -122,8 +134,14 @@ QVector<qint64> RecordingTimeline::blackFramePts(qint64 now) {
             result.append(current);
             m_lastEmittedPts = current;
         }
+        qint64 frameDuration = m_frameDurationQuotient;
+        m_frameRemainderAccumulator += m_frameDurationRemainder;
+        if (m_frameRemainderAccumulator >= m_frameDurationDivisor) {
+            frameDuration += m_frameRemainderAccumulator / m_frameDurationDivisor;
+            m_frameRemainderAccumulator %= m_frameDurationDivisor;
+        }
         qint64 next = 0;
-        if (addWithoutOverflow(current, m_frameDuration, &next)) {
+        if (addWithoutOverflow(current, frameDuration, &next)) {
             m_nextBlackPts = next;
         } else {
             m_nextBlackPts.reset();
@@ -133,8 +151,9 @@ QVector<qint64> RecordingTimeline::blackFramePts(qint64 now) {
 }
 
 bool RecordingTimeline::dimensionsChanged(const RecordingVideoDescription &description) const {
-    return description.width != m_lockedDescription.width ||
-           description.height != m_lockedDescription.height;
+    return m_started &&
+           (description.width != m_lockedDescription.width ||
+            description.height != m_lockedDescription.height);
 }
 
 RecordingVideoDescription RecordingTimeline::lockedDescription() const {
