@@ -21,7 +21,7 @@ public:
     GstSampleQueue &operator=(GstSampleQueue &&) = delete;
 
     // Retains one reference on success. Full and invalid queues return immediately.
-    bool tryPushBorrowed(GstSample *sample);
+    bool tryPushBorrowed(GstSample *sample) noexcept;
 
     // Transfers the queue-owned reference to the caller, or returns nullptr.
     GstSample *tryPopOwned();

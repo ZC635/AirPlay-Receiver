@@ -12,7 +12,7 @@ GstSampleQueue::~GstSampleQueue()
     clear();
 }
 
-bool GstSampleQueue::tryPushBorrowed(GstSample *sample)
+bool GstSampleQueue::tryPushBorrowed(GstSample *sample) noexcept
 {
     if (!sample || m_capacity <= 0) {
         return false;
@@ -23,7 +23,15 @@ bool GstSampleQueue::tryPushBorrowed(GstSample *sample)
         return false;
     }
 
-    m_samples.push_back(gst_sample_ref(sample));
+    GstSample *retained = gst_sample_ref(sample);
+    try {
+        m_samples.push_back(retained);
+    } catch (...) {
+        // Sample-tap callbacks cannot handle C++ exceptions. Roll back the
+        // retained reference and report backpressure instead.
+        gst_sample_unref(retained);
+        return false;
+    }
     return true;
 }
 
