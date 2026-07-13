@@ -167,6 +167,14 @@ private slots:
         QCOMPARE(locked.height, 1920);
     }
 
+    void dimensionsAreUnchangedBeforeOrAfterFailedStart() {
+        RecordingTimeline timeline;
+
+        QVERIFY(!timeline.dimensionsChanged(description()));
+        QVERIFY(!timeline.start(0, description(0, 1080), 0, 30));
+        QVERIFY(!timeline.dimensionsChanged(description(1, 1)));
+    }
+
     void bitratePolicy_data() {
         QTest::addColumn<int>("width");
         QTest::addColumn<int>("height");
@@ -214,7 +222,7 @@ private slots:
         QVERIFY(timeline.blackFramePts(999'999'999).isEmpty());
         QCOMPARE(timeline.blackFramePts(kSecond), QVector<qint64>{kSecond});
         const QVector<qint64> catchUp = timeline.blackFramePts(1'100'000'000);
-        QCOMPARE(catchUp, QVector<qint64>({1'033'333'333, 1'066'666'666, 1'099'999'999}));
+        QCOMPARE(catchUp, QVector<qint64>({1'033'333'333, 1'066'666'666, 1'100'000'000}));
         verifyStrictlyIncreasingAtMost(catchUp, 1'100'000'000);
     }
 
@@ -226,8 +234,42 @@ private slots:
         const QVector<qint64> catchUp = timeline.blackFramePts(1'100'000'000);
 
         QCOMPARE(catchUp, QVector<qint64>({1'000'000'000, 1'033'333'333,
-                                          1'066'666'666, 1'099'999'999}));
+                                          1'066'666'666, 1'100'000'000}));
         verifyStrictlyIncreasingAtMost(catchUp, 1'100'000'000);
+    }
+
+    void rationalCadenceLandsOnExactSecondBoundaries_data() {
+        QTest::addColumn<int>("fps");
+        QTest::addColumn<int>("expectedSize");
+
+        QTest::newRow("30fps") << 30 << 31;
+        QTest::newRow("60fps") << 60 << 61;
+    }
+
+    void rationalCadenceLandsOnExactSecondBoundaries() {
+        QFETCH(int, fps);
+        QFETCH(int, expectedSize);
+        RecordingTimeline timeline;
+        QVERIFY(timeline.start(0, description(1920, 1080, fps, 1), 0, 30));
+        QCOMPARE(valueOrFail(timeline.normalizeVideo(0, 0)), qint64(0));
+
+        const QVector<qint64> frames = timeline.blackFramePts(2 * kSecond);
+
+        QCOMPARE(frames.size(), expectedSize);
+        QCOMPARE(frames.constLast(), 2 * kSecond);
+        verifyStrictlyIncreasingAtMost(frames, 2 * kSecond);
+    }
+
+    void fractionalCadenceKeepsExactFrameIndex() {
+        RecordingTimeline timeline;
+        QVERIFY(timeline.start(0, description(1920, 1080, 24'000, 1'001), 0, 30));
+        QCOMPARE(valueOrFail(timeline.normalizeVideo(0, 0)), qint64(0));
+
+        const QVector<qint64> frames = timeline.blackFramePts(2'001'000'000);
+
+        QCOMPARE(frames.size(), 25);
+        QCOMPARE(frames.at(24), qint64(2'001'000'000));
+        verifyStrictlyIncreasingAtMost(frames, 2'001'000'000);
     }
 
     void everyRealSampleStopsBlackAndResetsTimeoutEvenWhenPtsIsDropped() {
@@ -235,12 +277,12 @@ private slots:
         QVERIFY(timeline.start(0, description(), 0, 30));
         QCOMPARE(valueOrFail(timeline.normalizeVideo(0, 0)), qint64(0));
         const QVector<qint64> initialBlack = timeline.blackFramePts(1'100'000'000);
-        QCOMPARE(initialBlack.constLast(), qint64(1'099'999'999));
+        QCOMPARE(initialBlack.constLast(), qint64(1'100'000'000));
 
         QVERIFY(!timeline.normalizeVideo(500'000'000, 1'200'000'000).has_value());
         QVERIFY(timeline.blackFramePts(2'199'999'999).isEmpty());
-        QCOMPARE(timeline.blackFramePts(2'200'000'000), QVector<qint64>{2'099'999'999});
-        QVERIFY(!timeline.normalizeVideo(2'099'999'999, 2'210'000'000).has_value());
+        QCOMPARE(timeline.blackFramePts(2'200'000'000), QVector<qint64>{2'100'000'000});
+        QVERIFY(!timeline.normalizeVideo(2'100'000'000, 2'210'000'000).has_value());
         QCOMPARE(valueOrFail(timeline.normalizeVideo(2'200'000'000, 2'220'000'000)),
                  qint64(2'200'000'000));
     }
@@ -250,12 +292,12 @@ private slots:
         QVERIFY(timeline.start(10 * kSecond, description(), 0, 30));
         QCOMPARE(valueOrFail(timeline.normalizeVideo(10 * kSecond, 0)), qint64(0));
         const QVector<qint64> initialBlack = timeline.blackFramePts(1'100'000'000);
-        QCOMPARE(initialBlack.constLast(), qint64(1'099'999'999));
+        QCOMPARE(initialBlack.constLast(), qint64(1'100'000'000));
 
         QVERIFY(!timeline.normalizeVideo(9'900'000'000, 1'200'000'000).has_value());
 
         QVERIFY(timeline.blackFramePts(2'199'999'999).isEmpty());
-        QCOMPARE(timeline.blackFramePts(2'200'000'000), QVector<qint64>{2'099'999'999});
+        QCOMPARE(timeline.blackFramePts(2'200'000'000), QVector<qint64>{2'100'000'000});
     }
 
     void backwardArrivalAndBackwardPollDoNotCorruptTimers() {
@@ -279,10 +321,10 @@ private slots:
 
         QTest::newRow("15fps") << 15 << qint64(1'200'000'000)
                                 << QVector<qint64>({1'000'000'000, 1'066'666'666,
-                                                   1'133'333'332, 1'199'999'998});
+                                                   1'133'333'333, 1'200'000'000});
         QTest::newRow("60fps") << 60 << qint64(1'050'000'000)
                                 << QVector<qint64>({1'000'000'000, 1'016'666'666,
-                                                   1'033'333'332, 1'049'999'998});
+                                                   1'033'333'333, 1'050'000'000});
     }
 
     void blackCadenceUsesLockedFifteenAndSixtyFps() {
@@ -313,6 +355,49 @@ private slots:
         verifyStrictlyIncreasingAtMost(first, target);
         verifyStrictlyIncreasingAtMost(second, target);
         QVERIFY(second.constFirst() > first.constLast());
+    }
+
+    void rationalPhaseContinuesAcrossBoundedBatches() {
+        RecordingTimeline timeline;
+        QVERIFY(timeline.start(0, description(1920, 1080, 24'000, 1'001), 0, 30));
+        QCOMPARE(valueOrFail(timeline.normalizeVideo(0, 0)), qint64(0));
+        const qint64 target = 10 * kSecond;
+
+        const QVector<qint64> first = timeline.blackFramePts(target);
+        const QVector<qint64> second = timeline.blackFramePts(target);
+
+        QCOMPARE(first.size(), 120);
+        QVERIFY(!second.isEmpty());
+        QCOMPARE(second.constFirst(), qint64(6'005'000'000));
+        QVERIFY(second.constFirst() > first.constLast());
+        verifyStrictlyIncreasingAtMost(first, target);
+        verifyStrictlyIncreasingAtMost(second, target);
+    }
+
+    void realSampleResetsRationalCadencePhase() {
+        RecordingTimeline timeline;
+        QVERIFY(timeline.start(0, description(), 0, 30));
+        QCOMPARE(valueOrFail(timeline.normalizeVideo(0, 0)), qint64(0));
+        QCOMPARE(timeline.blackFramePts(1'040'000'000),
+                 QVector<qint64>({1'000'000'000, 1'033'333'333}));
+
+        QCOMPARE(valueOrFail(timeline.normalizeVideo(2'000'000'000, 1'100'000'000)),
+                 qint64(2'000'000'000));
+
+        QCOMPARE(timeline.blackFramePts(2'200'000'000),
+                 QVector<qint64>({3'000'000'000, 3'033'333'333,
+                                  3'066'666'666, 3'100'000'000}));
+    }
+
+    void cadenceAboveOneGigahertzClampsToOneNanosecond() {
+        RecordingTimeline timeline;
+        QVERIFY(timeline.start(0, description(1, 1, 2'000'000'000, 1), 0, 30));
+        QCOMPARE(valueOrFail(timeline.normalizeVideo(0, 0)), qint64(0));
+
+        const QVector<qint64> frames = timeline.blackFramePts(kSecond + 3);
+
+        QCOMPARE(frames, QVector<qint64>({kSecond, kSecond + 1,
+                                         kSecond + 2, kSecond + 3}));
     }
 
     void timestampArithmeticDoesNotOverflow() {

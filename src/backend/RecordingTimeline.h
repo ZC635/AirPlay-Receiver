@@ -33,7 +33,10 @@ private:
     bool m_started = false;
     qint64 m_originPts = 0;
     RecordingVideoDescription m_lockedDescription;
-    qint64 m_frameDuration = 0;
+    qint64 m_frameDurationQuotient = 0;
+    qint64 m_frameDurationRemainder = 0;
+    qint64 m_frameDurationDivisor = 1;
+    qint64 m_frameRemainderAccumulator = 0;
     std::optional<qint64> m_lastEmittedPts;
     std::optional<qint64> m_lastRealArrival;
     std::optional<qint64> m_blackAnchorPts;
