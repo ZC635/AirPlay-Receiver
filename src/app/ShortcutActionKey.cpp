@@ -8,6 +8,7 @@ QString shortcutActionKey(ShortcutAction action) {
     case ShortcutAction::ToggleToolbar: return "toggleToolbar";
     case ShortcutAction::ToggleAspectRatio: return "toggleAspectRatio";
     case ShortcutAction::ToggleVideoFit: return "toggleVideoFit";
+    case ShortcutAction::ToggleRecording: return "toggleRecording";
     }
     return {};
 }

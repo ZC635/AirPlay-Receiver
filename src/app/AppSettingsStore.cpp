@@ -38,6 +38,18 @@ VideoFrameRate frameRateFromInt(int value) {
     if (value == 30) return VideoFrameRate::Fps30;
     return VideoFrameRate::Fps30;
 }
+
+QString recordingFormatToString(RecordingFormat format) {
+    switch (format) {
+    case RecordingFormat::Mp4: return "mp4";
+    }
+    return "mp4";
+}
+
+RecordingFormat recordingFormatFromString(const QString &value) {
+    if (value == "mp4") return RecordingFormat::Mp4;
+    return RecordingFormat::Mp4;
+}
 }
 
 AppSettingsStore::AppSettingsStore(QString path)
@@ -96,6 +108,22 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
         }
         settings.setVideoQuality(vq);
     }
+    const QJsonValue recordingVal = root.value("recording");
+    if (recordingVal.isObject()) {
+        const QJsonObject recording = recordingVal.toObject();
+        const QJsonValue format = recording.value("format");
+        if (format.isString()) {
+            settings.setRecordingFormat(recordingFormatFromString(format.toString()));
+        }
+        const QJsonValue outputDirectory = recording.value("outputDirectory");
+        if (outputDirectory.isString() && !outputDirectory.toString().isEmpty()) {
+            settings.setRecordingOutputDirectory(outputDirectory.toString());
+        }
+        const QJsonValue showCompletion = recording.value("showCompletionMessage");
+        if (showCompletion.isBool()) {
+            settings.setShowRecordingCompletionMessage(showCompletion.toBool());
+        }
+    }
     return settings;
 }
 
@@ -109,6 +137,11 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
     videoQuality.insert("resolution", resolutionToString(settings.videoQuality().resolution));
     videoQuality.insert("frameRate", frameRateToInt(settings.videoQuality().frameRate));
 
+    QJsonObject recording;
+    recording.insert("format", recordingFormatToString(settings.recordingFormat()));
+    recording.insert("outputDirectory", settings.recordingOutputDirectory());
+    recording.insert("showCompletionMessage", settings.showRecordingCompletionMessage());
+
     QJsonObject root;
     root.insert("receiverName", settings.receiverName());
     root.insert("shortcuts", shortcuts);
@@ -116,6 +149,7 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
     root.insert("aspectRatioLock", settings.aspectRatioLock());
     root.insert("videoFitMode", settings.videoFitMode());
     root.insert("videoQuality", videoQuality);
+    root.insert("recording", recording);
 
     QSaveFile file(path_);
     if (!file.open(QIODevice::WriteOnly)) {
