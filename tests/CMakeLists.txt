@@ -146,6 +146,18 @@ if(AIRPLAY_WITH_UXPLAY)
         PkgConfig::GST_PBUTILS
     )
     add_test(NAME GstRecordingPipelineTest COMMAND GstRecordingPipelineTest)
+
+    add_executable(RecordingControllerTest backend/RecordingControllerTest.cpp)
+    target_link_libraries(RecordingControllerTest PRIVATE
+        airplay_app_lib
+        Qt6::Test
+        renderers
+        PkgConfig::GST_PBUTILS
+    )
+    # Launch through an already-running CMake process so the CTest-provided
+    # GStreamer PATH is inherited before Windows loads the test executable.
+    add_test(NAME RecordingControllerTest
+        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingControllerTest>)
     get_filename_component(AIRPLAY_GSTREAMER_BIN_DIR "${PKG_CONFIG_EXECUTABLE}" DIRECTORY)
 endif()
 
@@ -212,7 +224,7 @@ set(AIRPLAY_QT_TESTS
     VideoRenderGeometryTest
 )
 if(AIRPLAY_WITH_UXPLAY)
-    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest)
+    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest)
 endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
@@ -222,12 +234,13 @@ foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
 endforeach()
 
 if(AIRPLAY_WITH_UXPLAY)
-    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest PROPERTIES
+    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
         TIMEOUT 30
     )
+    set_tests_properties(RecordingControllerTest PROPERTIES TIMEOUT 90)
 endif()
 
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
