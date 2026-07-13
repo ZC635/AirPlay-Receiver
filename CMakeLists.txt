@@ -48,6 +48,8 @@ add_library(airplay_app_lib
     src/backend/ReceiverState.h
     src/backend/ReceiverStatePolicy.h
     src/backend/ReceiverStatePolicy.cpp
+    src/backend/RecordingFileTransaction.cpp
+    src/backend/RecordingFileTransaction.h
     src/backend/UxPlayCallbackDispatch.cpp
     src/backend/UxPlayCallbackDispatch.h
     src/backend/UxPlayDiscovery.cpp
