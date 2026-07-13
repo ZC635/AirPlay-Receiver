@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <future>
+#include <initializer_list>
 
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
@@ -44,6 +45,31 @@ bool writeVideoSpool(const TrackSpool &, QString *);
 bool writeAudioSpool(const TrackSpool &, QString *);
 bool remuxSpools(const TrackSpool &, const TrackSpool *, const QString &, QString *);
 bool readFirstDecodedPts(const QString &, bool, FirstDecodedPts *, QString *);
+void unrefCreatedElements(std::initializer_list<GstElement *>);
+void configureFirstSampleSink(GstElement *);
+bool isAacCaps(const GstStructure *);
+
+void countFinalizedObject(gpointer data, GObject *) {
+    ++*static_cast<int *>(data);
+}
+
+void unrefCreatedElements(std::initializer_list<GstElement *> elements) {
+    for (GstElement *element : elements) {
+        if (element) gst_object_unref(element);
+    }
+}
+
+void configureFirstSampleSink(GstElement *sink) {
+    g_object_set(sink, "sync", FALSE, "max-buffers", 1u, "drop", FALSE, nullptr);
+}
+
+bool isAacCaps(const GstStructure *structure) {
+    if (!structure || g_strcmp0(gst_structure_get_name(structure), "audio/mpeg") != 0) {
+        return false;
+    }
+    int mpegVersion = 0;
+    return gst_structure_get_int(structure, "mpegversion", &mpegVersion) && mpegVersion == 4;
+}
 
 QString busError(GstMessage *message) {
     GError *error = nullptr;
@@ -218,6 +244,8 @@ bool remuxSpools(const TrackSpool &video, const TrackSpool *audio,
     if (!pipeline || !videoSource || !videoDemux || !videoQueue || !videoParse ||
         !videoOffset || !videoCaps || !mux || !sink) {
         *errorText = QStringLiteral("required video remux element missing");
+        unrefCreatedElements({videoSource, videoDemux, videoQueue, videoParse,
+                              videoOffset, videoCaps, mux, sink});
         return false;
     }
 
@@ -271,6 +299,8 @@ bool remuxSpools(const TrackSpool &video, const TrackSpool *audio,
         audioCaps = gst_element_factory_make("capsfilter", nullptr);
         if (!audioSource || !audioDemux || !audioQueue || !audioParse || !audioOffset || !audioCaps) {
             *errorText = QStringLiteral("required audio remux element missing");
+            unrefCreatedElements({audioSource, audioDemux, audioQueue,
+                                  audioParse, audioOffset, audioCaps});
             return false;
         }
         g_object_set(audioSource, "location", audio->path.toUtf8().constData(), nullptr);
@@ -374,13 +404,14 @@ bool readFirstDecodedPts(const QString &path, bool expectAudio,
     GstElement *audioSink = expectAudio ? gst_element_factory_make("appsink", nullptr) : nullptr;
     if (!pipeline || !decode || !videoSink || (expectAudio && !audioSink)) {
         *errorText = QStringLiteral("required decoded-PTS element missing");
+        unrefCreatedElements({decode, videoSink, audioSink});
         return false;
     }
     const QByteArray uri = QUrl::fromLocalFile(path).toEncoded();
     g_object_set(decode, "uri", uri.constData(), nullptr);
-    g_object_set(videoSink, "sync", FALSE, "max-buffers", 1u, "drop", TRUE, nullptr);
+    configureFirstSampleSink(videoSink);
     if (audioSink) {
-        g_object_set(audioSink, "sync", FALSE, "max-buffers", 1u, "drop", TRUE, nullptr);
+        configureFirstSampleSink(audioSink);
         gst_bin_add_many(GST_BIN(pipeline), decode, videoSink, audioSink, nullptr);
     } else {
         gst_bin_add_many(GST_BIN(pipeline), decode, videoSink, nullptr);
@@ -463,7 +494,7 @@ bool discoverMedia(const QString &path, MediaFacts *facts, QString *errorText) {
             facts->fpsDenominator = gst_discoverer_video_info_get_framerate_denom(video);
         } else if (GST_IS_DISCOVERER_AUDIO_INFO(stream)) {
             facts->audioCount++;
-            facts->aac |= g_strcmp0(name, "audio/mpeg") == 0;
+            facts->aac |= isAacCaps(structure);
         }
         if (caps) gst_caps_unref(caps);
     }
@@ -491,6 +522,46 @@ class RecordingMuxFeasibilityTest : public QObject {
 
 private slots:
     void initTestCase() { gst_init(nullptr, nullptr); }
+
+    void createdElementCleanupUnrefsEveryElement() {
+        GstElement *first = gst_element_factory_make("fakesink", nullptr);
+        GstElement *second = gst_element_factory_make("fakesink", nullptr);
+        QVERIFY(first);
+        QVERIFY(second);
+        int finalized = 0;
+        g_object_weak_ref(G_OBJECT(first), countFinalizedObject, &finalized);
+        g_object_weak_ref(G_OBJECT(second), countFinalizedObject, &finalized);
+
+        unrefCreatedElements({first, nullptr, second});
+
+        QCOMPARE(finalized, 2);
+    }
+
+    void firstSampleSinkPreservesOldestBuffer() {
+        GstElement *sink = gst_element_factory_make("appsink", nullptr);
+        QVERIFY(sink);
+        configureFirstSampleSink(sink);
+        gboolean sync = TRUE;
+        gboolean drop = TRUE;
+        guint maxBuffers = 0;
+        g_object_get(sink, "sync", &sync, "drop", &drop, "max-buffers", &maxBuffers, nullptr);
+        QCOMPARE(sync, FALSE);
+        QCOMPARE(drop, FALSE);
+        QCOMPARE(maxBuffers, 1u);
+        gst_object_unref(sink);
+    }
+
+    void aacDetectionRequiresMpegVersionFour() {
+        GstCaps *aac = gst_caps_from_string("audio/mpeg,mpegversion=4");
+        GstCaps *mpegAudio = gst_caps_from_string("audio/mpeg,mpegversion=1");
+        GstCaps *rawAudio = gst_caps_from_string("audio/x-raw");
+        QVERIFY(isAacCaps(gst_caps_get_structure(aac, 0)));
+        QVERIFY(!isAacCaps(gst_caps_get_structure(mpegAudio, 0)));
+        QVERIFY(!isAacCaps(gst_caps_get_structure(rawAudio, 0)));
+        gst_caps_unref(rawAudio);
+        gst_caps_unref(mpegAudio);
+        gst_caps_unref(aac);
+    }
 
     void videoOnlySpoolRemuxContainsNoAudioTrack() {
         QTemporaryDir directory;
