@@ -34,7 +34,6 @@ QString lockPath(const QString &directory, const QString &id = kId) {
 QStringList temporaryPaths(const QString &directory, const QString &id) {
     return {
         QDir(directory).filePath(QStringLiteral(".airplay-recording-%1.video.mkv.part").arg(id)),
-        QDir(directory).filePath(QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(id)),
         QDir(directory).filePath(QStringLiteral(".airplay-recording-%1.mp4.part").arg(id)),
     };
 }
@@ -195,7 +194,7 @@ private slots:
         QCOMPARE(readBytes(second), QByteArray("second bytes"));
     }
 
-    void reserveCreatesDirectoryAndThreeExclusiveTemporaryFiles() {
+    void reserveCreatesOnlyRequiredVideoAndMp4TemporaryFiles() {
         QTemporaryDir parent;
         QVERIFY(parent.isValid());
         const QString output = parent.filePath(QStringLiteral("new/nested/output"));
@@ -211,8 +210,7 @@ private slots:
                  QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(kId));
         QCOMPARE(QFileInfo(reservation.temporaryMp4Path).fileName(),
                  QStringLiteral(".airplay-recording-%1.mp4.part").arg(kId));
-        for (const QString &path : {reservation.videoSpoolPath, reservation.audioSpoolPath,
-                                    reservation.temporaryMp4Path}) {
+        for (const QString &path : {reservation.videoSpoolPath, reservation.temporaryMp4Path}) {
             const QFileInfo info(path);
             QVERIFY(info.isFile());
             QCOMPARE(info.size(), 0);
@@ -222,6 +220,7 @@ private slots:
             QVERIFY(attributes & FILE_ATTRIBUTE_HIDDEN);
 #endif
         }
+        QVERIFY(!QFileInfo::exists(reservation.audioSpoolPath));
         RecordingFileTransaction::discard(reservation);
     }
 
@@ -304,7 +303,7 @@ private slots:
             QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(kId));
         const QString mp4 = directory.filePath(
             QStringLiteral(".airplay-recording-%1.mp4.part").arg(kId));
-        writeBytes(audio, "foreign");
+        writeBytes(mp4, "foreign mp4");
 
         const RecordingFileReservationResult result =
             RecordingFileTransaction::reserve(directory.path(), kLocalNow, kUuid);
@@ -312,9 +311,46 @@ private slots:
         QVERIFY(!result.reservation.has_value());
         QVERIFY(!result.error.isEmpty());
         QVERIFY(!QFileInfo::exists(video));
-        QCOMPARE(readBytes(audio), QByteArray("foreign"));
-        QVERIFY(!QFileInfo::exists(mp4));
+        QVERIFY(!QFileInfo::exists(audio));
+        QCOMPARE(readBytes(mp4), QByteArray("foreign mp4"));
         QVERIFY(!QFileInfo::exists(lockPath(directory.path())));
+    }
+
+    void reserveRejectsForeignAudioPathWithoutTouchingForeignObject() {
+        QTemporaryDir fileDirectory;
+        QVERIFY(fileDirectory.isValid());
+        const QString foreignAudio = fileDirectory.filePath(
+            QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(kId));
+        writeBytes(foreignAudio, "foreign audio bytes");
+
+        const RecordingFileReservationResult fileResult =
+            RecordingFileTransaction::reserve(fileDirectory.path(), kLocalNow, kUuid);
+
+        QVERIFY(!fileResult.reservation.has_value());
+        QVERIFY2(fileResult.error.contains(foreignAudio), qPrintable(fileResult.error));
+        QCOMPARE(readBytes(foreignAudio), QByteArray("foreign audio bytes"));
+        for (const QString &path : temporaryPaths(fileDirectory.path(), kId)) {
+            QVERIFY(!QFileInfo::exists(path));
+        }
+        QVERIFY(!QFileInfo::exists(lockPath(fileDirectory.path())));
+
+        QTemporaryDir directoryDirectory;
+        QVERIFY(directoryDirectory.isValid());
+        const QString foreignAudioDirectory = directoryDirectory.filePath(
+            QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(kId));
+        QVERIFY(QDir().mkdir(foreignAudioDirectory));
+
+        const RecordingFileReservationResult directoryResult =
+            RecordingFileTransaction::reserve(directoryDirectory.path(), kLocalNow, kUuid);
+
+        QVERIFY(!directoryResult.reservation.has_value());
+        QVERIFY2(directoryResult.error.contains(foreignAudioDirectory),
+                 qPrintable(directoryResult.error));
+        QVERIFY(QFileInfo(foreignAudioDirectory).isDir());
+        for (const QString &path : temporaryPaths(directoryDirectory.path(), kId)) {
+            QVERIFY(!QFileInfo::exists(path));
+        }
+        QVERIFY(!QFileInfo::exists(lockPath(directoryDirectory.path())));
     }
 
     void commitRejectsEmptyMp4ResultWithSpecificPathAndReason() {
@@ -485,6 +521,7 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const RecordingFileReservation reservation = reserveOrFail(directory.path());
+        writeBytes(reservation.audioSpoolPath, "optional audio");
 
         RecordingFileTransaction::discard(reservation);
 
@@ -559,10 +596,10 @@ private slots:
 
         const QStringList deleted =
             RecordingFileTransaction::cleanupStaleTemporaryFiles(directory.path());
-        const bool allTempsRemain =
+        const bool allRequiredTempsRemain =
             QFileInfo::exists(reservation.videoSpoolPath) &&
-            QFileInfo::exists(reservation.audioSpoolPath) &&
             QFileInfo::exists(reservation.temporaryMp4Path);
+        const bool optionalAudioAbsent = !QFileInfo::exists(reservation.audioSpoolPath);
         const bool lockExistsWhileReserved = QFileInfo::exists(lockPath(directory.path()));
 #ifdef Q_OS_WIN
         const DWORD lockAttributes = GetFileAttributesW(
@@ -573,7 +610,8 @@ private slots:
         RecordingFileTransaction::discard(reservation);
 
         QVERIFY(deleted.isEmpty());
-        QVERIFY(allTempsRemain);
+        QVERIFY(allRequiredTempsRemain);
+        QVERIFY(optionalAudioAbsent);
         QVERIFY(lockExistsWhileReserved);
 #ifdef Q_OS_WIN
         QVERIFY(lockIsHidden);
@@ -642,6 +680,9 @@ private slots:
         for (const QString &path : temporaryPaths(directory.path(), helperId)) {
             QVERIFY2(QFile::remove(path), qPrintable(path));
         }
+        const QString optionalAudio = directory.filePath(
+            QStringLiteral(".airplay-recording-%1.audio.mka.part").arg(helperId));
+        if (QFileInfo::exists(optionalAudio)) QVERIFY(QFile::remove(optionalAudio));
         const QString exactLock = lockPath(directory.path(), helperId);
         const QString nearLock = directory.filePath(QStringLiteral(
             ".airplay-recording-gggggggggggggggggggggggggggggggg.lock"));
