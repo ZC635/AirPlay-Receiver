@@ -93,6 +93,12 @@ const QRegularExpression &temporaryFilePattern() {
     return pattern;
 }
 
+const QRegularExpression &lockFilePattern() {
+    static const QRegularExpression pattern(QStringLiteral(
+        R"(^\.airplay-recording-([0-9a-f]{32})\.lock$)"));
+    return pattern;
+}
+
 QString reservationLockPath(const RecordingFileReservation &reservation) {
     for (const QString &path : {reservation.videoSpoolPath, reservation.audioSpoolPath,
                                 reservation.temporaryMp4Path}) {
@@ -331,8 +337,14 @@ QStringList RecordingFileTransaction::cleanupStaleTemporaryFiles(const QString &
         QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
     for (const QFileInfo &entry : entries) {
         const QRegularExpressionMatch match = temporaryFilePattern().match(entry.fileName());
-        if (entry.isSymLink() || !entry.isFile() || !match.hasMatch()) continue;
-        pathsById[match.captured(1)].append(QDir::cleanPath(entry.absoluteFilePath()));
+        if (!entry.isSymLink() && entry.isFile() && match.hasMatch()) {
+            pathsById[match.captured(1)].append(QDir::cleanPath(entry.absoluteFilePath()));
+            continue;
+        }
+        const QRegularExpressionMatch lockMatch = lockFilePattern().match(entry.fileName());
+        if (!entry.isSymLink() && entry.isFile() && lockMatch.hasMatch()) {
+            pathsById[lockMatch.captured(1)];
+        }
     }
 
     QStringList deleted;
@@ -340,7 +352,17 @@ QStringList RecordingFileTransaction::cleanupStaleTemporaryFiles(const QString &
         const QString transactionLockPath = lockPath(outputDirectory.absolutePath(), group.key());
         QLockFile lock(transactionLockPath);
         configureLock(&lock);
-        if (!lock.tryLock(0)) continue;
+        if (!lock.tryLock(0)) {
+            if (lock.error() != QLockFile::LockFailedError) {
+                qWarning().noquote()
+                    << QStringLiteral("Could not inspect recording lock \"%1\" during stale cleanup (error %2)")
+                           .arg(transactionLockPath)
+                           .arg(static_cast<int>(lock.error()));
+            }
+            continue;
+        }
+        const QString lockHideError = hideReservationLock(transactionLockPath);
+        if (!lockHideError.isEmpty()) qWarning().noquote() << lockHideError;
         for (const QString &path : group.value()) {
             if (QFile::remove(path)) {
                 deleted.append(path);
