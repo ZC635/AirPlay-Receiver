@@ -82,6 +82,10 @@ if(WIN32)
 endif()
 add_test(NAME RecordingFileTransactionTest COMMAND RecordingFileTransactionTest)
 
+add_executable(RecordingTimelineTest backend/RecordingTimelineTest.cpp)
+target_link_libraries(RecordingTimelineTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME RecordingTimelineTest COMMAND RecordingTimelineTest)
+
 add_executable(UxPlayReceiverConfigTest backend/UxPlayReceiverConfigTest.cpp)
 target_link_libraries(UxPlayReceiverConfigTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
@@ -182,6 +186,7 @@ set(AIRPLAY_QT_TESTS
     ReceiverStatePolicyTest
     AirPlayReceiverTest
     RecordingFileTransactionTest
+    RecordingTimelineTest
     UxPlayReceiverConfigTest
     UxPlayDiscoveryTest
     VideoRendererLifecycleTest
