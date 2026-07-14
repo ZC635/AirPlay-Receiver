@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -11,6 +12,10 @@
 
 #include "backend/AirPlayReceiver.h"
 #include "backend/UxPlayCallbackDispatch.h"
+#if AIRPLAY_WITH_UXPLAY
+#include "backend/RecordingController.h"
+#include <gst/gst.h>
+#endif
 
 class MdnsPublishing;
 class UxPlayDiscovery;
@@ -23,6 +28,10 @@ struct UxPlayReceiverConfig {
     int basePort = 0;
     VideoQualitySettings videoQuality;
     MdnsPublishing *mdnsPublisher = nullptr;
+#if AIRPLAY_WITH_UXPLAY
+    RecordingControllerHooks recordingControllerHooks;
+    std::function<void(const QString &)> rendererCallObserver;
+#endif
 };
 
 class UxPlayReceiver : public AirPlayReceiver {
@@ -64,6 +73,9 @@ public:
         QMutex m_mutex;
         QWaitCondition m_idle;
     };
+
+    static void videoSampleTap(GstSample *sample, void *context);
+    static void audioSampleTap(GstSample *sample, void *context);
 
     void setStateFromUxPlayCallback(ReceiverState state);
     void setStateFromUxPlayCallback(ReceiverState state, quint64 generation);
@@ -115,6 +127,12 @@ private:
     void setError(QString error);
 #if AIRPLAY_WITH_UXPLAY
     void cleanupUxPlay();
+    void endRecordingSession(bool canFinalize, bool waitForIdle);
+    void observeRendererCall(const QString &call) const;
+    void installVideoSampleTap();
+    void installAudioSampleTap();
+    void clearVideoSampleTap();
+    void clearAudioSampleTap();
     void applyVideoFitModeToRenderer();
     void resetVideoFrameBridge();
     void attachVideoFrameBridgeToCurrentPipeline();
@@ -134,12 +152,21 @@ private:
     std::atomic_bool m_videoRendererStopped = false;
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_acceptingCallbacks = false;
+    std::atomic_bool m_acceptingVideoTapSamples = false;
     std::atomic<quint64> m_callbackGeneration = 0;
     QObject *m_glibTimer = nullptr;
     QRecursiveMutex m_rendererMutex;
     UxPlayCallbackDispatch m_callbackDispatch;
     CallbackContext *m_callbackContext = nullptr;
     std::vector<std::unique_ptr<CallbackContext>> m_callbackContexts;
+    std::unique_ptr<CallbackContext> m_videoTapContext;
+    std::unique_ptr<CallbackContext> m_audioTapContext;
+    std::unique_ptr<RecordingController> m_recordingController;
+    bool m_videoTapRegistered = false;
+    bool m_audioTapRegistered = false;
+    bool m_videoRendererInitialized = false;
+    bool m_audioRendererInitialized = false;
+    bool m_videoIsH265 = false;
     UxPlayDiscovery *m_discovery = nullptr;
 #endif
 };

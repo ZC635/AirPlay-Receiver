@@ -15,6 +15,61 @@ class VideoRendererLifecycleTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void tapRegistrationCanBeReestablishedAcrossRendererRecreation() {
+#if AIRPLAY_WITH_UXPLAY
+        if (!gstreamer_init()) {
+            QSKIP("GStreamer is not available in this environment");
+        }
+        auto logger = std::unique_ptr<logger_t, decltype(&logger_destroy)>(
+            logger_init(), logger_destroy);
+        QVERIFY(logger != nullptr);
+        logger_set_callback(logger.get(), [](void *, int, const char *) {}, nullptr);
+        struct RendererCleanup {
+            ~RendererCleanup() {
+                video_renderer_set_sample_callback(nullptr, nullptr);
+                video_renderer_destroy();
+            }
+        } cleanup;
+        const auto tap = [](GstSample *, void *) {};
+        const auto verifySelectedPipeline = [](const char *displayName,
+                                               const char *recordingName) {
+            GstElement *pipeline = static_cast<GstElement *>(
+                video_renderer_get_pipeline());
+            QVERIFY(pipeline != nullptr);
+            GstElement *display = gst_bin_get_by_name(GST_BIN(pipeline), displayName);
+            GstElement *recording = gst_bin_get_by_name(GST_BIN(pipeline), recordingName);
+            QVERIFY(display != nullptr);
+            QVERIFY(recording != nullptr);
+            gst_object_unref(display);
+            gst_object_unref(recording);
+        };
+        videoflip_t videoFlip[2] = {NONE, NONE};
+
+        video_renderer_set_sample_callback(tap, nullptr);
+        QCOMPARE(video_renderer_init(logger.get(), "Tap Recreate H264", videoFlip,
+                                      "h264parse", "", "decodebin", "videoconvert",
+                                      "appsink", "", false, false, true, false,
+                                      3, nullptr), 0);
+        video_renderer_start();
+        QCOMPARE(video_renderer_choose_codec(false, false), 0);
+        verifySelectedPipeline("appsink_h264", "recording_video_sink_h264");
+        video_renderer_stop();
+        video_renderer_set_sample_callback(nullptr, nullptr);
+        video_renderer_destroy();
+
+        video_renderer_set_sample_callback(tap, nullptr);
+        QCOMPARE(video_renderer_init(logger.get(), "Tap Recreate H265", videoFlip,
+                                      "h264parse", "", "decodebin", "videoconvert",
+                                      "appsink", "", false, false, true, false,
+                                      3, nullptr), 0);
+        video_renderer_start();
+        QCOMPARE(video_renderer_choose_codec(false, true), 0);
+        verifySelectedPipeline("appsink_h265", "recording_video_sink_h265");
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
+
     void initReturnsErrorOnInvalidPlaybinVersion() {
 #if AIRPLAY_WITH_UXPLAY
         if (!gstreamer_init()) {
