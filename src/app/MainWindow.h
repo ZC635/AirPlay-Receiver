@@ -50,6 +50,9 @@ private:
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void applyAspectRatioLock(bool enabled);
     void applyVideoFitMode(bool enabled);
+    void toggleRecording();
+    void updateRecordingUi();
+    void handleRecordingStateChanged(RecordingState state);
     void updateAspectVideoSize(int width, int height);
     void updateAspectVideoSizeFromFrame(const QImage &frame);
     void clearDecodedFrameSizeForAspectLock();

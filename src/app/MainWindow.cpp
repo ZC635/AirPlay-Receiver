@@ -118,6 +118,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     connect(toolbar_, &ToolbarWidget::settingsRequested, this, &MainWindow::showSettingsDialog);
     connect(toolbar_, &ToolbarWidget::aspectRatioToggled, this, &MainWindow::applyAspectRatioLock);
     connect(toolbar_, &ToolbarWidget::videoFitToggled, this, &MainWindow::applyVideoFitMode);
+    connect(toolbar_, &ToolbarWidget::recordingToggledRequested, this, &MainWindow::toggleRecording);
 
     if (receiver_ != nullptr) {
         connect(receiver_, &AirPlayReceiver::videoSizeChanged, this, [this](int width, int height) {
@@ -142,9 +143,16 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
             }
         });
         connect(receiver_, &AirPlayReceiver::volumeChanged, this, &MainWindow::syncVolumeFromReceiver);
+        connect(receiver_, &AirPlayReceiver::recordingAvailabilityChanged, this,
+                [this](bool) { updateRecordingUi(); });
+        connect(receiver_, &AirPlayReceiver::recordingStateChanged,
+                this, &MainWindow::handleRecordingStateChanged);
+        updateRecordingUi();
         if (receiver_->receiverName() != settings_.receiverName()) {
             receiver_->applyReceiverName(settings_.receiverName());
         }
+    } else {
+        updateRecordingUi();
     }
 
     applyAspectRatioLock(settings_.aspectRatioLock());
@@ -259,6 +267,9 @@ void MainWindow::handleShortcut(ShortcutAction action) {
     case ShortcutAction::ToggleVideoFit:
         applyVideoFitMode(!videoFitMode_);
         break;
+    case ShortcutAction::ToggleRecording:
+        toggleRecording();
+        break;
     }
 }
 
@@ -268,10 +279,12 @@ void MainWindow::applyShortcutTooltips() {
     const QString pinShortcut = settings_.shortcutFor(ShortcutAction::ToggleAlwaysOnTop).toString(QKeySequence::NativeText);
     const QString aspectShortcut = settings_.shortcutFor(ShortcutAction::ToggleAspectRatio).toString(QKeySequence::NativeText);
     const QString videoFitShortcut = settings_.shortcutFor(ShortcutAction::ToggleVideoFit).toString(QKeySequence::NativeText);
+    const QString recordingShortcut = settings_.shortcutFor(ShortcutAction::ToggleRecording).toString(QKeySequence::NativeText);
     toolbar_->setVolumeShortcutTooltip(QString("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
     toolbar_->setAlwaysOnTopShortcutTooltip(QString("Pin: %1").arg(pinShortcut));
     toolbar_->setAspectRatioShortcutTooltip(QString("Aspect: %1").arg(aspectShortcut));
     toolbar_->setVideoFitShortcutTooltip(QString("Fit: %1").arg(videoFitShortcut));
+    toolbar_->setRecordingShortcutTooltip(QString("Record: %1").arg(recordingShortcut));
 }
 
 bool MainWindow::registerHotkeys() {
@@ -563,6 +576,55 @@ void MainWindow::applyVideoFitMode(bool enabled) {
     if (changed && !saveSettings()) {
         statusLabel_->setText("Could not save settings");
     }
+}
+
+void MainWindow::toggleRecording() {
+    QPointer<AirPlayReceiver> receiver = receiver_;
+    if (receiver == nullptr) {
+        statusLabel_->setText("No recordable mirrored content");
+        updateRecordingUi();
+        return;
+    }
+
+    switch (receiver->recordingState()) {
+    case RecordingState::Idle: {
+        if (!receiver->recordingAvailable()) {
+            statusLabel_->setText("No recordable mirrored content");
+            updateRecordingUi();
+            return;
+        }
+
+        const RecordingOptions options{
+            settings_.recordingOutputDirectory(),
+            settings_.recordingFormat()};
+        const RecordingStartResult result = receiver->startRecording(options);
+        if (!result.accepted) {
+            statusLabel_->setText(result.error.isEmpty()
+                                      ? QString("Could not start recording")
+                                      : result.error);
+        }
+        updateRecordingUi();
+        return;
+    }
+    case RecordingState::Recording:
+        receiver->stopRecording();
+        updateRecordingUi();
+        return;
+    case RecordingState::Finalizing:
+        return;
+    }
+}
+
+void MainWindow::updateRecordingUi() {
+    const QPointer<AirPlayReceiver> receiver = receiver_;
+    toolbar_->setRecordingUi(
+        receiver == nullptr ? RecordingState::Idle : receiver->recordingState(),
+        receiver != nullptr && receiver->recordingAvailable());
+}
+
+void MainWindow::handleRecordingStateChanged(RecordingState state) {
+    Q_UNUSED(state);
+    updateRecordingUi();
 }
 
 void MainWindow::updateAspectVideoSize(int width, int height) {

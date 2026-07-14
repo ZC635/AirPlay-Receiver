@@ -112,6 +112,15 @@ void verifyWindowAspectRatio(const QWidget &widget, double expectedRatio) {
                             .arg(expectedRatio)));
 }
 
+class RejectingRecordingReceiver final : public FakeAirPlayReceiver {
+public:
+    RecordingStartResult startRecording(const RecordingOptions &options) override {
+        lastRecordingOptions = options;
+        ++startRecordingCount;
+        return {false, QStringLiteral("Output folder unavailable")};
+    }
+};
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -201,6 +210,196 @@ private slots:
 
         QVERIFY(window.isToolbarVisible());
     }
+
+    void recordingUiQueriesReceiverInsteadOfSignalArguments() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(!button->isEnabled());
+
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(button->isEnabled());
+        QCOMPARE(button->text(), QString("Record"));
+
+        emit receiver.recordingAvailabilityChanged(false);
+        QVERIFY(button->isEnabled());
+        emit receiver.recordingStateChanged(RecordingState::Finalizing);
+        QCOMPARE(button->text(), QString("Record"));
+        QVERIFY(!button->isChecked());
+    }
+
+    void recordingButtonStartsWithSettingsSnapshot() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setRecordingOutputDirectory("C:/recording-snapshot");
+        settings.setRecordingFormat(RecordingFormat::Mp4);
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(settings, nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(button != nullptr);
+
+        button->click();
+
+        QCOMPARE(receiver.startRecordingCount, 1);
+        QCOMPARE(receiver.lastRecordingOptions.outputDirectory,
+                 settings.recordingOutputDirectory());
+        QCOMPARE(receiver.lastRecordingOptions.format, RecordingFormat::Mp4);
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        QCOMPARE(button->text(), QString("Stop"));
+        QVERIFY(button->isChecked());
+    }
+
+    void recordingRemainsStoppableWhenAvailabilityDrops() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(button != nullptr);
+        button->click();
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+
+        receiver.setRecordingAvailableForTest(false);
+
+        QVERIFY(button->isEnabled());
+        QCOMPARE(button->text(), QString("Stop"));
+        button->click();
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+    }
+
+    void rapidRecordingStopClicksCallReceiverOnce() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(button != nullptr);
+        button->click();
+
+        button->click();
+        button->click();
+
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+        QVERIFY(!button->isEnabled());
+        QCOMPARE(button->text(), QString("Saving..."));
+    }
+
+    void unavailableRecordingShortcutShowsExactStatus() {
+        FakeAirPlayReceiver receiver;
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
+        auto *status = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(status != nullptr);
+
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+
+        QCOMPARE(status->text(), QString("No recordable mirrored content"));
+        QCOMPARE(receiver.startRecordingCount, 0);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+    }
+
+    void recordingShortcutWithoutReceiverShowsExactStatus() {
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys);
+        auto *status = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(status != nullptr);
+
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+
+        QCOMPARE(status->text(), QString("No recordable mirrored content"));
+    }
+
+    void recordingShortcutAfterReceiverDestructionIsSafe() {
+        auto receiver = std::make_unique<FakeAirPlayReceiver>();
+        receiver->setRecordingAvailableForTest(true);
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys, receiver.get());
+        auto *status = window.findChild<QLabel *>("receiverStatusLabel");
+        auto *button = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(status != nullptr);
+        QVERIFY(button != nullptr);
+        QVERIFY(button->isEnabled());
+        receiver.reset();
+
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+
+        QCOMPARE(status->text(), QString("No recordable mirrored content"));
+        QVERIFY(!button->isEnabled());
+        QVERIFY(!button->isChecked());
+    }
+
+    void recordingTooltipUsesConfiguredNativeShortcut() {
+        AppSettings defaults = AppSettings::defaults();
+        MainWindow defaultWindow(defaults, nullptr);
+        auto *defaultButton = defaultWindow.findChild<QToolButton *>("recordingButton");
+        QVERIFY(defaultButton != nullptr);
+        QCOMPARE(defaultButton->toolTip(), QString("Record: %1").arg(
+            defaults.shortcutFor(ShortcutAction::ToggleRecording)
+                .toString(QKeySequence::NativeText)));
+
+        AppSettings custom = AppSettings::defaults();
+        custom.setShortcut(ShortcutAction::ToggleRecording,
+                           QKeySequence("Ctrl+Shift+R"));
+        MainWindow customWindow(custom, nullptr);
+        auto *customButton = customWindow.findChild<QToolButton *>("recordingButton");
+        QVERIFY(customButton != nullptr);
+        QCOMPARE(customButton->toolTip(), QString("Record: %1").arg(
+            custom.shortcutFor(ShortcutAction::ToggleRecording)
+                .toString(QKeySequence::NativeText)));
+    }
+
+    void recordingStartRejectionShowsSpecificError() {
+        RejectingRecordingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("recordingButton");
+        auto *status = window.findChild<QLabel *>("receiverStatusLabel");
+        QVERIFY(button != nullptr);
+        QVERIFY(status != nullptr);
+
+        button->click();
+
+        QCOMPARE(receiver.startRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(status->text(), QString("Output folder unavailable"));
+        QCOMPARE(button->text(), QString("Record"));
+    }
+
+    void recordingShortcutStopsButDoesNothingWhileFinalizing() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
+
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+        QCOMPARE(receiver.startRecordingCount, 1);
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+        QCOMPARE(receiver.stopRecordingCount, 1);
+    }
+
+    void recordingActionsDoNotForceToolbarVisibility() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        receiver.forceState(ReceiverState::Connected);
+        FakeHotkeyService hotkeys;
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
+        QVERIFY(!window.isToolbarVisible());
+
+        emit hotkeys.activated(ShortcutAction::ToggleToolbar);
+        QVERIFY(window.isToolbarVisible());
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+        QVERIFY(window.isToolbarVisible());
+
+        emit hotkeys.activated(ShortcutAction::ToggleToolbar);
+        QVERIFY(!window.isToolbarVisible());
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+        QVERIFY(!window.isToolbarVisible());
+    }
+
 
     void leavingConnectedStateClearsVideoSurface() {
         FakeAirPlayReceiver receiver;
