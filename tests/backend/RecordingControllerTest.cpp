@@ -15,6 +15,7 @@
 #include <QUrl>
 
 #include <atomic>
+#include <functional>
 #include <thread>
 #include <stdexcept>
 
@@ -119,6 +120,7 @@ struct FakeEnvironment {
     QString commitError;
     QStringList reservedDirectories;
     QStringList removedOwnedFinalPaths;
+    QStringList successfulOwnedFinalRemovals;
     QVector<GstRecordingPipelineConfig> startedConfigs;
     QVector<qint64> videoPts;
     QVector<qint64> audioPts;
@@ -129,8 +131,22 @@ struct FakeEnvironment {
     std::atomic_bool blockPipelineStart{false};
     std::atomic_bool pipelineStartEntered{false};
     std::atomic_bool releasePipelineStart{false};
+    std::atomic_bool blockVideoPush{false};
+    std::atomic_bool videoPushEntered{false};
+    std::atomic_bool releaseVideoPush{false};
+    std::atomic_int videoPushCount{0};
+    std::atomic_int videoPushCountAtFinalize{-1};
+    std::atomic_int videoPushCountAtWorkerFinalizeEntry{-1};
+    std::atomic_int videoPushCountAtAbort{-1};
+    std::atomic_int removeOwnedFinalFailuresRemaining{0};
+    std::atomic_int removeOwnedFinalThrowsRemaining{0};
+    std::function<void()> afterVideoPush;
     std::atomic_int scheduledDrainCount{0};
     std::atomic<qint64> monotonicNow{0};
+    std::atomic_bool blockMonotonicClock{false};
+    std::atomic_bool monotonicClockEntered{false};
+    std::atomic_bool releaseMonotonicClock{false};
+    std::atomic_bool throwFromMonotonicClock{false};
     std::atomic_int observedFinalizeDeadline{0};
     std::atomic_bool blockCommit{false};
     std::atomic_bool commitEntered{false};
@@ -184,10 +200,23 @@ struct FakeEnvironment {
         hooks.now = [] { return QDateTime(QDate(2026, 7, 14), QTime(10, 0)); };
         hooks.uuid = [] { return QUuid(QStringLiteral("{11111111-2222-3333-4444-555555555555}")); };
         hooks.monotonicNanoseconds = [this] {
+            if (throwFromMonotonicClock.load(std::memory_order_acquire)) {
+                throw std::runtime_error("injected recording clock failure");
+            }
+            monotonicClockEntered.store(true, std::memory_order_release);
+            while (blockMonotonicClock.load(std::memory_order_acquire) &&
+                   !releaseMonotonicClock.load(std::memory_order_acquire)) {
+                QThread::yieldCurrentThread();
+            }
             return monotonicNow.load(std::memory_order_acquire);
         };
         hooks.drainInvocationScheduled = [this] {
             scheduledDrainCount.fetch_add(1, std::memory_order_relaxed);
+        };
+        hooks.workerFinalizeEntered = [this] {
+            videoPushCountAtWorkerFinalizeEntry.store(
+                videoPushCount.load(std::memory_order_acquire),
+                std::memory_order_release);
         };
         hooks.createPipeline = [this] {
             pipelineFactoryThread.store(QThread::currentThread(), std::memory_order_release);
@@ -209,8 +238,17 @@ struct FakeEnvironment {
                 return true;
             };
             session.pushVideo = [this](GstSample *, qint64 pts, QString *) {
-                QMutexLocker locker(&mutex);
-                videoPts.append(pts);
+                {
+                    QMutexLocker locker(&mutex);
+                    videoPts.append(pts);
+                }
+                videoPushCount.fetch_add(1, std::memory_order_acq_rel);
+                videoPushEntered.store(true, std::memory_order_release);
+                while (blockVideoPush.load(std::memory_order_acquire) &&
+                       !releaseVideoPush.load(std::memory_order_acquire)) {
+                    QThread::msleep(1);
+                }
+                if (afterVideoPush) afterVideoPush();
                 return true;
             };
             session.pushAudio = [this](GstSample *, qint64 pts, QString *) {
@@ -225,6 +263,9 @@ struct FakeEnvironment {
             };
             session.finalize = [this](int deadline, const std::atomic_bool &cancelled) {
                 observedFinalizeDeadline.store(deadline, std::memory_order_release);
+                videoPushCountAtFinalize.store(
+                    videoPushCount.load(std::memory_order_acquire),
+                    std::memory_order_release);
                 {
                     QMutexLocker locker(&mutex);
                     ++finalizeCalls;
@@ -238,12 +279,28 @@ struct FakeEnvironment {
             session.abort = [this] {
                 QMutexLocker locker(&mutex);
                 ++abortCalls;
+                videoPushCountAtAbort.store(
+                    videoPushCount.load(std::memory_order_acquire),
+                    std::memory_order_release);
             };
             return session;
         };
         hooks.removeOwnedFinal = [this](const QString &path) {
             QMutexLocker locker(&mutex);
             removedOwnedFinalPaths.append(path);
+            int throwsRemaining = removeOwnedFinalThrowsRemaining.load(
+                std::memory_order_acquire);
+            if (throwsRemaining > 0) {
+                removeOwnedFinalThrowsRemaining.fetch_sub(1, std::memory_order_acq_rel);
+                throw std::runtime_error("injected owned final removal failure");
+            }
+            int failuresRemaining = removeOwnedFinalFailuresRemaining.load(
+                std::memory_order_acquire);
+            if (failuresRemaining > 0) {
+                removeOwnedFinalFailuresRemaining.fetch_sub(1, std::memory_order_acq_rel);
+                return false;
+            }
+            successfulOwnedFinalRemovals.append(path);
             return true;
         };
         return hooks;
@@ -263,6 +320,9 @@ struct FakeEnvironment {
     }
     QStringList directories() const { QMutexLocker locker(&mutex); return reservedDirectories; }
     QStringList removedFinals() const { QMutexLocker locker(&mutex); return removedOwnedFinalPaths; }
+    QStringList successfulRemovals() const {
+        QMutexLocker locker(&mutex); return successfulOwnedFinalRemovals;
+    }
 };
 
 void observeVideo(RecordingController &controller, GstSample *sample = nullptr)
@@ -576,7 +636,7 @@ private slots:
     void boundedQueuesDropImmediatelyAndCoalesceDrainInvocation()
     {
         static_assert(RecordingController::VideoQueueCapacity > 0);
-        static_assert(RecordingController::AudioQueueCapacity > 0);
+        static_assert(RecordingController::AudioQueueCapacity == 64);
         FakeEnvironment environment;
         environment.blockPipelineStart.store(true, std::memory_order_release);
         RecordingController controller(30, environment.hooks());
@@ -615,8 +675,118 @@ private slots:
 
         environment.releasePipelineStart.store(true, std::memory_order_release);
         QTRY_VERIFY(environment.pushedVideoPts().size() > 0);
-        QCOMPARE(environment.scheduledDrainCount.load(std::memory_order_acquire), 1);
+        QTRY_VERIFY(environment.scheduledDrainCount.load(std::memory_order_acquire) > 1);
         controller.discard();
+    }
+
+    void drainAlternatesAudioWhileVideoProducerKeepsQueueNonEmpty()
+    {
+        FakeEnvironment environment;
+        environment.blockPipelineStart.store(true, std::memory_order_release);
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        GstSample *first = makeVideoSample(640, 360, 0);
+        QVERIFY(controller.tryEnqueueVideoSample(first));
+        gst_sample_unref(first);
+        QTRY_VERIFY(environment.pipelineStartEntered.load(std::memory_order_acquire));
+
+        std::atomic_bool checkpointReached{false};
+        std::atomic_bool releaseCheckpoint{false};
+        environment.afterVideoPush = [&] {
+            const int count = environment.videoPushCount.load(std::memory_order_acquire);
+            if (count < 32) {
+                GstSample *replacement = makeVideoSample(
+                    640, 360, static_cast<GstClockTime>(count + 2) * GST_SECOND);
+                (void)controller.tryEnqueueVideoSample(replacement);
+                gst_sample_unref(replacement);
+            }
+            if (count == 4) {
+                checkpointReached.store(true, std::memory_order_release);
+                while (!releaseCheckpoint.load(std::memory_order_acquire)) {
+                    QThread::yieldCurrentThread();
+                }
+            }
+        };
+
+        GstSample *audio = makeAudioSample(GST_SECOND);
+        QVERIFY(controller.tryEnqueueAudioSample(audio));
+        gst_sample_unref(audio);
+        GstSample *video = makeVideoSample(640, 360, GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(video));
+        gst_sample_unref(video);
+        environment.releasePipelineStart.store(true, std::memory_order_release);
+
+        QTRY_VERIFY(checkpointReached.load(std::memory_order_acquire));
+        const qsizetype audioCountAtCheckpoint = environment.pushedAudioPts().size();
+        releaseCheckpoint.store(true, std::memory_order_release);
+        QCOMPARE(audioCountAtCheckpoint, qsizetype(1));
+        controller.discard();
+    }
+
+    void queuedStopRunsBeforeAnEntireFullVideoQueueIsDrained()
+    {
+        FakeEnvironment environment;
+        environment.blockPipelineStart.store(true, std::memory_order_release);
+        environment.blockVideoPush.store(true, std::memory_order_release);
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        GstSample *first = makeVideoSample(640, 360, 0);
+        QVERIFY(controller.tryEnqueueVideoSample(first));
+        gst_sample_unref(first);
+        QTRY_VERIFY(environment.pipelineStartEntered.load(std::memory_order_acquire));
+        for (qsizetype index = 0; index < RecordingController::VideoQueueCapacity; ++index) {
+            GstSample *video = makeVideoSample(
+                640, 360, static_cast<GstClockTime>(index + 1) * GST_SECOND);
+            QVERIFY(controller.tryEnqueueVideoSample(video));
+            gst_sample_unref(video);
+        }
+        environment.releasePipelineStart.store(true, std::memory_order_release);
+        QTRY_VERIFY(environment.videoPushEntered.load(std::memory_order_acquire));
+
+        controller.stop();
+        environment.releaseVideoPush.store(true, std::memory_order_release);
+        QTRY_COMPARE(controller.state(), RecordingState::Idle);
+        QVERIFY(environment.videoPushCountAtWorkerFinalizeEntry.load(
+                    std::memory_order_acquire) <
+                RecordingController::VideoQueueCapacity);
+        QCOMPARE(environment.videoPushCountAtFinalize.load(std::memory_order_acquire),
+                 int(RecordingController::VideoQueueCapacity));
+    }
+
+    void synchronousDiscardRunsBeforeAnEntireFullVideoQueueIsDrained()
+    {
+        FakeEnvironment environment;
+        environment.blockPipelineStart.store(true, std::memory_order_release);
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        GstSample *first = makeVideoSample(640, 360, 0);
+        QVERIFY(controller.tryEnqueueVideoSample(first));
+        gst_sample_unref(first);
+        QTRY_VERIFY(environment.pipelineStartEntered.load(std::memory_order_acquire));
+        for (qsizetype index = 0; index < RecordingController::VideoQueueCapacity; ++index) {
+            GstSample *video = makeVideoSample(
+                640, 360, static_cast<GstClockTime>(index + 1) * GST_SECOND);
+            QVERIFY(controller.tryEnqueueVideoSample(video));
+            gst_sample_unref(video);
+        }
+        environment.afterVideoPush = [&controller] {
+            while (controller.state() != RecordingState::Idle) {
+                QThread::yieldCurrentThread();
+            }
+        };
+        environment.releasePipelineStart.store(true, std::memory_order_release);
+        QTRY_VERIFY(environment.videoPushEntered.load(std::memory_order_acquire));
+
+        controller.discard();
+        QCOMPARE(controller.state(), RecordingState::Idle);
+        QVERIFY(environment.videoPushCountAtAbort.load(std::memory_order_acquire) <
+                RecordingController::VideoQueueCapacity);
     }
 
     void blackFramesStartAtOneSecondAndRealVideoResetsPause()
@@ -651,6 +821,57 @@ private slots:
         controller.discard();
     }
 
+    void queuedVideoUsesTapArrivalInsteadOfWorkerConsumptionTime()
+    {
+        FakeEnvironment environment;
+        environment.blockPipelineStart.store(true, std::memory_order_release);
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        environment.monotonicNow.store(0, std::memory_order_release);
+        GstSample *first = makeVideoSample(640, 360, 0);
+        QVERIFY(controller.tryEnqueueVideoSample(first));
+        gst_sample_unref(first);
+        QTRY_VERIFY(environment.pipelineStartEntered.load(std::memory_order_acquire));
+
+        environment.monotonicNow.store(100'000'000, std::memory_order_release);
+        GstSample *second = makeVideoSample(640, 360, 100'000'000);
+        QVERIFY(controller.tryEnqueueVideoSample(second));
+        gst_sample_unref(second);
+        environment.monotonicNow.store(2 * GST_SECOND, std::memory_order_release);
+        environment.releasePipelineStart.store(true, std::memory_order_release);
+
+        QTRY_COMPARE(environment.pushedVideoPts(), QVector<qint64>{100'000'000});
+        QTRY_VERIFY(!environment.pushedBlackPts().isEmpty());
+        QCOMPARE(environment.pushedBlackPts().constFirst(), qint64(1'100'000'000));
+        controller.discard();
+    }
+
+    void tapClockExceptionDropsVideoWithoutFailingSession()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QSignalSpy failedSpy(&controller, &RecordingController::failed);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        environment.throwFromMonotonicClock.store(true, std::memory_order_release);
+        GstSample *dropped = makeVideoSample(640, 360, 0);
+        QVERIFY(!controller.tryEnqueueVideoSample(dropped));
+        gst_sample_unref(dropped);
+        QCOMPARE(controller.state(), RecordingState::Recording);
+        QCOMPARE(failedSpy.count(), 0);
+        QCOMPARE(environment.startCount(), 0);
+
+        environment.throwFromMonotonicClock.store(false, std::memory_order_release);
+        GstSample *accepted = makeVideoSample(640, 360, GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(accepted));
+        gst_sample_unref(accepted);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.discard();
+    }
+
     void dimensionChangeFinalizesValidPortionWithPathWarning()
     {
         FakeEnvironment environment;
@@ -681,6 +902,80 @@ private slots:
         QVERIFY(result.warning.contains(result.finalPath));
         QCOMPARE(qvariant_cast<RecordingState>(stateSpy.at(1).at(0)),
                  RecordingState::Finalizing);
+    }
+
+    void dimensionChangeDropsEverySampleQueuedAfterBoundary()
+    {
+        FakeEnvironment environment;
+        environment.blockPipelineStart.store(true, std::memory_order_release);
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QSignalSpy finishedSpy(&controller, &RecordingController::finished);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        GstSample *first = makeVideoSample(640, 360, 0);
+        QVERIFY(controller.tryEnqueueVideoSample(first));
+        gst_sample_unref(first);
+        QTRY_VERIFY(environment.pipelineStartEntered.load(std::memory_order_acquire));
+
+        GstSample *changed = makeVideoSample(800, 600, GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(changed));
+        gst_sample_unref(changed);
+        GstSample *afterBoundary = makeVideoSample(640, 360, 2 * GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(afterBoundary));
+        gst_sample_unref(afterBoundary);
+
+        environment.releasePipelineStart.store(true, std::memory_order_release);
+        QTRY_COMPARE(controller.state(), RecordingState::Idle);
+        QCOMPARE(environment.pushedVideoPts(), QVector<qint64>{});
+        QCOMPARE(environment.finalizeCount(), 1);
+        QCOMPARE(finishedSpy.count(), 1);
+        const RecordingResult result = qvariant_cast<RecordingResult>(
+            finishedSpy.constFirst().constFirst());
+        QVERIFY(!result.warning.isEmpty());
+    }
+
+    void dimensionBoundaryRejectsProducerAlreadyInsideTapCallback()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        GstSample *first = makeVideoSample(640, 360, 0);
+        QVERIFY(controller.tryEnqueueVideoSample(first));
+        gst_sample_unref(first);
+        QTRY_COMPARE(environment.startCount(), 1);
+
+        environment.blockVideoPush.store(true, std::memory_order_release);
+        GstSample *beforeBoundary = makeVideoSample(640, 360, GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(beforeBoundary));
+        gst_sample_unref(beforeBoundary);
+        QTRY_VERIFY(environment.videoPushEntered.load(std::memory_order_acquire));
+        GstSample *changed = makeVideoSample(800, 600, 2 * GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(changed));
+        gst_sample_unref(changed);
+
+        environment.monotonicClockEntered.store(false, std::memory_order_release);
+        environment.blockMonotonicClock.store(true, std::memory_order_release);
+        std::atomic_bool inFlightAccepted{true};
+        std::thread producer([&] {
+            GstSample *afterBoundary = makeVideoSample(640, 360, 3 * GST_SECOND);
+            inFlightAccepted.store(controller.tryEnqueueVideoSample(afterBoundary),
+                                   std::memory_order_release);
+            gst_sample_unref(afterBoundary);
+        });
+        while (!environment.monotonicClockEntered.load(std::memory_order_acquire)) {
+            QThread::yieldCurrentThread();
+        }
+
+        environment.releaseVideoPush.store(true, std::memory_order_release);
+        QTRY_COMPARE(controller.state(), RecordingState::Idle);
+        environment.releaseMonotonicClock.store(true, std::memory_order_release);
+        producer.join();
+
+        QVERIFY(!inFlightAccepted.load(std::memory_order_acquire));
+        QCOMPARE(environment.pushedVideoPts(), QVector<qint64>{GST_SECOND});
+        QCOMPARE(environment.finalizeCount(), 1);
     }
 
     void successfulFinalIsRelinquishedAndFinalizeUsesGlobalDeadline()
@@ -751,6 +1046,78 @@ private slots:
         QCOMPARE(finishedSpy.count(), 0);
         QCOMPARE(failedSpy.count(), 0);
         QCOMPARE(environment.removedFinals(),
+                 QStringList{environment.reservation.reservation->finalPath});
+    }
+
+    void failedOwnedFinalRemovalRetriesWithoutForgettingOwnership()
+    {
+        FakeEnvironment environment;
+        environment.blockCommit.store(true, std::memory_order_release);
+        environment.removeOwnedFinalFailuresRemaining.store(1, std::memory_order_release);
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        GstSample *video = makeVideoSample();
+        QVERIFY(controller.tryEnqueueVideoSample(video));
+        gst_sample_unref(video);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.stop();
+        QTRY_VERIFY(environment.commitEntered.load(std::memory_order_acquire));
+
+        std::thread releaseCommit([&] {
+            while (controller.state() != RecordingState::Idle) {
+                QThread::yieldCurrentThread();
+            }
+            environment.releaseCommit.store(true, std::memory_order_release);
+        });
+        controller.discard();
+        releaseCommit.join();
+
+        QCOMPARE(environment.removedFinals().size(), 2);
+        QCOMPARE(environment.successfulRemovals(),
+                 QStringList{environment.reservation.reservation->finalPath});
+    }
+
+    void idleDiscardRetriesOwnedFinalAfterPersistentRemovalExceptions()
+    {
+        FakeEnvironment environment;
+        environment.blockCommit.store(true, std::memory_order_release);
+        environment.removeOwnedFinalThrowsRemaining.store(10, std::memory_order_release);
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        GstSample *video = makeVideoSample();
+        QVERIFY(controller.tryEnqueueVideoSample(video));
+        gst_sample_unref(video);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.stop();
+        QTRY_VERIFY(environment.commitEntered.load(std::memory_order_acquire));
+
+        std::thread releaseCommit([&] {
+            while (controller.state() != RecordingState::Idle) {
+                QThread::yieldCurrentThread();
+            }
+            environment.releaseCommit.store(true, std::memory_order_release);
+        });
+        controller.discard();
+        releaseCommit.join();
+        const qsizetype failedAttempts = environment.removedFinals().size();
+        QVERIFY(failedAttempts >= 2);
+        QVERIFY(failedAttempts <= 4);
+        QVERIFY(environment.successfulRemovals().isEmpty());
+
+        const int discardsBeforeRetry = environment.discardCalls.load(
+            std::memory_order_acquire);
+        const RecordingStartResult retry = controller.start(
+            {QStringLiteral("C:/recordings"), RecordingFormat::Mp4});
+        QVERIFY(!retry.accepted);
+        QCOMPARE(environment.discardCalls.load(std::memory_order_acquire),
+                 discardsBeforeRetry + 1);
+
+        environment.removeOwnedFinalThrowsRemaining.store(0, std::memory_order_release);
+        controller.discard();
+        QVERIFY(environment.removedFinals().size() > failedAttempts);
+        QCOMPARE(environment.successfulRemovals(),
                  QStringList{environment.reservation.reservation->finalPath});
     }
 

@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QPointer>
 #include <QSet>
 #include <QThread>
@@ -15,7 +17,9 @@
 #include <gst/gst.h>
 
 #include <chrono>
+#include <deque>
 #include <exception>
+#include <mutex>
 #include <utility>
 
 namespace {
@@ -171,11 +175,69 @@ RecordingControllerHooks completedHooks(RecordingControllerHooks hooks)
 
 class RecordingControllerPrivate;
 
+struct VideoEnvelope {
+    GstSample *sample = nullptr;
+    qint64 arrivalNanoseconds = -1;
+};
+
+class VideoEnvelopeQueue final {
+public:
+    explicit VideoEnvelopeQueue(qsizetype capacity)
+        : m_samples(capacity)
+    {
+    }
+
+    bool tryPushBorrowed(GstSample *sample, qint64 arrivalNanoseconds) noexcept
+    {
+        if (!sample || arrivalNanoseconds < 0) return false;
+        QMutexLocker locker(&m_mutex);
+        try {
+            m_arrivals.push_back(arrivalNanoseconds);
+        } catch (...) {
+            return false;
+        }
+        if (!m_samples.tryPushBorrowed(sample)) {
+            m_arrivals.pop_back();
+            return false;
+        }
+        return true;
+    }
+
+    VideoEnvelope tryPopOwned()
+    {
+        QMutexLocker locker(&m_mutex);
+        GstSample *sample = m_samples.tryPopOwned();
+        if (!sample) return {};
+        const qint64 arrival = m_arrivals.front();
+        m_arrivals.pop_front();
+        return {sample, arrival};
+    }
+
+    void clear()
+    {
+        QMutexLocker locker(&m_mutex);
+        m_samples.clear();
+        m_arrivals.clear();
+    }
+
+    qsizetype size() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return static_cast<qsizetype>(m_arrivals.size());
+    }
+
+private:
+    mutable QMutex m_mutex;
+    GstSampleQueue m_samples;
+    std::deque<qint64> m_arrivals;
+};
+
 class RecordingWorker final : public QObject {
 public:
     RecordingWorker(RecordingController *owner,
-                    GstSampleQueue *videoQueue,
+                    VideoEnvelopeQueue *videoQueue,
                     GstSampleQueue *audioQueue,
+                    QMutex *queueGate,
                     std::atomic_bool *drainScheduled,
                     std::atomic_bool *accepting,
                     std::atomic_bool *cancelled,
@@ -183,6 +245,7 @@ public:
         : m_owner(owner),
           m_videoQueue(videoQueue),
           m_audioQueue(audioQueue),
+          m_queueGate(queueGate),
           m_drainScheduled(drainScheduled),
           m_accepting(accepting),
           m_cancelled(cancelled),
@@ -205,9 +268,12 @@ public:
                   int negotiatedFrameRate,
                   quint64 generation)
     {
+        if (!removeExplicitOwnedFinal()) {
+            try { m_hooks.discard(reservation); } catch (...) {}
+            return QStringLiteral("Could not remove a previously owned recording file");
+        }
         cleanupPipeline();
-        m_videoQueue->clear();
-        m_audioQueue->clear();
+        clearQueues();
         m_reservation = reservation;
         m_preferredEncoder = preferredEncoder;
         m_negotiatedFrameRate = negotiatedFrameRate;
@@ -217,7 +283,6 @@ public:
         m_active = true;
         m_finalizing = false;
         m_warning.clear();
-        m_ownedFinal.clear();
         if (!m_blackTimer) {
             m_blackTimer = new QTimer(this);
             m_blackTimer->setInterval(20);
@@ -231,13 +296,13 @@ public:
         } catch (...) {
             const QString error = exceptionError(QStringLiteral("Recording pipeline factory"));
             try { m_hooks.discard(m_reservation); } catch (...) {}
-            resetSession(false);
+            resetSession();
             return error;
         }
         if (!m_pipeline.start || !m_pipeline.pushVideo || !m_pipeline.pushAudio ||
             !m_pipeline.pushBlackFrame || !m_pipeline.finalize || !m_pipeline.abort) {
             try { m_hooks.discard(m_reservation); } catch (...) {}
-            resetSession(false);
+            resetSession();
             return QStringLiteral("Recording pipeline factory returned an incomplete session");
         }
         return {};
@@ -246,23 +311,40 @@ public:
     void drain()
     {
         if (!m_active || m_finalizing) {
-            m_videoQueue->clear();
-            m_audioQueue->clear();
+            clearQueues();
             finishDrainScheduling();
             return;
         }
 
-        while (m_active && !m_finalizing) {
-            GstSample *sample = m_videoQueue->tryPopOwned();
-            if (!sample) break;
-            processVideo(sample);
-            gst_sample_unref(sample);
+        bool dimensionBoundary = false;
+        int processed = 0;
+        while (m_active && !m_finalizing && processed < DrainBatchSize) {
+            bool madeProgress = false;
+            VideoEnvelope video = m_videoQueue->tryPopOwned();
+            if (video.sample) {
+                dimensionBoundary = processVideo(video.sample,
+                                                 video.arrivalNanoseconds);
+                gst_sample_unref(video.sample);
+                ++processed;
+                madeProgress = true;
+                if (dimensionBoundary || !m_active || m_finalizing ||
+                    processed >= DrainBatchSize) {
+                    break;
+                }
+            }
+
+            GstSample *audio = m_audioQueue->tryPopOwned();
+            if (audio) {
+                processAudio(audio);
+                gst_sample_unref(audio);
+                ++processed;
+                madeProgress = true;
+            }
+            if (!madeProgress) break;
         }
-        while (m_active && !m_finalizing) {
-            GstSample *sample = m_audioQueue->tryPopOwned();
-            if (!sample) break;
-            processAudio(sample);
-            gst_sample_unref(sample);
+        if (dimensionBoundary && m_active && !m_finalizing) {
+            clearQueues();
+            finalizeActiveSession();
         }
         finishDrainScheduling();
     }
@@ -270,10 +352,24 @@ public:
     void finalize(quint64 generation, QString warning = {})
     {
         if (!m_active || m_finalizing || generation != m_generation) return;
+        try {
+            if (m_hooks.workerFinalizeEntered) m_hooks.workerFinalizeEntered();
+        } catch (...) {
+        }
         m_warning = std::move(warning);
-        drainQueuedSamplesWithoutScheduling();
+        drainQueuedSnapshot();
+        if (!m_active || m_finalizing) return;
+        finalizeActiveSession();
+    }
+
+private:
+    static constexpr int DrainBatchSize = 4;
+
+    void finalizeActiveSession()
+    {
         if (!m_active || m_finalizing) return;
         m_finalizing = true;
+        clearQueues();
 
         if (!m_pipelineStarted) {
             failSession(QStringLiteral("No valid video sample arrived after recording Start"));
@@ -316,7 +412,7 @@ public:
 
         const RecordingResult recordingResult{m_ownedFinal, m_warning};
         const quint64 completedGeneration = m_generation;
-        resetSession(false);
+        resetSession();
         if (m_owner) {
             QPointer<RecordingController> owner = m_owner;
             QMetaObject::invokeMethod(owner, [owner, completedGeneration, recordingResult] {
@@ -325,11 +421,11 @@ public:
         }
     }
 
+public:
     void discardSynchronously(quint64 generation)
     {
         if (generation != m_generation && !m_active && m_ownedFinal.isEmpty()) {
-            m_videoQueue->clear();
-            m_audioQueue->clear();
+            clearQueues();
             return;
         }
         discardOwnedSession();
@@ -352,14 +448,14 @@ public:
     void shutdown()
     {
         discardOwnedSession();
-        m_videoQueue->clear();
-        m_audioQueue->clear();
+        clearQueues();
     }
 
 private:
     void pollBlackFrames()
     {
         if (!m_active || m_finalizing || !m_pipelineStarted) return;
+        if (m_videoQueue->size() > 0) return;
         qint64 now = -1;
         try {
             now = m_hooks.monotonicNanoseconds();
@@ -386,22 +482,17 @@ private:
         }
     }
 
-    void processVideo(GstSample *sample)
+    bool processVideo(GstSample *sample, qint64 arrival)
     {
         RecordingVideoDescription description;
-        if (!parseVideoDescription(sample, &description)) return;
+        if (!parseVideoDescription(sample, &description)) return false;
         const qint64 pts = samplePts(sample);
-        qint64 arrival = 0;
-        try {
-            arrival = m_hooks.monotonicNanoseconds();
-        } catch (...) {
-            failSession(exceptionError(QStringLiteral("Recording clock")));
-            return;
-        }
-        if (arrival < 0) return;
+        if (arrival < 0) return false;
 
         if (!m_pipelineStarted) {
-            if (!m_timeline.start(pts, description, arrival, m_negotiatedFrameRate)) return;
+            if (!m_timeline.start(pts, description, arrival, m_negotiatedFrameRate)) {
+                return false;
+            }
             const RecordingVideoDescription locked = m_timeline.lockedDescription();
             const double fps = static_cast<double>(locked.fpsNumerator) /
                                static_cast<double>(locked.fpsDenominator);
@@ -423,11 +514,11 @@ private:
             if (!started) {
                 failSession(error.isEmpty() ? QStringLiteral("Recording pipeline Start failed")
                                             : error);
-                return;
+                return false;
             }
             m_pipelineStarted = true;
             (void)m_timeline.normalizeVideo(pts, arrival);
-            return;
+            return false;
         }
 
         if (m_timeline.dimensionsChanged(description)) {
@@ -435,11 +526,10 @@ private:
             m_warning = QStringLiteral("Recording saved because video dimensions changed; saved file: %1")
                             .arg(m_reservation.finalPath);
             notifyFinalizing();
-            finalize(m_generation, m_warning);
-            return;
+            return true;
         }
         const std::optional<qint64> normalized = m_timeline.normalizeVideo(pts, arrival);
-        if (!normalized.has_value()) return;
+        if (!normalized.has_value()) return false;
         QString error;
         bool pushed = false;
         try {
@@ -449,6 +539,7 @@ private:
         }
         if (!pushed) failSession(error.isEmpty() ? QStringLiteral("Video recording push failed")
                                                  : error);
+        return false;
     }
 
     void processAudio(GstSample *sample)
@@ -467,20 +558,33 @@ private:
                                                  : error);
     }
 
-    void drainQueuedSamplesWithoutScheduling()
+    void drainQueuedSnapshot()
     {
-        while (m_active && !m_finalizing) {
-            GstSample *sample = m_videoQueue->tryPopOwned();
-            if (!sample) break;
-            processVideo(sample);
-            gst_sample_unref(sample);
+        qsizetype videosRemaining = m_videoQueue->size();
+        qsizetype audiosRemaining = m_audioQueue->size();
+        bool dimensionBoundary = false;
+        while (m_active && !m_finalizing &&
+               (videosRemaining > 0 || audiosRemaining > 0)) {
+            if (videosRemaining > 0) {
+                VideoEnvelope video = m_videoQueue->tryPopOwned();
+                --videosRemaining;
+                if (video.sample) {
+                    dimensionBoundary = processVideo(video.sample,
+                                                     video.arrivalNanoseconds);
+                    gst_sample_unref(video.sample);
+                }
+                if (dimensionBoundary || !m_active || m_finalizing) break;
+            }
+            if (audiosRemaining > 0) {
+                GstSample *audio = m_audioQueue->tryPopOwned();
+                --audiosRemaining;
+                if (audio) {
+                    processAudio(audio);
+                    gst_sample_unref(audio);
+                }
+            }
         }
-        while (m_active && !m_finalizing) {
-            GstSample *sample = m_audioQueue->tryPopOwned();
-            if (!sample) break;
-            processAudio(sample);
-            gst_sample_unref(sample);
-        }
+        clearQueues();
     }
 
     void finishDrainScheduling()
@@ -526,7 +630,7 @@ private:
             if (m_active) m_hooks.discard(m_reservation);
         } catch (...) {
         }
-        resetSession(false);
+        resetSession();
         if (m_cancelled->load(std::memory_order_acquire)) return;
         if (m_owner) {
             QPointer<RecordingController> owner = m_owner;
@@ -545,11 +649,28 @@ private:
         m_pipelineStarted = false;
     }
 
-    void removeExplicitOwnedFinal()
+    bool removeExplicitOwnedFinal()
     {
-        if (m_ownedFinal.isEmpty()) return;
-        try { (void)m_hooks.removeOwnedFinal(m_ownedFinal); } catch (...) {}
-        m_ownedFinal.clear();
+        if (m_ownedFinal.isEmpty()) return true;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            bool removed = false;
+            try {
+                removed = m_hooks.removeOwnedFinal(m_ownedFinal);
+            } catch (...) {
+            }
+            if (removed) {
+                m_ownedFinal.clear();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void clearQueues()
+    {
+        QMutexLocker locker(m_queueGate);
+        m_videoQueue->clear();
+        m_audioQueue->clear();
     }
 
     void discardOwnedSession()
@@ -559,13 +680,12 @@ private:
             try { m_hooks.discard(m_reservation); } catch (...) {}
         }
         removeExplicitOwnedFinal();
-        resetSession(false);
-        m_videoQueue->clear();
-        m_audioQueue->clear();
+        resetSession();
+        clearQueues();
         m_drainScheduled->store(false, std::memory_order_release);
     }
 
-    void resetSession(bool clearOwnedFinal = true)
+    void resetSession()
     {
         if (m_blackTimer) m_blackTimer->stop();
         m_active = false;
@@ -576,12 +696,12 @@ private:
         m_reservation = {};
         m_preferredEncoder.clear();
         m_warning.clear();
-        if (clearOwnedFinal) m_ownedFinal.clear();
     }
 
     QPointer<RecordingController> m_owner;
-    GstSampleQueue *m_videoQueue;
+    VideoEnvelopeQueue *m_videoQueue;
     GstSampleQueue *m_audioQueue;
+    QMutex *m_queueGate;
     std::atomic_bool *m_drainScheduled;
     std::atomic_bool *m_accepting;
     std::atomic_bool *m_cancelled;
@@ -610,9 +730,17 @@ public:
     {
     }
 
+    void clearQueues()
+    {
+        QMutexLocker locker(&queueGate);
+        videoQueue.clear();
+        audioQueue.clear();
+    }
+
     int negotiatedFrameRate;
     RecordingControllerHooks hooks;
-    GstSampleQueue videoQueue;
+    QMutex queueGate;
+    VideoEnvelopeQueue videoQueue;
     GstSampleQueue audioQueue;
     QThread workerThread;
     RecordingWorker *worker = nullptr;
@@ -635,6 +763,7 @@ RecordingController::RecordingController(int negotiatedFrameRate,
     qRegisterMetaType<RecordingState>();
     qRegisterMetaType<RecordingResult>();
     d->worker = new RecordingWorker(this, &d->videoQueue, &d->audioQueue,
+                                    &d->queueGate,
                                     &d->drainScheduled, &d->accepting,
                                     &d->cancelled, d->hooks);
     d->worker->moveToThread(&d->workerThread);
@@ -723,8 +852,7 @@ RecordingStartResult RecordingController::start(const RecordingOptions &options)
 
     d->accepting.store(false, std::memory_order_release);
     d->cancelled.store(false, std::memory_order_release);
-    d->videoQueue.clear();
-    d->audioQueue.clear();
+    d->clearQueues();
     d->drainScheduled.store(false, std::memory_order_release);
     const quint64 generation = ++d->generation;
     QString workerBeginError;
@@ -763,18 +891,18 @@ void RecordingController::discard()
 {
     const RecordingState prior = d->state.exchange(
         RecordingState::Idle, std::memory_order_acq_rel);
-    if (prior == RecordingState::Idle) return;
     d->accepting.store(false, std::memory_order_release);
-    d->cancelled.store(true, std::memory_order_release);
     const quint64 generation = d->generation;
-    ++d->generation;
+    if (prior != RecordingState::Idle) {
+        d->cancelled.store(true, std::memory_order_release);
+        ++d->generation;
+    }
     QMetaObject::invokeMethod(d->worker,
         [worker = d->worker, generation] { worker->discardSynchronously(generation); },
         Qt::BlockingQueuedConnection);
-    d->videoQueue.clear();
-    d->audioQueue.clear();
+    d->clearQueues();
     d->drainScheduled.store(false, std::memory_order_release);
-    emit stateChanged(RecordingState::Idle);
+    if (prior != RecordingState::Idle) emit stateChanged(RecordingState::Idle);
 }
 
 bool RecordingController::tryEnqueueVideoSample(GstSample *borrowedSample) noexcept
@@ -786,7 +914,22 @@ bool RecordingController::tryEnqueueVideoSample(GstSample *borrowedSample) noexc
         state() != RecordingState::Recording) {
         return false;
     }
-    if (!d->videoQueue.tryPushBorrowed(borrowedSample)) return false;
+    qint64 arrival = -1;
+    try {
+        arrival = d->hooks.monotonicNanoseconds();
+    } catch (...) {
+        return false;
+    }
+    if (arrival < 0) return false;
+    {
+        std::unique_lock<QMutex> locker(d->queueGate, std::try_to_lock);
+        if (!locker.owns_lock()) return false;
+        if (!d->accepting.load(std::memory_order_acquire) ||
+            state() != RecordingState::Recording ||
+            !d->videoQueue.tryPushBorrowed(borrowedSample, arrival)) {
+            return false;
+        }
+    }
     bool expected = false;
     if (d->drainScheduled.compare_exchange_strong(
             expected, true, std::memory_order_acq_rel)) {
@@ -807,7 +950,15 @@ bool RecordingController::tryEnqueueAudioSample(GstSample *borrowedSample) noexc
         state() != RecordingState::Recording) {
         return false;
     }
-    if (!d->audioQueue.tryPushBorrowed(borrowedSample)) return false;
+    {
+        std::unique_lock<QMutex> locker(d->queueGate, std::try_to_lock);
+        if (!locker.owns_lock()) return false;
+        if (!d->accepting.load(std::memory_order_acquire) ||
+            state() != RecordingState::Recording ||
+            !d->audioQueue.tryPushBorrowed(borrowedSample)) {
+            return false;
+        }
+    }
     bool expected = false;
     if (d->drainScheduled.compare_exchange_strong(
             expected, true, std::memory_order_acq_rel)) {

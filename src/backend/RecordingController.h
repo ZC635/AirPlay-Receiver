@@ -34,6 +34,7 @@ struct RecordingControllerHooks {
     std::function<QUuid()> uuid;
     std::function<qint64()> monotonicNanoseconds;
     std::function<void()> drainInvocationScheduled;
+    std::function<void()> workerFinalizeEntered;
     std::function<RecordingPipelineSession()> createPipeline;
     std::function<bool(const QString &)> removeOwnedFinal;
 };
@@ -46,7 +47,7 @@ class RecordingController final : public QObject {
 
 public:
     static constexpr qsizetype VideoQueueCapacity = 8;
-    static constexpr qsizetype AudioQueueCapacity = 32;
+    static constexpr qsizetype AudioQueueCapacity = 64;
     static constexpr int FinalizeDeadlineMilliseconds = 30'000;
 
     explicit RecordingController(
