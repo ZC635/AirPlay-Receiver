@@ -9,8 +9,11 @@
 #include "backend/FakeAirPlayReceiver.h"
 #include "backend/ReceiverState.h"
 #include "platform/FakeHotkeyService.h"
+#include "platform/RecordingPathActions.h"
 
 #include <QComboBox>
+#include <QCheckBox>
+#include <QDir>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -119,6 +122,39 @@ public:
         ++startRecordingCount;
         return {false, QStringLiteral("Output folder unavailable")};
     }
+};
+
+class FakeRecordingPathActions final : public RecordingPathActions {
+public:
+    QString chooseExistingDirectory(QWidget *, const QString &) override {
+        return chosenDirectory;
+    }
+
+    QString ensureAndOpenDirectory(const QString &directory) override {
+        openedDirectory = directory;
+        return openError;
+    }
+
+    QString revealFile(const QString &filePath) override {
+        revealedFile = filePath;
+        return revealError;
+    }
+
+    QString chosenDirectory;
+    QString openedDirectory;
+    QString revealedFile;
+    QString openError;
+    QString revealError;
+};
+
+class ExitRaceRecordingReceiver final : public FakeAirPlayReceiver {
+public:
+    void discardRecording() override {
+        ++discardCallsIncludingIdle;
+        FakeAirPlayReceiver::discardRecording();
+    }
+
+    int discardCallsIncludingIdle = 0;
 };
 
 class MainWindowSmokeTest : public QObject {
@@ -370,6 +406,20 @@ private slots:
         QCOMPARE(button->text(), QString("Record"));
     }
 
+    void rejectedRecordingStartDoesNotCaptureCompletionPreference() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setShowRecordingCompletionMessage(true);
+        RejectingRecordingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(settings, nullptr, &receiver);
+        window.findChild<QToolButton *>("recordingButton")->click();
+
+        emit receiver.recordingFinished(
+            RecordingResult{"C:/recordings/never-started.mp4", {}});
+
+        QVERIFY(QApplication::activeModalWidget() == nullptr);
+    }
+
     void recordingShortcutStopsButDoesNothingWhileFinalizing() {
         FakeAirPlayReceiver receiver;
         receiver.setRecordingAvailableForTest(true);
@@ -402,6 +452,394 @@ private slots:
         QVERIFY(!window.isToolbarVisible());
         emit hotkeys.activated(ShortcutAction::ToggleRecording);
         QVERIFY(!window.isToolbarVisible());
+    }
+
+    void cleanRecordingCompletionUsesStartSnapshotAndRevealsActualFile() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        AppSettings settings = AppSettings::defaults();
+        settings.setRecordingOutputDirectory(dir.filePath("folder-a"));
+        settings.setShowRecordingCompletionMessage(true);
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        FakeRecordingPathActions pathActions;
+        MainWindow window(settings, nullptr, &receiver, QString(), &pathActions);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(recordButton != nullptr);
+
+        recordButton->click();
+        recordButton->click();
+        const QString actualPath = QFileInfo(dir.filePath("folder-a/actual.mp4"))
+                                       .absoluteFilePath();
+        bool sawInformation = false;
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            sawInformation = box->icon() == QMessageBox::Information;
+            QVERIFY(box->text().contains(QDir::toNativeSeparators(actualPath)));
+            QPushButton *openFolder = nullptr;
+            for (auto *button : box->buttons()) {
+                if (button->text() == "Open Folder") {
+                    openFolder = qobject_cast<QPushButton *>(button);
+                }
+            }
+            QVERIFY(openFolder != nullptr);
+            QVERIFY(box->button(QMessageBox::Ok) != nullptr);
+            openFolder->click();
+        });
+
+        receiver.completeRecordingForTest({actualPath, {}});
+
+        QVERIFY(sawInformation);
+        QCOMPARE(pathActions.revealedFile, actualPath);
+    }
+
+    void revealFailureAfterCompletionIsAlwaysVisible() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setShowRecordingCompletionMessage(true);
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        FakeRecordingPathActions pathActions;
+        pathActions.revealError = "Explorer could not reveal recording";
+        MainWindow window(settings, nullptr, &receiver, QString(), &pathActions);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        recordButton->click();
+        recordButton->click();
+
+        bool sawActionFailure = false;
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            for (auto *button : box->buttons()) {
+                if (button->text() == "Open Folder") {
+                    button->click();
+                    QTimer::singleShot(0, [&] {
+                        auto *failure = qobject_cast<QMessageBox *>(
+                            QApplication::activeModalWidget());
+                        QVERIFY(failure != nullptr);
+                        sawActionFailure = failure->icon() == QMessageBox::Warning &&
+                                           failure->text().contains(pathActions.revealError);
+                        failure->button(QMessageBox::Ok)->click();
+                    });
+                    return;
+                }
+            }
+            QFAIL("Open Folder button missing");
+        });
+
+        receiver.completeRecordingForTest({"C:/recordings/action-error.mp4", {}});
+        QVERIFY(sawActionFailure);
+    }
+
+    void completionPreferenceOnlySuppressesCleanSuccess() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setShowRecordingCompletionMessage(false);
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(settings, nullptr, &receiver);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(recordButton != nullptr);
+
+        recordButton->click();
+        recordButton->click();
+        receiver.completeRecordingForTest({"C:/recordings/quiet.mp4", {}});
+        QVERIFY(QApplication::activeModalWidget() == nullptr);
+
+        recordButton->click();
+        recordButton->click();
+        bool sawWarning = false;
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            sawWarning = box->icon() == QMessageBox::Warning;
+            QVERIFY(box->text().contains("dropped frames"));
+            box->button(QMessageBox::Ok)->click();
+        });
+        receiver.completeRecordingForTest(
+            {"C:/recordings/warn.mp4", "Recording completed with dropped frames"});
+        QVERIFY(sawWarning);
+
+        recordButton->click();
+        bool sawCritical = false;
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            sawCritical = box->icon() == QMessageBox::Critical;
+            QVERIFY(box->text().contains("muxer failed"));
+            box->button(QMessageBox::Ok)->click();
+        });
+        receiver.failRecordingForTest("Runtime muxer failed");
+        QVERIFY(sawCritical);
+    }
+
+    void recordingSettingsChangedMidSessionOnlyAffectNextStart() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString settingsPath = dir.filePath("settings.json");
+        const QString folderA = QFileInfo(dir.filePath("folder-a")).absoluteFilePath();
+        const QString folderB = QFileInfo(dir.filePath("folder-b")).absoluteFilePath();
+        AppSettings settings = AppSettings::defaults();
+        settings.setRecordingOutputDirectory(folderA);
+        settings.setShowRecordingCompletionMessage(true);
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        FakeRecordingPathActions pathActions;
+        MainWindow window(settings, nullptr, &receiver, settingsPath, &pathActions);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(recordButton != nullptr);
+        QVERIFY(settingsButton != nullptr);
+
+        recordButton->click();
+        QCOMPARE(receiver.lastRecordingOptions.outputDirectory, folderA);
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *folderEdit = dialog->findChild<QLineEdit *>("recordingOutputDirectoryEdit");
+            auto *completion = dialog->findChild<QCheckBox *>(
+                "showRecordingCompletionMessageCheckBox");
+            QVERIFY(folderEdit != nullptr);
+            QVERIFY(completion != nullptr);
+            folderEdit->setText(QDir::toNativeSeparators(folderB));
+            completion->setChecked(false);
+            dialog->accept();
+        });
+        settingsButton->click();
+
+        recordButton->click();
+        bool sawDialog = false;
+        const QString actualA = QFileInfo(dir.filePath("folder-a/actual.mp4"))
+                                    .absoluteFilePath();
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            sawDialog = true;
+            QVERIFY(box->text().contains(QDir::toNativeSeparators(actualA)));
+            box->button(QMessageBox::Ok)->click();
+        });
+        receiver.completeRecordingForTest({actualA, {}});
+        QVERIFY(sawDialog);
+
+        recordButton->click();
+        QCOMPARE(receiver.lastRecordingOptions.outputDirectory, folderB);
+    }
+
+    void acceptedReceiverRestartWaitsForRecordingSave() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString settingsPath = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setShowRecordingCompletionMessage(false);
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        receiver.forceState(ReceiverState::Connected);
+        MainWindow window(settings, nullptr, &receiver, settingsPath);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(recordButton != nullptr);
+        QVERIFY(settingsButton != nullptr);
+        recordButton->click();
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Desk Receiver");
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                box->button(QMessageBox::Yes)->click();
+            });
+            dialog->accept();
+        });
+        settingsButton->click();
+
+        QCOMPARE(AppSettingsStore(settingsPath).loadOrDefaults().receiverName(),
+                 QString("Desk Receiver"));
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+
+        receiver.completeRecordingForTest({"C:/recordings/saved.mp4", {}});
+
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(receiver.stopCount, 1);
+        QCOMPARE(receiver.startCount, 1);
+    }
+
+    void acceptedVideoRestartRunsAfterFinalizeFailure() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString settingsPath = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setShowRecordingCompletionMessage(false);
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        receiver.forceState(ReceiverState::Connected);
+        MainWindow window(settings, nullptr, &receiver, settingsPath);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(recordButton != nullptr);
+        QVERIFY(settingsButton != nullptr);
+        recordButton->click();
+        recordButton->click();
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *combo = dialog->findChild<QComboBox *>("videoResolutionCombo");
+            combo->setCurrentIndex(combo->findData(static_cast<int>(VideoResolution::P720)));
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                box->button(QMessageBox::Yes)->click();
+            });
+            dialog->accept();
+        });
+        settingsButton->click();
+
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
+        bool sawFailure = false;
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            sawFailure = box->icon() == QMessageBox::Critical;
+            box->button(QMessageBox::Ok)->click();
+        });
+        receiver.failRecordingForTest("Could not rename recording");
+
+        QVERIFY(sawFailure);
+        QCOMPARE(receiver.lastAppliedVideoQuality.resolution, VideoResolution::P720);
+        QCOMPARE(receiver.stopCount, 1);
+        QCOMPARE(receiver.startCount, 1);
+    }
+
+    void closeCancelLeavesRecordingUntouched() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.findChild<QToolButton *>("recordingButton")->click();
+        QTimer::singleShot(0, [] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            QCOMPARE(box->defaultButton(), box->button(QMessageBox::Cancel));
+            box->button(QMessageBox::Cancel)->click();
+        });
+
+        QVERIFY(!window.close());
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        QCOMPARE(receiver.discardRecordingCount, 0);
+    }
+
+    void closeCancelLeavesFinalizingUntouched() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        recordButton->click();
+        recordButton->click();
+        QTimer::singleShot(0, [] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            QCOMPARE(box->defaultButton(), box->button(QMessageBox::Cancel));
+            box->button(QMessageBox::Cancel)->click();
+        });
+
+        QVERIFY(!window.close());
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+        QCOMPARE(receiver.discardRecordingCount, 0);
+    }
+
+    void finalizingCompletionDuringExitConfirmIsSuppressedBeforeDiscard() {
+        ExitRaceRecordingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        recordButton->click();
+        recordButton->click();
+        bool sawCompletionDialog = false;
+
+        QTimer::singleShot(0, [&] {
+            receiver.completeRecordingForTest(
+                {"C:/recordings/committed-during-confirm.mp4", {}});
+        });
+        QTimer::singleShot(1, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            if (box->windowTitle() == "Recording saved") {
+                sawCompletionDialog = true;
+                box->button(QMessageBox::Ok)->click();
+                QTimer::singleShot(0, [] {
+                    auto *confirmation = qobject_cast<QMessageBox *>(
+                        QApplication::activeModalWidget());
+                    QVERIFY(confirmation != nullptr);
+                    confirmation->button(QMessageBox::Discard)->click();
+                });
+                return;
+            }
+            box->button(QMessageBox::Discard)->click();
+        });
+
+        QVERIFY(window.close());
+        QVERIFY(!sawCompletionDialog);
+        QCOMPARE(receiver.discardCallsIncludingIdle, 1);
+    }
+
+    void finalizingCompletionDuringExitCancelShowsSavedResultAfterPrompt() {
+        ExitRaceRecordingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        recordButton->click();
+        recordButton->click();
+        bool sawCompletionAfterCancel = false;
+
+        QTimer::singleShot(0, [&] {
+            receiver.completeRecordingForTest(
+                {"C:/recordings/finished-before-cancel.mp4", {}});
+        });
+        QTimer::singleShot(1, [&] {
+            auto *confirmation = qobject_cast<QMessageBox *>(
+                QApplication::activeModalWidget());
+            QVERIFY(confirmation != nullptr);
+            QCOMPARE(confirmation->windowTitle(), QString("Discard recording?"));
+            confirmation->button(QMessageBox::Cancel)->click();
+            QTimer::singleShot(0, [&] {
+                auto *completion = qobject_cast<QMessageBox *>(
+                    QApplication::activeModalWidget());
+                QVERIFY(completion != nullptr);
+                sawCompletionAfterCancel = completion->windowTitle() == "Recording saved";
+                completion->button(QMessageBox::Ok)->click();
+            });
+        });
+
+        QVERIFY(!window.close());
+        QVERIFY(sawCompletionAfterCancel);
+        QCOMPARE(receiver.discardCallsIncludingIdle, 0);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+    }
+
+    void closeConfirmSynchronouslyDiscardsRecordingAndFinalizing() {
+        for (const bool finalizing : {false, true}) {
+            FakeAirPlayReceiver receiver;
+            receiver.setRecordingAvailableForTest(true);
+            MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+            auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+            recordButton->click();
+            if (finalizing) {
+                recordButton->click();
+            }
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                box->button(QMessageBox::Discard)->click();
+            });
+
+            QVERIFY(window.close());
+            QCOMPARE(receiver.discardRecordingCount, 1);
+            QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+            QVERIFY(QApplication::activeModalWidget() == nullptr);
+        }
     }
 
 

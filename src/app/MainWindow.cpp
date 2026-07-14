@@ -8,6 +8,7 @@
 #include "backend/AirPlayReceiver.h"
 #include "platform/AspectRatioSizing.h"
 #include "platform/HotkeyService.h"
+#include "platform/RecordingPathActions.h"
 #include "platform/WindowsWindowBehavior.h"
 
 #include <algorithm>
@@ -19,6 +20,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QResource>
 #include <QSignalBlocker>
 #include <QWidget>
@@ -76,6 +78,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     : MainWindow(std::move(settings), hotkeys, receiver, QString(), parent) {}
 
 MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QString settingsPath, QWidget *parent)
+    : MainWindow(std::move(settings), hotkeys, receiver, std::move(settingsPath),
+                 nullptr, parent) {}
+
+MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
+                       AirPlayReceiver *receiver, QString settingsPath,
+                       RecordingPathActions *recordingPathActions, QWidget *parent)
     : QMainWindow(parent),
       toolbar_(new ToolbarWidget(this)),
       statusLabel_(new QLabel("Ready for AirPlay", this)),
@@ -85,6 +93,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
       hotkeys_(hotkeys),
       receiver_(receiver),
       settingsPath_(std::move(settingsPath)) {
+    if (recordingPathActions == nullptr) {
+        ownedRecordingPathActions_ = std::make_unique<WindowsRecordingPathActions>();
+        recordingPathActions_ = ownedRecordingPathActions_.get();
+    } else {
+        recordingPathActions_ = recordingPathActions;
+    }
     initializeAppResources();
     setWindowIcon(QIcon(":/icons/app-icon.ico"));
     setWindowTitle("AirPlay Receiver");
@@ -121,6 +135,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
     connect(toolbar_, &ToolbarWidget::recordingToggledRequested, this, &MainWindow::toggleRecording);
 
     if (receiver_ != nullptr) {
+        recordingState_ = receiver_->recordingState();
         connect(receiver_, &AirPlayReceiver::videoSizeChanged, this, [this](int width, int height) {
             if (!decodedFrameSizeKnown_) {
                 updateAspectVideoSize(width, height);
@@ -147,6 +162,10 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
                 [this](bool) { updateRecordingUi(); });
         connect(receiver_, &AirPlayReceiver::recordingStateChanged,
                 this, &MainWindow::handleRecordingStateChanged);
+        connect(receiver_, &AirPlayReceiver::recordingFinished,
+                this, &MainWindow::handleRecordingFinished);
+        connect(receiver_, &AirPlayReceiver::recordingFailed,
+                this, &MainWindow::handleRecordingFailed);
         connect(receiver_, &QObject::destroyed, this, [this]() {
             updateRecordingUi();
         });
@@ -195,6 +214,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
 
     restoreWindowState();
 }
+
+MainWindow::~MainWindow() = default;
 
 bool MainWindow::isToolbarVisible() const {
     return !toolbar_->isHidden();
@@ -332,6 +353,10 @@ bool MainWindow::saveWindowState() const {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    if (!confirmDiscardRecordingOnExit()) {
+        event->ignore();
+        return;
+    }
     saveWindowState();
     QMainWindow::closeEvent(event);
 }
@@ -388,6 +413,14 @@ void MainWindow::handleReceiverNameChange(const QString &receiverName) {
             deferrer_.receiverNameChanged(receiverName, activeReceiverName_);
             return;
         }
+    }
+
+    if (receiver_->recordingState() != RecordingState::Idle) {
+        deferrer_.deferReceiverNameUntilRecordingIdle(receiverName);
+        if (receiver_->recordingState() == RecordingState::Recording) {
+            receiver_->stopRecording();
+        }
+        return;
     }
 
     if (applyReceiverNameNow(receiverName)) {
@@ -457,6 +490,14 @@ void MainWindow::handleVideoQualityChange(const VideoQualitySettings &quality) {
         }
     }
 
+    if (receiver_->recordingState() != RecordingState::Idle) {
+        deferrer_.deferVideoQualityUntilRecordingIdle(quality);
+        if (receiver_->recordingState() == RecordingState::Recording) {
+            receiver_->stopRecording();
+        }
+        return;
+    }
+
     if (applyVideoQualityNow(quality)) {
         deferrer_.markVideoQualityApplied(quality);
     } else {
@@ -510,7 +551,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
 }
 
 void MainWindow::showSettingsDialog() {
-    SettingsDialog dialog(settings_, this);
+    SettingsDialog dialog(settings_, this, recordingPathActions_);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -601,7 +642,12 @@ void MainWindow::toggleRecording() {
             settings_.recordingOutputDirectory(),
             settings_.recordingFormat()};
         const RecordingStartResult result = receiver->startRecording(options);
-        if (!result.accepted) {
+        if (result.accepted) {
+            activeRecordingShowCompletionMessage_ =
+                settings_.showRecordingCompletionMessage();
+            activeRecordingSession_ = true;
+            suppressRecordingCompletion_ = false;
+        } else {
             statusLabel_->setText(result.error.isEmpty()
                                       ? QString("Could not start recording")
                                       : result.error);
@@ -626,8 +672,113 @@ void MainWindow::updateRecordingUi() {
 }
 
 void MainWindow::handleRecordingStateChanged(RecordingState state) {
-    Q_UNUSED(state);
+    const RecordingState previous = recordingState_;
+    recordingState_ = state;
+    if (previous == RecordingState::Finalizing && state == RecordingState::Idle) {
+        recordingReturnedIdlePendingResult_ = true;
+    }
     updateRecordingUi();
+}
+
+void MainWindow::handleRecordingFinished(const RecordingResult &result) {
+    if (exitConfirmationActive_) {
+        exitPendingRecordingResult_ = result;
+        return;
+    }
+    const bool showCleanCompletion = activeRecordingSession_ &&
+                                     activeRecordingShowCompletionMessage_;
+    activeRecordingSession_ = false;
+    activeRecordingShowCompletionMessage_ = false;
+    if (suppressRecordingCompletion_) {
+        recordingReturnedIdlePendingResult_ = false;
+        return;
+    }
+    if (!result.warning.isEmpty() || showCleanCompletion) {
+        showRecordingCompletion(result);
+    }
+    if (recordingReturnedIdlePendingResult_) {
+        recordingReturnedIdlePendingResult_ = false;
+        deferrer_.recordingStateChanged(RecordingState::Finalizing,
+                                        RecordingState::Idle);
+    }
+}
+
+void MainWindow::handleRecordingFailed(const QString &error) {
+    if (exitConfirmationActive_) {
+        exitPendingRecordingError_ = error;
+        return;
+    }
+    activeRecordingSession_ = false;
+    activeRecordingShowCompletionMessage_ = false;
+    if (suppressRecordingCompletion_) {
+        recordingReturnedIdlePendingResult_ = false;
+        return;
+    }
+    QMessageBox::critical(
+        this, "Recording failed",
+        error.isEmpty() ? QString("Recording failed for an unknown reason") : error,
+        QMessageBox::Ok);
+    if (recordingReturnedIdlePendingResult_) {
+        recordingReturnedIdlePendingResult_ = false;
+        deferrer_.recordingStateChanged(RecordingState::Finalizing,
+                                        RecordingState::Idle);
+    }
+}
+
+void MainWindow::showRecordingCompletion(const RecordingResult &result) {
+    const bool hasWarning = !result.warning.isEmpty();
+    const QString nativePath = QDir::toNativeSeparators(
+        QFileInfo(result.finalPath).absoluteFilePath());
+    const QString text = hasWarning
+        ? QString("Recording saved to:\n%1\n\n%2").arg(nativePath, result.warning)
+        : QString("Recording saved to:\n%1").arg(nativePath);
+    QMessageBox box(hasWarning ? QMessageBox::Warning : QMessageBox::Information,
+                    hasWarning ? "Recording saved with warning" : "Recording saved",
+                    text, QMessageBox::Ok, this);
+    auto *openFolder = box.addButton("Open Folder", QMessageBox::AcceptRole);
+    box.exec();
+    if (box.clickedButton() != openFolder || recordingPathActions_ == nullptr) {
+        return;
+    }
+    const QString error = recordingPathActions_->revealFile(result.finalPath);
+    if (!error.isEmpty()) {
+        QMessageBox::warning(this, "Could not open recording", error, QMessageBox::Ok);
+    }
+}
+
+bool MainWindow::confirmDiscardRecordingOnExit() {
+    const QPointer<AirPlayReceiver> receiver = receiver_;
+    if (receiver == nullptr || receiver->recordingState() == RecordingState::Idle) {
+        return true;
+    }
+
+    exitConfirmationActive_ = true;
+    const auto answer = QMessageBox::warning(
+        this, "Discard recording?",
+        "A recording is still active or being saved. Discard it and exit?",
+        QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+    exitConfirmationActive_ = false;
+    if (answer != QMessageBox::Discard) {
+        if (exitPendingRecordingResult_.has_value()) {
+            const RecordingResult result = *exitPendingRecordingResult_;
+            exitPendingRecordingResult_.reset();
+            handleRecordingFinished(result);
+        } else if (exitPendingRecordingError_.has_value()) {
+            const QString error = *exitPendingRecordingError_;
+            exitPendingRecordingError_.reset();
+            handleRecordingFailed(error);
+        }
+        return false;
+    }
+
+    suppressRecordingCompletion_ = true;
+    exitPendingRecordingResult_.reset();
+    exitPendingRecordingError_.reset();
+    receiver->discardRecording();
+    recordingReturnedIdlePendingResult_ = false;
+    activeRecordingSession_ = false;
+    activeRecordingShowCompletionMessage_ = false;
+    return receiver->recordingState() == RecordingState::Idle;
 }
 
 void MainWindow::updateAspectVideoSize(int width, int height) {

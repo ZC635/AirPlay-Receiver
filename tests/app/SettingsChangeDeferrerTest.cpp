@@ -225,6 +225,73 @@ private slots:
         QVERIFY(emittedQuality->resolution == second.resolution);
         QVERIFY(emittedQuality->frameRate == second.frameRate);
     }
+
+    void acceptedReceiverNameRestartWaitsForRecordingIdle() {
+        SettingsChangeDeferrer deferrer;
+        QStringList emittedNames;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverNameReady,
+                [&](const QString &name) { emittedNames.append(name); });
+
+        deferrer.deferReceiverNameUntilRecordingIdle("Desk Receiver");
+        deferrer.recordingStateChanged(RecordingState::Recording,
+                                       RecordingState::Finalizing);
+        QVERIFY(emittedNames.isEmpty());
+
+        deferrer.recordingStateChanged(RecordingState::Finalizing,
+                                       RecordingState::Idle);
+        QCOMPARE(emittedNames, QStringList{"Desk Receiver"});
+
+        deferrer.recordingStateChanged(RecordingState::Finalizing,
+                                       RecordingState::Idle);
+        QCOMPARE(emittedNames.size(), 1);
+    }
+
+    void acceptedVideoQualityRestartRunsAfterFailedFinalizeReturnsIdle() {
+        SettingsChangeDeferrer deferrer;
+        const VideoQualitySettings requested{VideoResolution::P720,
+                                             VideoFrameRate::Fps60};
+        QVector<VideoQualitySettings> emittedQualities;
+        connect(&deferrer, &SettingsChangeDeferrer::videoQualityReady,
+                [&](const VideoQualitySettings &quality) {
+                    emittedQualities.append(quality);
+                });
+
+        deferrer.deferVideoQualityUntilRecordingIdle(requested);
+        deferrer.recordingStateChanged(RecordingState::Recording,
+                                       RecordingState::Finalizing);
+        QVERIFY(emittedQualities.isEmpty());
+
+        deferrer.recordingStateChanged(RecordingState::Finalizing,
+                                       RecordingState::Idle);
+        QCOMPARE(emittedQualities, QVector<VideoQualitySettings>{requested});
+    }
+
+    void discardTransitionDoesNotApplyRestartDeferredForSuccessfulSave() {
+        SettingsChangeDeferrer deferrer;
+        int emitCount = 0;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverNameReady,
+                [&](const QString &) { ++emitCount; });
+        deferrer.deferReceiverNameUntilRecordingIdle("Desk Receiver");
+
+        deferrer.recordingStateChanged(RecordingState::Recording,
+                                       RecordingState::Idle);
+
+        QCOMPARE(emitCount, 0);
+        QVERIFY(deferrer.isReceiverNamePending("Desk Receiver"));
+    }
+
+    void replacingRecordingDeferredValueWithSessionDeferredValueClearsGate() {
+        SettingsChangeDeferrer deferrer;
+        QString emittedName;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverNameReady,
+                [&](const QString &name) { emittedName = name; });
+        deferrer.deferReceiverNameUntilRecordingIdle("Recording Name");
+        deferrer.receiverNameChanged("Session Name", "Active Name");
+
+        deferrer.receiverSessionChanged(true, false);
+
+        QCOMPARE(emittedName, QString("Session Name"));
+    }
 };
 
 QTEST_MAIN(SettingsChangeDeferrerTest)

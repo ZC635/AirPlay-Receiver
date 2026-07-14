@@ -6,6 +6,8 @@
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
+#include <memory>
+#include <optional>
 
 enum class ReceiverState;
 class AirPlayReceiver;
@@ -14,6 +16,7 @@ class HotkeyService;
 class QLabel;
 class QImage;
 class QCloseEvent;
+class RecordingPathActions;
 class VideoSurfaceWidget;
 
 class MainWindow final : public QMainWindow {
@@ -24,6 +27,10 @@ public:
     MainWindow(AppSettings settings, HotkeyService *hotkeys, QWidget *parent = nullptr);
     MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QWidget *parent = nullptr);
     MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QString settingsPath, QWidget *parent = nullptr);
+    MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver,
+               QString settingsPath, RecordingPathActions *recordingPathActions,
+               QWidget *parent = nullptr);
+    ~MainWindow() override;
     bool isToolbarVisible() const;
     void toggleToolbarVisibility();
     bool isAlwaysOnTopEnabled() const;
@@ -53,6 +60,10 @@ private:
     void toggleRecording();
     void updateRecordingUi();
     void handleRecordingStateChanged(RecordingState state);
+    void handleRecordingFinished(const RecordingResult &result);
+    void handleRecordingFailed(const QString &error);
+    void showRecordingCompletion(const RecordingResult &result);
+    bool confirmDiscardRecordingOnExit();
     void updateAspectVideoSize(int width, int height);
     void updateAspectVideoSizeFromFrame(const QImage &frame);
     void clearDecodedFrameSizeForAspectLock();
@@ -66,6 +77,8 @@ private:
     SettingsChangeDeferrer deferrer_;
     QPointer<HotkeyService> hotkeys_;
     QPointer<AirPlayReceiver> receiver_;
+    std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
+    RecordingPathActions *recordingPathActions_ = nullptr;
     QString currentError_;
     QString settingsPath_;
     QString windowStatePath_;
@@ -78,4 +91,12 @@ private:
     bool alwaysOnTopEnabled_ = false;
     bool videoFitMode_ = false;
     VideoQualitySettings activeVideoQuality_;
+    RecordingState recordingState_ = RecordingState::Idle;
+    bool activeRecordingShowCompletionMessage_ = false;
+    bool activeRecordingSession_ = false;
+    bool suppressRecordingCompletion_ = false;
+    bool recordingReturnedIdlePendingResult_ = false;
+    bool exitConfirmationActive_ = false;
+    std::optional<RecordingResult> exitPendingRecordingResult_;
+    std::optional<QString> exitPendingRecordingError_;
 };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "backend/RecordingTypes.h"
 #include "backend/VideoQualitySettings.h"
 
 #include <QObject>
@@ -17,6 +18,9 @@ public:
 
     void receiverNameChanged(QString requestedName, QString activeName);
     void videoQualityChanged(VideoQualitySettings requestedQuality, VideoQualitySettings activeQuality);
+    void recordingStateChanged(RecordingState previous, RecordingState current);
+    void deferReceiverNameUntilRecordingIdle(QString name);
+    void deferVideoQualityUntilRecordingIdle(VideoQualitySettings quality);
     void receiverSessionChanged(bool wasSessionActive, bool sessionActive);
     void markReceiverNameApplied(QString name);
     void markVideoQualityApplied(VideoQualitySettings quality);
@@ -28,4 +32,6 @@ signals:
 private:
     std::optional<QString> pendingReceiverName_;
     std::optional<VideoQualitySettings> pendingVideoQuality_;
+    bool receiverNameWaitsForRecordingIdle_ = false;
+    bool videoQualityWaitsForRecordingIdle_ = false;
 };
