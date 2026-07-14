@@ -5,17 +5,24 @@
 #include <QDialog>
 #include <QHash>
 
+#include <memory>
+
 class QComboBox;
+class QCheckBox;
 class QLabel;
 class QKeySequenceEdit;
 class QLineEdit;
 class QTableWidget;
+class RecordingPathActions;
 
 class SettingsDialog final : public QDialog {
     Q_OBJECT
 
 public:
-    explicit SettingsDialog(const AppSettings &settings, QWidget *parent = nullptr);
+    explicit SettingsDialog(const AppSettings &settings,
+                            QWidget *parent = nullptr,
+                            RecordingPathActions *recordingPathActions = nullptr);
+    ~SettingsDialog() override;
     AppSettings settings() const;
 
 public slots:
@@ -29,4 +36,9 @@ private:
     QHash<int, QKeySequenceEdit *> shortcutEdits_;
     QComboBox *videoResolutionCombo_;
     QComboBox *videoFrameRateCombo_;
+    QComboBox *recordingFormatCombo_;
+    QLineEdit *recordingOutputDirectoryEdit_;
+    QCheckBox *showRecordingCompletionMessageCheckBox_;
+    std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
+    RecordingPathActions *recordingPathActions_;
 };
