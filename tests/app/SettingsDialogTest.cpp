@@ -280,6 +280,60 @@ private slots:
         QVERIFY(chooseError->isHidden());
     }
 
+    void validationThenPathFailureThenOpenSuccessKeepsValidationVisible() {
+        FakeRecordingPathActions actions;
+        actions.openError = "Path action failed";
+        SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
+        auto *receiverName = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
+        QVERIFY(receiverName != nullptr);
+        QVERIFY(open != nullptr);
+        QVERIFY(error != nullptr);
+
+        receiverName->setText("   ");
+        dialog.accept();
+        QVERIFY(error->text().contains("Receiver name"));
+
+        open->click();
+        QVERIFY(error->text().contains("Receiver name"));
+        QVERIFY(error->text().contains(actions.openError));
+
+        actions.openError.clear();
+        open->click();
+        QVERIFY(error->text().contains("Receiver name"));
+        QVERIFY(!error->text().contains("Path action failed"));
+        QVERIFY(!error->isHidden());
+    }
+
+    void pathFailureThenValidationThenChooseSuccessKeepsValidationVisible() {
+        FakeRecordingPathActions actions;
+        actions.openError = "Path action failed";
+        actions.chosenDirectory = QDir::temp().filePath("valid recordings");
+        SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
+        auto *receiverName = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *choose = dialog.findChild<QPushButton *>("chooseRecordingDirectoryButton");
+        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
+        QVERIFY(receiverName != nullptr);
+        QVERIFY(open != nullptr);
+        QVERIFY(choose != nullptr);
+        QVERIFY(error != nullptr);
+
+        open->click();
+        QVERIFY(error->text().contains(actions.openError));
+
+        receiverName->setText("   ");
+        dialog.accept();
+        QVERIFY(error->text().contains("Receiver name"));
+        QVERIFY(error->text().contains(actions.openError));
+
+        choose->click();
+        QVERIFY(error->text().contains("Receiver name"));
+        QVERIFY(!error->text().contains("Path action failed"));
+        QVERIFY(!error->isHidden());
+    }
+
     void toggleVideoFitShortcutEditExists() {
         SettingsDialog dialog(AppSettings::defaults());
         auto *edit = dialog.findChild<QKeySequenceEdit *>("shortcutEdit_toggleVideoFit");
