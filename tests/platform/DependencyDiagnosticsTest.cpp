@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QTemporaryDir>
 #include <QTextStream>
 
@@ -58,8 +59,12 @@ QStringList playbackStandaloneRuntimePaths() {
         "libwinpthread-1.dll",
         "libgstreamer-1.0-0.dll",
         "gstreamer-plugins/libgstapp.dll",
+        "gstreamer-plugins/libgstcoreelements.dll",
         "gstreamer-plugins/libgstplayback.dll",
         "gstreamer-plugins/libgstautodetect.dll",
+        "gstreamer-plugins/libgstvideoconvertscale.dll",
+        "gstreamer-plugins/libgstaudioconvert.dll",
+        "gstreamer-plugins/libgstaudioresample.dll",
         "gstreamer-plugins/libgstvideoparsersbad.dll",
         "gstreamer-plugins/libgstlibav.dll",
         "gstreamer-plugins/libgstd3d11.dll",
@@ -68,6 +73,31 @@ QStringList playbackStandaloneRuntimePaths() {
         "libqmdnsengine.dll",
     };
 }
+
+class EnvironmentSnapshot {
+public:
+    explicit EnvironmentSnapshot(QStringList names) {
+        for (const QString &name : names) {
+            values_.insert(name, qEnvironmentVariable(name.toUtf8().constData()));
+            wasSet_.insert(name, qEnvironmentVariableIsSet(name.toUtf8().constData()));
+        }
+    }
+
+    ~EnvironmentSnapshot() {
+        for (auto it = values_.cbegin(); it != values_.cend(); ++it) {
+            const QByteArray name = it.key().toUtf8();
+            if (wasSet_.value(it.key())) {
+                qputenv(name.constData(), it.value().toUtf8());
+            } else {
+                qunsetenv(name.constData());
+            }
+        }
+    }
+
+private:
+    QHash<QString, QString> values_;
+    QHash<QString, bool> wasSet_;
+};
 
 void createStandaloneRuntimeFixture(const QString &root, const QStringList &requiredPaths) {
     for (const QString &relativePath : requiredPaths) {
@@ -214,6 +244,61 @@ private slots:
         };
         for (const QString &path : recordingPaths) {
             QVERIFY2(manifest.contains(path), qPrintable(path));
+        }
+    }
+
+    void packageLocalGStreamerEnvironmentOverridesExternalPaths() {
+        const QStringList names{
+            "GST_PLUGIN_PATH", "GST_PLUGIN_PATH_1_0",
+            "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0",
+            "GST_REGISTRY", "GST_REGISTRY_1_0",
+            "GST_PLUGIN_SCANNER", "GST_PLUGIN_SCANNER_1_0"};
+        EnvironmentSnapshot restore(names);
+        for (const QString &name : names) {
+            qputenv(name.toUtf8().constData(), "C:/external-msys2");
+        }
+        QTemporaryDir package;
+        QVERIFY(package.isValid());
+        QVERIFY(QDir().mkpath(package.filePath("gstreamer-plugins")));
+
+        QVERIFY(DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+            package.path()));
+
+        const QString plugins = QDir::toNativeSeparators(
+            package.filePath("gstreamer-plugins"));
+        const QString registry = QDir::toNativeSeparators(
+            package.filePath("gstreamer-1.0/registry.x86_64.bin"));
+        const QString scanner = QDir::toNativeSeparators(
+            package.filePath("libexec/gstreamer-1.0/gst-plugin-scanner.exe"));
+        QCOMPARE(qEnvironmentVariable("GST_PLUGIN_PATH"), plugins);
+        QCOMPARE(qEnvironmentVariable("GST_PLUGIN_PATH_1_0"), plugins);
+        QCOMPARE(qEnvironmentVariable("GST_PLUGIN_SYSTEM_PATH"), plugins);
+        QCOMPARE(qEnvironmentVariable("GST_PLUGIN_SYSTEM_PATH_1_0"), plugins);
+        QCOMPARE(qEnvironmentVariable("GST_REGISTRY"), registry);
+        QCOMPARE(qEnvironmentVariable("GST_REGISTRY_1_0"), registry);
+        QCOMPARE(qEnvironmentVariable("GST_PLUGIN_SCANNER"), scanner);
+        QCOMPARE(qEnvironmentVariable("GST_PLUGIN_SCANNER_1_0"), scanner);
+    }
+
+    void developmentModeWithoutPackagePluginDirectoryPreservesEnvironment() {
+        const QStringList names{
+            "GST_PLUGIN_PATH", "GST_PLUGIN_PATH_1_0",
+            "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0",
+            "GST_REGISTRY", "GST_REGISTRY_1_0",
+            "GST_PLUGIN_SCANNER", "GST_PLUGIN_SCANNER_1_0"};
+        EnvironmentSnapshot restore(names);
+        for (const QString &name : names) {
+            qputenv(name.toUtf8().constData(), QByteArray("sentinel-") + name.toUtf8());
+        }
+        QTemporaryDir developmentBuild;
+        QVERIFY(developmentBuild.isValid());
+
+        QVERIFY(!DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+            developmentBuild.path()));
+
+        for (const QString &name : names) {
+            QCOMPARE(qEnvironmentVariable(name.toUtf8().constData()),
+                     QString("sentinel-%1").arg(name));
         }
     }
 };

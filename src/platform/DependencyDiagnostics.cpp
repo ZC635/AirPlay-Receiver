@@ -22,8 +22,12 @@ QStringList playbackRuntimePaths() {
         "libwinpthread-1.dll",
         "libgstreamer-1.0-0.dll",
         "gstreamer-plugins/libgstapp.dll",
+        "gstreamer-plugins/libgstcoreelements.dll",
         "gstreamer-plugins/libgstplayback.dll",
         "gstreamer-plugins/libgstautodetect.dll",
+        "gstreamer-plugins/libgstvideoconvertscale.dll",
+        "gstreamer-plugins/libgstaudioconvert.dll",
+        "gstreamer-plugins/libgstaudioresample.dll",
         "gstreamer-plugins/libgstvideoparsersbad.dll",
         "gstreamer-plugins/libgstlibav.dll",
         "gstreamer-plugins/libgstd3d11.dll",
@@ -81,6 +85,32 @@ QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directo
         }
     }
     return missing;
+}
+
+bool DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+    const QString &applicationDirectory) {
+    const QDir applicationDir(applicationDirectory);
+    const QString pluginDirectory = applicationDir.filePath("gstreamer-plugins");
+    if (!QDir(pluginDirectory).exists()) {
+        return false;
+    }
+
+    const auto setPath = [](const char *name, const QString &path) {
+        qputenv(name, QDir::toNativeSeparators(path).toUtf8());
+    };
+    setPath("GST_PLUGIN_PATH", pluginDirectory);
+    setPath("GST_PLUGIN_PATH_1_0", pluginDirectory);
+    setPath("GST_PLUGIN_SYSTEM_PATH", pluginDirectory);
+    setPath("GST_PLUGIN_SYSTEM_PATH_1_0", pluginDirectory);
+    const QString registry = applicationDir.filePath(
+        "gstreamer-1.0/registry.x86_64.bin");
+    setPath("GST_REGISTRY", registry);
+    setPath("GST_REGISTRY_1_0", registry);
+    const QString scanner = applicationDir.filePath(
+        "libexec/gstreamer-1.0/gst-plugin-scanner.exe");
+    setPath("GST_PLUGIN_SCANNER", scanner);
+    setPath("GST_PLUGIN_SCANNER_1_0", scanner);
+    return true;
 }
 
 RecordingCapabilityDiagnostics DependencyDiagnostics::checkRecordingCapabilities(

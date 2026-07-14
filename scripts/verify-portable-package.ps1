@@ -125,20 +125,31 @@ if (-not $SkipRuntimeProbe) {
         $env:GST_PLUGIN_SCANNER_1_0 = $pluginScanner
 
         $probeExecutable = Join-Path $resolvedPackageDir 'airplay_receiver.exe'
-        $probeStdoutPath = [System.IO.Path]::GetTempFileName()
-        $probeStderrPath = [System.IO.Path]::GetTempFileName()
+        $probeStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $probeStartInfo.FileName = $probeExecutable
+        $probeStartInfo.WorkingDirectory = $resolvedPackageDir
+        $probeStartInfo.Arguments = '--verify-recording-runtime'
+        $probeStartInfo.UseShellExecute = $false
+        $probeStartInfo.RedirectStandardOutput = $true
+        $probeStartInfo.RedirectStandardError = $true
+        $probeStartInfo.CreateNoWindow = $true
+
+        $probeProcess = [System.Diagnostics.Process]::new()
+        $probeProcess.StartInfo = $probeStartInfo
         try {
-            $probeCommand = ('""{0}" --verify-recording-runtime 1>"{1}" 2>"{2}""' -f `
-                $probeExecutable, $probeStdoutPath, $probeStderrPath)
-            & $env:ComSpec /d /s /c $probeCommand
-            $probeExitCode = $LASTEXITCODE
+            if (-not $probeProcess.Start()) {
+                throw "Portable recording runtime probe could not be started: $probeExecutable"
+            }
+            $probeStdoutTask = $probeProcess.StandardOutput.ReadToEndAsync()
+            $probeStderrTask = $probeProcess.StandardError.ReadToEndAsync()
+            $probeProcess.WaitForExit()
+            $probeExitCode = $probeProcess.ExitCode
             $probeOutput = @(
-                Get-Content -LiteralPath $probeStdoutPath -ErrorAction SilentlyContinue
-                Get-Content -LiteralPath $probeStderrPath -ErrorAction SilentlyContinue
+                $probeStdoutTask.Result -split '\r?\n' | Where-Object { $_ }
+                $probeStderrTask.Result -split '\r?\n' | Where-Object { $_ }
             )
         } finally {
-            Remove-Item -LiteralPath $probeStdoutPath, $probeStderrPath `
-                -Force -ErrorAction SilentlyContinue
+            $probeProcess.Dispose()
         }
         if ($probeExitCode -ne 0) {
             throw "Portable recording runtime probe failed with exit code ${probeExitCode}: $($probeOutput -join ' ')"

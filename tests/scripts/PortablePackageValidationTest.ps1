@@ -9,6 +9,13 @@ $verifyScript = Join-Path $ProjectRoot "scripts\verify-portable-package.ps1"
 if (-not (Test-Path -LiteralPath $verifyScript)) {
     throw "Missing portable package verifier: $verifyScript"
 }
+$verifyContent = Get-Content -LiteralPath $verifyScript -Raw
+if ($verifyContent -notmatch 'System\.Diagnostics\.ProcessStartInfo') {
+    throw "Portable verifier must launch runtime probe with ProcessStartInfo."
+}
+if ($verifyContent -match 'ComSpec|GetTempFileName') {
+    throw "Portable verifier must not shell-expand package paths or use temporary redirection files."
+}
 
 function Get-PortableRuntimeManifestPaths {
     $manifestPath = Join-Path $ProjectRoot "config\portable-runtime-manifest.txt"
