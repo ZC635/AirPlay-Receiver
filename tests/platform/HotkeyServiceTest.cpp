@@ -37,6 +37,21 @@ private slots:
         }
     }
 
+    void defaultRecordingShortcutIsCtrlAltR() {
+        QCOMPARE(AppSettings::defaults().shortcutFor(ShortcutAction::ToggleRecording),
+                 QKeySequence("Ctrl+Alt+R"));
+    }
+
+    void recordingShortcutParticipatesInConflictValidation() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setShortcut(ShortcutAction::ToggleRecording,
+                             settings.shortcutFor(ShortcutAction::ToggleToolbar));
+
+        const QStringList errors = settings.validateShortcuts();
+
+        QVERIFY(errors.contains(QStringLiteral("Duplicate shortcut: Ctrl+Alt+B")));
+    }
+
     void convertsArrowShortcutsToExpectedVirtualKeys() {
         const auto up = WindowsHotkeyService::toNativeHotkey(QKeySequence("Ctrl+Alt+Up"));
         const auto down = WindowsHotkeyService::toNativeHotkey(QKeySequence("Ctrl+Alt+Down"));
@@ -76,6 +91,30 @@ private slots:
         const bool handled = service.nativeEventFilter(QByteArray(), &msg, &result);
 
         QVERIFY(handled);
+        QCOMPARE(result, static_cast<qintptr>(TRUE));
+    }
+
+    void nativeEventFilterDispatchesRecordingAction() {
+        WindowsHotkeyService service;
+        const int id = static_cast<int>(ShortcutAction::ToggleRecording) + 1;
+        service.registrations_.insert(
+            id, {ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Alt+R")});
+        ShortcutAction activatedAction = ShortcutAction::ToggleToolbar;
+        int activatedCount = 0;
+        connect(&service, &HotkeyService::activated, &service,
+                [&](ShortcutAction action) {
+                    activatedAction = action;
+                    ++activatedCount;
+                });
+
+        MSG msg{};
+        msg.message = WM_HOTKEY;
+        msg.wParam = id;
+        qintptr result = 0;
+
+        QVERIFY(service.nativeEventFilter(QByteArray(), &msg, &result));
+        QCOMPARE(activatedCount, 1);
+        QCOMPARE(activatedAction, ShortcutAction::ToggleRecording);
         QCOMPARE(result, static_cast<qintptr>(TRUE));
     }
 
