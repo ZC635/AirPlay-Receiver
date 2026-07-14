@@ -892,6 +892,14 @@ RecordingStartResult RecordingController::start(const RecordingOptions &options)
     return {true, {}};
 }
 
+void RecordingController::setFallbackFrameRate(int frameRate)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (frameRate > 0) {
+        d->negotiatedFrameRate = frameRate;
+    }
+}
+
 void RecordingController::stop()
 {
     RecordingState expected = RecordingState::Recording;

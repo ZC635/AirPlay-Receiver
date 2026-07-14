@@ -93,6 +93,22 @@ GstSample *makeTapVideoSample(guint8 marker = 0x5a) {
     return sample;
 }
 
+GstSample *makeTapVideoSampleWithoutFrameRate(guint8 marker = 0x5a) {
+    constexpr int width = 16;
+    constexpr int height = 8;
+    GstBuffer *buffer = gst_buffer_new_allocate(nullptr, width * height * 4, nullptr);
+    gst_buffer_memset(buffer, 0, marker, width * height * 4);
+    GST_BUFFER_PTS(buffer) = GST_SECOND;
+    GstCaps *caps = gst_caps_new_simple(
+        "video/x-raw", "format", G_TYPE_STRING, "RGBA",
+        "width", G_TYPE_INT, width, "height", G_TYPE_INT, height,
+        "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1, nullptr);
+    GstSample *sample = gst_sample_new(buffer, caps, nullptr, nullptr);
+    gst_buffer_unref(buffer);
+    gst_caps_unref(caps);
+    return sample;
+}
+
 GstSample *makeTapAudioSample() {
     GstBuffer *buffer = gst_buffer_new_allocate(nullptr, 128, nullptr);
     gst_buffer_memset(buffer, 0, 0x33, 128);
@@ -121,6 +137,8 @@ struct TapControllerEnvironment {
     std::atomic_int discardCalls{0};
     bool finalizeSucceeds = true;
     QString finalizeError;
+    mutable QMutex configMutex;
+    QVector<GstRecordingPipelineConfig> startedConfigs;
 
     RecordingControllerHooks hooks() {
         RecordingControllerHooks hooks;
@@ -146,7 +164,10 @@ struct TapControllerEnvironment {
         hooks.monotonicNanoseconds = [] { return qint64(1); };
         hooks.createPipeline = [this] {
             RecordingPipelineSession session;
-            session.start = [this](const GstRecordingPipelineConfig &, GstSample *, QString *) {
+            session.start = [this](const GstRecordingPipelineConfig &config,
+                                   GstSample *, QString *) {
+                QMutexLocker locker(&configMutex);
+                startedConfigs.append(config);
                 pipelineStarted.store(true, std::memory_order_release);
                 return true;
             };
@@ -175,6 +196,11 @@ struct TapControllerEnvironment {
         };
         hooks.removeOwnedFinal = [](const QString &) { return true; };
         return hooks;
+    }
+
+    QVector<GstRecordingPipelineConfig> configs() const {
+        QMutexLocker locker(&configMutex);
+        return startedConfigs;
     }
 };
 } // namespace
@@ -473,6 +499,56 @@ private slots:
 #endif
     }
 
+    void videoResetCodecSelectionFailureIsBrokenBackendError() {
+#if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing publisher;
+        QStringList calls;
+        int chooseCalls = 0;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Reset Codec Failure Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        config.rendererCallObserver = [&calls](const QString &call) {
+            calls.append(call);
+        };
+        config.videoCodecChooser = [&chooseCalls](bool videoIsJpeg,
+                                                  bool videoIsH265) {
+            if (++chooseCalls == 1) {
+                return video_renderer_choose_codec(videoIsJpeg, videoIsH265);
+            }
+            return -1;
+        };
+        UxPlayReceiver receiver(config);
+        receiver.start();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
+        GstSample *availability = makeTapVideoSample();
+        UxPlayReceiver::videoSampleTap(availability,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(availability);
+        QVERIFY(receiver.recordingAvailable());
+        calls.clear();
+
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+
+        QCOMPARE(chooseCalls, 2);
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QVERIFY(!receiver.recordingAvailable());
+        QVERIFY(!receiver.m_acceptingCallbacks.load());
+        QVERIFY(!receiver.m_acceptingVideoTapSamples.load());
+        QVERIFY(!receiver.m_videoTapRegistered);
+        QVERIFY(!receiver.m_audioTapRegistered);
+        QVERIFY(receiver.m_videoTapContext == nullptr);
+        QVERIFY(receiver.m_audioTapContext == nullptr);
+        QVERIFY(!receiver.m_videoRendererInitialized);
+        QVERIFY(!receiver.m_audioRendererInitialized);
+        QVERIFY(calls.contains(QStringLiteral("cleanup_after_recording_boundary")));
+        QVERIFY(calls.contains(QStringLiteral("video_renderer_destroy")));
+        QVERIFY(calls.contains(QStringLiteral("audio_renderer_destroy")));
+#endif
+    }
+
     void receiverStopWaitsForRecordingFinalizeBeforeClearingRendererTaps() {
 #if AIRPLAY_WITH_UXPLAY
         TapControllerEnvironment environment;
@@ -767,6 +843,63 @@ private slots:
         receiver.discardRecording();
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
         QCOMPARE(finishedSpy.count(), 1);
+#endif
+    }
+
+    void qualityRestartUpdatesFallbackFrameRateForNextRecordingSession() {
+#if AIRPLAY_WITH_UXPLAY
+        TapControllerEnvironment environment;
+        FakeMdnsPublishing publisher;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Recording FPS Restart Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        config.videoQuality.frameRate = VideoFrameRate::Fps15;
+        config.recordingControllerHooks = environment.hooks();
+        UxPlayReceiver receiver(config);
+        receiver.start();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+
+        GstSample *firstAvailability = makeTapVideoSampleWithoutFrameRate();
+        UxPlayReceiver::videoSampleTap(firstAvailability,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(firstAvailability);
+        QTemporaryDir directory;
+        QVERIFY(receiver.startRecording(
+            {directory.path(), RecordingFormat::Mp4}).accepted);
+        GstSample *firstSessionVideo = makeTapVideoSampleWithoutFrameRate();
+        UxPlayReceiver::videoSampleTap(firstSessionVideo,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(firstSessionVideo);
+        QTRY_COMPARE(environment.configs().size(), 1);
+        QCOMPARE(environment.configs().at(0).video.fpsNumerator, 15);
+        QCOMPARE(environment.configs().at(0).video.fpsDenominator, 1);
+
+        VideoQualitySettings quality60 = config.videoQuality;
+        quality60.frameRate = VideoFrameRate::Fps60;
+        QVERIFY(receiver.applyVideoQuality(quality60));
+
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(environment.finalizeCalls.load(), 1);
+        QCOMPARE(environment.commitCalls.load(), 1);
+
+        GstSample *secondAvailability = makeTapVideoSampleWithoutFrameRate();
+        UxPlayReceiver::videoSampleTap(secondAvailability,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(secondAvailability);
+        QVERIFY(receiver.startRecording(
+            {directory.path(), RecordingFormat::Mp4}).accepted);
+        GstSample *secondSessionVideo = makeTapVideoSampleWithoutFrameRate();
+        UxPlayReceiver::videoSampleTap(secondSessionVideo,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(secondSessionVideo);
+        QTRY_COMPARE(environment.configs().size(), 2);
+        QCOMPARE(environment.configs().at(1).video.fpsNumerator, 60);
+        QCOMPARE(environment.configs().at(1).video.fpsDenominator, 1);
+        receiver.discardRecording();
+        receiver.stop();
 #endif
     }
 

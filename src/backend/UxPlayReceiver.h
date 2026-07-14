@@ -31,6 +31,7 @@ struct UxPlayReceiverConfig {
 #if AIRPLAY_WITH_UXPLAY
     RecordingControllerHooks recordingControllerHooks;
     std::function<void(const QString &)> rendererCallObserver;
+    std::function<int(bool videoIsJpeg, bool videoIsH265)> videoCodecChooser;
 #endif
 };
 
@@ -135,6 +136,7 @@ private:
     void installAudioSampleTap();
     void clearVideoSampleTap();
     void clearAudioSampleTap();
+    int chooseVideoRendererCodec(bool videoIsJpeg, bool videoIsH265) const;
     void applyVideoFitModeToRenderer();
     void resetVideoFrameBridge();
     void attachVideoFrameBridgeToCurrentPipeline();
