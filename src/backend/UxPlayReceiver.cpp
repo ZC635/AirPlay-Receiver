@@ -335,8 +335,7 @@ UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
     discoveryConfig.mdnsPublisher = m_config.mdnsPublisher;
     m_discovery = new UxPlayDiscovery(std::move(discoveryConfig), this);
     QObject::connect(m_discovery, &UxPlayDiscovery::failed, this, [this](const QString &message) {
-        setError(message);
-        setState(ReceiverState::Error);
+        handleBackendError(message, BackendErrorSafety::CanFinalize);
     });
 #endif
 }
@@ -624,8 +623,12 @@ bool UxPlayReceiver::applyReceiverName(const QString &name) {
     };
     operations.reportRecoveryFailure = [&](const QString &message) {
         debugLog("applyReceiverName: recovery discovery restart also failed");
+#if AIRPLAY_WITH_UXPLAY
+        handleBackendError(message, BackendErrorSafety::CanFinalize);
+#else
         setError(message);
         setState(ReceiverState::Error);
+#endif
     };
 
     return applyReceiverNameConfigurationChange(m_state, m_config.serverName, name, operations);
@@ -917,6 +920,9 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
 }
 
 void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 generation) {
+    if (static_cast<reset_type_t>(resetType) == RESET_TYPE_ON_VIDEO_PLAY) {
+        return;
+    }
     if (m_callbackDispatch.accepts(generation)) {
         m_acceptingVideoTapSamples.store(false, std::memory_order_release);
         endRecordingSession(true, true);
@@ -948,8 +954,9 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
                                     "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync,
                                     h265Support, false, kPlaybinVersion, nullptr) != 0) {
                 clearVideoSampleTap();
-                setError(QStringLiteral("Failed to reinitialize GStreamer video renderer"));
-                setState(ReceiverState::Error);
+                handleBackendError(
+                    QStringLiteral("Failed to reinitialize GStreamer video renderer"),
+                    BackendErrorSafety::Broken);
                 return;
             }
             m_videoRendererInitialized = true;
@@ -1187,11 +1194,6 @@ void UxPlayReceiver::setState(ReceiverState state) {
         return;
     }
 
-#if AIRPLAY_WITH_UXPLAY
-    if (state == ReceiverState::Error) {
-        endRecordingSession(false, true);
-    }
-#endif
     m_state = state;
     emit stateChanged(m_state);
 }
@@ -1206,6 +1208,28 @@ void UxPlayReceiver::setError(QString error) {
 }
 
 #if AIRPLAY_WITH_UXPLAY
+void UxPlayReceiver::handleBackendError(QString error,
+                                        BackendErrorSafety safety) {
+    if (QThread::currentThread() != thread()) {
+        QPointer<UxPlayReceiver> guardedReceiver(this);
+        QMetaObject::invokeMethod(this,
+            [guardedReceiver, error = std::move(error), safety]() mutable {
+                if (guardedReceiver) {
+                    guardedReceiver->handleBackendError(std::move(error),
+                                                        safety);
+                }
+            },
+            Qt::BlockingQueuedConnection);
+        return;
+    }
+
+    m_acceptingVideoTapSamples.store(false, std::memory_order_release);
+    endRecordingSession(safety == BackendErrorSafety::CanFinalize, true);
+    setError(std::move(error));
+    cleanupUxPlay();
+    setState(ReceiverState::Error);
+}
+
 void UxPlayReceiver::endRecordingSession(bool canFinalize, bool waitForIdle) {
     if (!m_recordingController) {
         return;

@@ -126,8 +126,10 @@ private:
     void setState(ReceiverState state);
     void setError(QString error);
 #if AIRPLAY_WITH_UXPLAY
+    enum class BackendErrorSafety { CanFinalize, Broken };
     void cleanupUxPlay();
     void endRecordingSession(bool canFinalize, bool waitForIdle);
+    void handleBackendError(QString error, BackendErrorSafety safety);
     void observeRendererCall(const QString &call) const;
     void installVideoSampleTap();
     void installAudioSampleTap();
