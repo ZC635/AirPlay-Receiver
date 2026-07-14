@@ -693,11 +693,11 @@ void MainWindow::handleRecordingFinished(const RecordingResult &result) {
         recordingReturnedIdlePendingResult_ = false;
         return;
     }
-    if (!result.warning.isEmpty() || showCleanCompletion) {
-        showRecordingCompletion(result);
-    }
     if (receiver_ != nullptr) {
         receiver_->acknowledgeRecordingResult();
+    }
+    if (!result.warning.isEmpty() || showCleanCompletion) {
+        showRecordingCompletion(result);
     }
     if (recordingReturnedIdlePendingResult_) {
         recordingReturnedIdlePendingResult_ = false;
