@@ -48,12 +48,20 @@ void SettingsChangeDeferrer::recordingStateChanged(RecordingState previous,
     }
 
     if (receiverNameWaitsForRecordingIdle_ && pendingReceiverName_.has_value()) {
-        receiverNameWaitsForRecordingIdle_ = false;
-        emit receiverNameReady(*pendingReceiverName_);
+        const QString readyName = *pendingReceiverName_;
+        emit receiverNameReady(readyName);
+        if (receiverNameWaitsForRecordingIdle_ && pendingReceiverName_.has_value() &&
+            *pendingReceiverName_ == readyName) {
+            receiverNameWaitsForRecordingIdle_ = false;
+        }
     }
     if (videoQualityWaitsForRecordingIdle_ && pendingVideoQuality_.has_value()) {
-        videoQualityWaitsForRecordingIdle_ = false;
-        emit videoQualityReady(*pendingVideoQuality_);
+        const VideoQualitySettings readyQuality = *pendingVideoQuality_;
+        emit videoQualityReady(readyQuality);
+        if (videoQualityWaitsForRecordingIdle_ && pendingVideoQuality_.has_value() &&
+            *pendingVideoQuality_ == readyQuality) {
+            videoQualityWaitsForRecordingIdle_ = false;
+        }
     }
 }
 

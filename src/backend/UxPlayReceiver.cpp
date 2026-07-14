@@ -717,6 +717,14 @@ void UxPlayReceiver::discardRecording() {
 #endif
 }
 
+void UxPlayReceiver::acknowledgeRecordingResult() {
+#if AIRPLAY_WITH_UXPLAY
+    if (m_recordingController) {
+        m_recordingController->acknowledgeResult();
+    }
+#endif
+}
+
 #if AIRPLAY_WITH_UXPLAY
 void UxPlayReceiver::setStateFromUxPlayCallback(ReceiverState state) {
     setStateFromUxPlayCallback(state, m_callbackDispatch.currentGeneration());

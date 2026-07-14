@@ -57,6 +57,7 @@ public:
     RecordingStartResult startRecording(const RecordingOptions &options) override;
     void stopRecording() override;
     void discardRecording() override;
+    void acknowledgeRecordingResult() override;
 #if AIRPLAY_WITH_UXPLAY
     struct CallbackContext {
         CallbackContext(UxPlayReceiver *receiver, quint64 generation);

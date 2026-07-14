@@ -1062,7 +1062,93 @@ private slots:
             QTRY_COMPARE(finishedSpy.count(), 1);
             QCOMPARE(environment.observedFinalizeDeadline.load(std::memory_order_acquire),
                      RecordingController::FinalizeDeadlineMilliseconds);
+            controller.acknowledgeResult();
         }
+        QCOMPARE(environment.removedFinals(), QStringList{});
+    }
+
+    void idleDiscardAfterFinishedSignalDeletesUnacknowledgedOwnedFinal()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QSignalSpy finishedSpy(&controller, &RecordingController::finished);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        GstSample *video = makeVideoSample();
+        QVERIFY(controller.tryEnqueueVideoSample(video));
+        gst_sample_unref(video);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.stop();
+        QTRY_COMPARE(finishedSpy.count(), 1);
+        QCOMPARE(controller.state(), RecordingState::Idle);
+        QCOMPARE(environment.removedFinals(), QStringList{});
+
+        controller.discard();
+
+        QCOMPARE(environment.successfulRemovals(),
+                 QStringList{environment.reservation.reservation->finalPath});
+    }
+
+    void acknowledgeFinishedResultPreservesFinalAcrossIdleDiscard()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QSignalSpy finishedSpy(&controller, &RecordingController::finished);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        GstSample *video = makeVideoSample();
+        QVERIFY(controller.tryEnqueueVideoSample(video));
+        gst_sample_unref(video);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.stop();
+        QTRY_COMPARE(finishedSpy.count(), 1);
+
+        controller.acknowledgeResult();
+        controller.discard();
+
+        QCOMPARE(environment.removedFinals(), QStringList{});
+    }
+
+    void acknowledgeCannotForgetOwnedFinalAfterDiscardRemovalFailure()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QSignalSpy finishedSpy(&controller, &RecordingController::finished);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        GstSample *video = makeVideoSample();
+        QVERIFY(controller.tryEnqueueVideoSample(video));
+        gst_sample_unref(video);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.stop();
+        QTRY_COMPARE(finishedSpy.count(), 1);
+        environment.removeOwnedFinalFailuresRemaining.store(2, std::memory_order_release);
+
+        controller.discard();
+        controller.acknowledgeResult();
+        controller.discard();
+
+        QCOMPARE(environment.successfulRemovals(),
+                 QStringList{environment.reservation.reservation->finalPath});
+    }
+
+    void newStartImplicitlyAcknowledgesSuccessfulPriorResult()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QSignalSpy finishedSpy(&controller, &RecordingController::finished);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        GstSample *video = makeVideoSample();
+        QVERIFY(controller.tryEnqueueVideoSample(video));
+        gst_sample_unref(video);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.stop();
+        QTRY_COMPARE(finishedSpy.count(), 1);
+
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        controller.discard();
+
         QCOMPARE(environment.removedFinals(), QStringList{});
     }
 
