@@ -23,6 +23,8 @@ int main(int argc, char *argv[]) {
     if (verifyRecordingRuntime) {
         QCoreApplication app(argc, argv);
 #if AIRPLAY_WITH_UXPLAY
+        DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+            QCoreApplication::applicationDirPath());
         const RecordingCapabilityDiagnostics diagnostics =
             DependencyDiagnostics::checkRecordingCapabilities(true);
         if (diagnostics.canRecord) {
@@ -45,6 +47,8 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
 
 #if AIRPLAY_WITH_UXPLAY
+    DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+        QCoreApplication::applicationDirPath());
     const QStringList missingRuntime = DependencyDiagnostics::shouldCheckStandaloneRuntime()
         ? DependencyDiagnostics::checkStandaloneRuntime(QCoreApplication::applicationDirPath())
         : QStringList{};

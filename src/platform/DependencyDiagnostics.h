@@ -23,6 +23,8 @@ public:
     static QStringList checkRuntimeBasics();
     static bool shouldCheckStandaloneRuntime();
     static QStringList checkStandaloneRuntime(const QString &directory);
+    static bool configurePackageLocalGStreamerEnvironment(
+        const QString &applicationDirectory);
     static RecordingCapabilityDiagnostics checkRecordingCapabilities(
         bool requireBothEncoders);
     static RecordingCapabilityDiagnostics checkRecordingCapabilities(
