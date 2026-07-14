@@ -29,6 +29,15 @@ public slots:
     void accept() override;
 
 private:
+    enum class ErrorSource {
+        None,
+        Validation,
+        PathAction
+    };
+
+    void showError(const QString &error, ErrorSource source);
+    void clearPathActionError();
+
     AppSettings settings_;
     QLineEdit *receiverNameEdit_;
     QTableWidget *table_;
@@ -41,4 +50,5 @@ private:
     QCheckBox *showRecordingCompletionMessageCheckBox_;
     std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
     RecordingPathActions *recordingPathActions_;
+    ErrorSource errorSource_ = ErrorSource::None;
 };

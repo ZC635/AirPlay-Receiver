@@ -142,6 +142,30 @@ private slots:
                  QFileInfo(actions.chosenDirectory).absoluteFilePath());
     }
 
+    void relativeRecordingDirectoryChoiceImmediatelyBecomesAbsoluteCandidate() {
+        AppSettings settings = AppSettings::defaults();
+        FakeRecordingPathActions actions;
+        actions.chosenDirectory = QDir::fromNativeSeparators(
+            "relative recordings/../relative recordings/final");
+        const QString expectedAbsolute = QDir::cleanPath(
+            QFileInfo(actions.chosenDirectory).absoluteFilePath());
+        SettingsDialog dialog(settings, nullptr, &actions);
+        auto *choose = dialog.findChild<QPushButton *>("chooseRecordingDirectoryButton");
+        auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *directory = dialog.findChild<QLineEdit *>("recordingOutputDirectoryEdit");
+        QVERIFY(choose != nullptr);
+        QVERIFY(open != nullptr);
+        QVERIFY(directory != nullptr);
+
+        choose->click();
+
+        QCOMPARE(directory->text(), QDir::toNativeSeparators(expectedAbsolute));
+        open->click();
+        QCOMPARE(actions.openedDirectories, QStringList({expectedAbsolute}));
+        dialog.accept();
+        QCOMPARE(dialog.settings().recordingOutputDirectory(), expectedAbsolute);
+    }
+
     void cancelledRecordingDirectoryChoiceLeavesCandidateUnchanged() {
         AppSettings settings = AppSettings::defaults();
         FakeRecordingPathActions actions;
@@ -189,6 +213,71 @@ private slots:
 
         QCOMPARE(error->text(), actions.openError);
         QVERIFY(!error->isHidden());
+    }
+
+    void successfulPathActionsDoNotClearValidationErrors() {
+        FakeRecordingPathActions openActions;
+        SettingsDialog openDialog(AppSettings::defaults(), nullptr, &openActions);
+        auto *openReceiverName = openDialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *open = openDialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *openError = openDialog.findChild<QLabel *>("settingsErrorLabel");
+        QVERIFY(openReceiverName != nullptr);
+        QVERIFY(open != nullptr);
+        QVERIFY(openError != nullptr);
+        openReceiverName->setText("   ");
+        openDialog.accept();
+        QVERIFY(openError->text().contains("Receiver name"));
+        const QString openValidationError = openError->text();
+        open->click();
+        QCOMPARE(openError->text(), openValidationError);
+        QVERIFY(!openError->isHidden());
+
+        FakeRecordingPathActions chooseActions;
+        chooseActions.chosenDirectory = QDir::temp().filePath("valid recordings");
+        SettingsDialog chooseDialog(AppSettings::defaults(), nullptr, &chooseActions);
+        auto *chooseReceiverName = chooseDialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *choose = chooseDialog.findChild<QPushButton *>("chooseRecordingDirectoryButton");
+        auto *chooseError = chooseDialog.findChild<QLabel *>("settingsErrorLabel");
+        QVERIFY(chooseReceiverName != nullptr);
+        QVERIFY(choose != nullptr);
+        QVERIFY(chooseError != nullptr);
+        chooseReceiverName->setText("   ");
+        chooseDialog.accept();
+        QVERIFY(chooseError->text().contains("Receiver name"));
+        const QString chooseValidationError = chooseError->text();
+        choose->click();
+        QCOMPARE(chooseError->text(), chooseValidationError);
+        QVERIFY(!chooseError->isHidden());
+    }
+
+    void successfulPathActionsClearPreviousPathErrors() {
+        FakeRecordingPathActions openActions;
+        openActions.openError = "Could not open recording directory";
+        SettingsDialog openDialog(AppSettings::defaults(), nullptr, &openActions);
+        auto *open = openDialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *openError = openDialog.findChild<QLabel *>("settingsErrorLabel");
+        QVERIFY(open != nullptr);
+        QVERIFY(openError != nullptr);
+        open->click();
+        QVERIFY(!openError->isHidden());
+        openActions.openError.clear();
+        open->click();
+        QVERIFY(openError->isHidden());
+
+        FakeRecordingPathActions chooseActions;
+        chooseActions.openError = "Could not open recording directory";
+        chooseActions.chosenDirectory = QDir::temp().filePath("valid recordings");
+        SettingsDialog chooseDialog(AppSettings::defaults(), nullptr, &chooseActions);
+        auto *chooseOpen = chooseDialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *choose = chooseDialog.findChild<QPushButton *>("chooseRecordingDirectoryButton");
+        auto *chooseError = chooseDialog.findChild<QLabel *>("settingsErrorLabel");
+        QVERIFY(chooseOpen != nullptr);
+        QVERIFY(choose != nullptr);
+        QVERIFY(chooseError != nullptr);
+        chooseOpen->click();
+        QVERIFY(!chooseError->isHidden());
+        choose->click();
+        QVERIFY(chooseError->isHidden());
     }
 
     void toggleVideoFitShortcutEditExists() {

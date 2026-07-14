@@ -8,6 +8,7 @@
 #include <QCheckBox>
 #include <QDir>
 #include <QFormLayout>
+#include <QFileInfo>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -34,6 +35,10 @@ constexpr ShortcutRow kShortcutRows[] = {
     {ShortcutAction::ToggleVideoFit, "Toggle video fit"},
     {ShortcutAction::ToggleRecording, "Toggle recording"},
 };
+
+QString normalizedAbsolutePath(const QString &path) {
+    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
 
 }
 
@@ -112,23 +117,23 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
         const QString chosen = recordingPathActions_->chooseExistingDirectory(
             this, initialDirectory);
         if (!chosen.isEmpty()) {
-            recordingOutputDirectoryEdit_->setText(QDir::toNativeSeparators(chosen));
+            recordingOutputDirectoryEdit_->setText(
+                QDir::toNativeSeparators(normalizedAbsolutePath(chosen)));
+            clearPathActionError();
         }
     });
     connect(openDirectoryButton, &QPushButton::clicked, this, [this]() {
         if (recordingPathActions_ == nullptr) {
             return;
         }
-        const QString directory = QDir::fromNativeSeparators(
-            recordingOutputDirectoryEdit_->text());
+        const QString directory = normalizedAbsolutePath(QDir::fromNativeSeparators(
+            recordingOutputDirectoryEdit_->text()));
         const QString error = recordingPathActions_->ensureAndOpenDirectory(directory);
         if (error.isEmpty()) {
-            errorLabel_->clear();
-            errorLabel_->hide();
+            clearPathActionError();
             return;
         }
-        errorLabel_->setText(error);
-        errorLabel_->show();
+        showError(error, ErrorSource::PathAction);
     });
 
     auto *directoryLayout = new QHBoxLayout;
@@ -218,6 +223,21 @@ AppSettings SettingsDialog::settings() const {
     return settings_;
 }
 
+void SettingsDialog::showError(const QString &error, ErrorSource source) {
+    errorLabel_->setText(error);
+    errorLabel_->show();
+    errorSource_ = source;
+}
+
+void SettingsDialog::clearPathActionError() {
+    if (errorSource_ != ErrorSource::PathAction) {
+        return;
+    }
+    errorLabel_->clear();
+    errorLabel_->hide();
+    errorSource_ = ErrorSource::None;
+}
+
 void SettingsDialog::accept() {
     AppSettings candidate = settings_;
     candidate.setReceiverName(receiverNameEdit_->text());
@@ -234,8 +254,8 @@ void SettingsDialog::accept() {
     candidate.setVideoQuality(vq);
     candidate.setRecordingFormat(
         static_cast<RecordingFormat>(recordingFormatCombo_->currentData().toInt()));
-    candidate.setRecordingOutputDirectory(
-        QDir::fromNativeSeparators(recordingOutputDirectoryEdit_->text()));
+    candidate.setRecordingOutputDirectory(normalizedAbsolutePath(
+        QDir::fromNativeSeparators(recordingOutputDirectoryEdit_->text())));
     candidate.setShowRecordingCompletionMessage(
         showRecordingCompletionMessageCheckBox_->isChecked());
 
@@ -254,13 +274,13 @@ void SettingsDialog::accept() {
         }
     }
     if (!errors.isEmpty()) {
-        errorLabel_->setText(errors.join('\n'));
-        errorLabel_->show();
+        showError(errors.join('\n'), ErrorSource::Validation);
         return;
     }
 
     errorLabel_->clear();
     errorLabel_->hide();
+    errorSource_ = ErrorSource::None;
     settings_ = candidate;
     QDialog::accept();
 }
