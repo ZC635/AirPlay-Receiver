@@ -696,6 +696,9 @@ void MainWindow::handleRecordingFinished(const RecordingResult &result) {
     if (!result.warning.isEmpty() || showCleanCompletion) {
         showRecordingCompletion(result);
     }
+    if (receiver_ != nullptr) {
+        receiver_->acknowledgeRecordingResult();
+    }
     if (recordingReturnedIdlePendingResult_) {
         recordingReturnedIdlePendingResult_ = false;
         deferrer_.recordingStateChanged(RecordingState::Finalizing,

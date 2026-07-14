@@ -66,6 +66,7 @@ public:
     void setFallbackFrameRate(int frameRate);
     void stop();
     void discard();
+    void acknowledgeResult();
     bool tryEnqueueVideoSample(GstSample *borrowedSample) noexcept;
     bool tryEnqueueAudioSample(GstSample *borrowedSample) noexcept;
     void sessionEnded(bool canFinalize);

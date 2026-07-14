@@ -492,6 +492,7 @@ private slots:
 
         QVERIFY(sawInformation);
         QCOMPARE(pathActions.revealedFile, actualPath);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, 1);
     }
 
     void revealFailureAfterCompletionIsAlwaysVisible() {
@@ -544,6 +545,7 @@ private slots:
         recordButton->click();
         receiver.completeRecordingForTest({"C:/recordings/quiet.mp4", {}});
         QVERIFY(QApplication::activeModalWidget() == nullptr);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, 1);
 
         recordButton->click();
         recordButton->click();
@@ -558,6 +560,7 @@ private slots:
         receiver.completeRecordingForTest(
             {"C:/recordings/warn.mp4", "Recording completed with dropped frames"});
         QVERIFY(sawWarning);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, 2);
 
         recordButton->click();
         bool sawCritical = false;
@@ -570,6 +573,7 @@ private slots:
         });
         receiver.failRecordingForTest("Runtime muxer failed");
         QVERIFY(sawCritical);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, 2);
     }
 
     void recordingSettingsChangedMidSessionOnlyAffectNextStart() {
@@ -783,6 +787,7 @@ private slots:
         QVERIFY(window.close());
         QVERIFY(!sawCompletionDialog);
         QCOMPARE(receiver.discardCallsIncludingIdle, 1);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, 0);
     }
 
     void finalizingCompletionDuringExitCancelShowsSavedResultAfterPrompt() {
@@ -816,6 +821,7 @@ private slots:
         QVERIFY(!window.close());
         QVERIFY(sawCompletionAfterCancel);
         QCOMPARE(receiver.discardCallsIncludingIdle, 0);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, 1);
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
     }
 

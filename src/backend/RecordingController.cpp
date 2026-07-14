@@ -268,7 +268,7 @@ public:
                   int negotiatedFrameRate,
                   quint64 generation)
     {
-        if (!removeExplicitOwnedFinal()) {
+        if (!prepareOwnedFinalForNewSession()) {
             try { m_hooks.discard(reservation); } catch (...) {}
             return QStringLiteral("Could not remove a previously owned recording file");
         }
@@ -405,7 +405,9 @@ private:
             return;
         }
         m_ownedFinal = m_reservation.finalPath;
+        m_ownedFinalAwaitingAcknowledgement = true;
         if (m_cancelled->load(std::memory_order_acquire)) {
+            m_ownedFinalAwaitingAcknowledgement = false;
             removeExplicitOwnedFinal();
             resetSession();
             return;
@@ -439,10 +441,11 @@ public:
         failSession(error);
     }
 
-    void relinquishCommittedFinal(quint64 generation, const QString &path)
+    void acknowledgeCommittedFinal()
     {
-        if (generation == m_generation && !m_active && m_ownedFinal == path) {
+        if (!m_active && m_ownedFinalAwaitingAcknowledgement) {
             m_ownedFinal.clear();
+            m_ownedFinalAwaitingAcknowledgement = false;
         }
     }
 
@@ -667,10 +670,22 @@ private:
             }
             if (removed) {
                 m_ownedFinal.clear();
+                m_ownedFinalAwaitingAcknowledgement = false;
                 return true;
             }
         }
         return false;
+    }
+
+    bool prepareOwnedFinalForNewSession()
+    {
+        if (m_ownedFinal.isEmpty()) return true;
+        if (m_ownedFinalAwaitingAcknowledgement) {
+            m_ownedFinal.clear();
+            m_ownedFinalAwaitingAcknowledgement = false;
+            return true;
+        }
+        return removeExplicitOwnedFinal();
     }
 
     void clearQueues()
@@ -686,6 +701,7 @@ private:
         if (m_active) {
             try { m_hooks.discard(m_reservation); } catch (...) {}
         }
+        m_ownedFinalAwaitingAcknowledgement = false;
         removeExplicitOwnedFinal();
         resetSession();
         clearQueues();
@@ -719,6 +735,7 @@ private:
     QString m_preferredEncoder;
     QString m_warning;
     QString m_ownedFinal;
+    bool m_ownedFinalAwaitingAcknowledgement = false;
     int m_negotiatedFrameRate = 30;
     quint64 m_generation = 0;
     bool m_active = false;
@@ -933,6 +950,13 @@ void RecordingController::discard()
     if (prior != RecordingState::Idle) emit stateChanged(RecordingState::Idle);
 }
 
+void RecordingController::acknowledgeResult()
+{
+    QMetaObject::invokeMethod(d->worker,
+        [worker = d->worker] { worker->acknowledgeCommittedFinal(); },
+        Qt::QueuedConnection);
+}
+
 bool RecordingController::tryEnqueueVideoSample(GstSample *borrowedSample) noexcept
 {
     RecordingVideoDescription description;
@@ -1054,10 +1078,6 @@ void RecordingController::handleWorkerFinished(quint64 generation,
                                                 const RecordingResult &result)
 {
     if (generation != d->generation || d->cancelled.load(std::memory_order_acquire)) return;
-    QMetaObject::invokeMethod(d->worker,
-        [worker = d->worker, generation, path = result.finalPath] {
-            worker->relinquishCommittedFinal(generation, path);
-        }, Qt::QueuedConnection);
     d->closeAcceptance();
     d->state.store(RecordingState::Idle, std::memory_order_release);
     emit stateChanged(RecordingState::Idle);

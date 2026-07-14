@@ -292,6 +292,27 @@ private slots:
 
         QCOMPARE(emittedName, QString("Session Name"));
     }
+
+    void recordingReadySignalCannotReenterThroughSessionTransition() {
+        SettingsChangeDeferrer deferrer;
+        int emitCount = 0;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverNameReady,
+                [&](const QString &) {
+                    ++emitCount;
+                    if (emitCount == 1) {
+                        deferrer.receiverSessionChanged(true, false);
+                    }
+                });
+        deferrer.deferReceiverNameUntilRecordingIdle("Desk Receiver");
+
+        deferrer.recordingStateChanged(RecordingState::Finalizing,
+                                       RecordingState::Idle);
+
+        QCOMPARE(emitCount, 1);
+        QVERIFY(deferrer.isReceiverNamePending("Desk Receiver"));
+        deferrer.receiverSessionChanged(true, false);
+        QCOMPARE(emitCount, 2);
+    }
 };
 
 QTEST_MAIN(SettingsChangeDeferrerTest)

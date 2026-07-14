@@ -32,6 +32,7 @@ public:
     virtual RecordingStartResult startRecording(const RecordingOptions &options) = 0;
     virtual void stopRecording() = 0;
     virtual void discardRecording() = 0;
+    virtual void acknowledgeRecordingResult() = 0;
 
 signals:
     void stateChanged(ReceiverState state);

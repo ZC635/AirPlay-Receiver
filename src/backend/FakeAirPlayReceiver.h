@@ -94,6 +94,10 @@ public:
         setRecordingState(RecordingState::Idle);
     }
 
+    void acknowledgeRecordingResult() override {
+        ++acknowledgeRecordingResultCount;
+    }
+
     void setRecordingAvailableForTest(bool available) {
         if (m_recordingAvailable == available) {
             return;
@@ -168,6 +172,7 @@ public:
     int startRecordingCount = 0;
     int stopRecordingCount = 0;
     int discardRecordingCount = 0;
+    int acknowledgeRecordingResultCount = 0;
 
     void emitVideoSize(int width, int height) {
         emit videoSizeChanged(width, height);
