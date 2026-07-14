@@ -72,6 +72,8 @@ add_library(airplay_app_lib
     src/platform/MdnsPublishing.h
     src/platform/MdnsPublisher.cpp
     src/platform/MdnsPublisher.h
+    src/platform/RecordingPathActions.cpp
+    src/platform/RecordingPathActions.h
     src/platform/WindowsWindowBehavior.cpp
     src/platform/WindowsWindowBehavior.h
     src/platform/WindowsHotkeyService.cpp

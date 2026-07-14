@@ -2,8 +2,11 @@
 #include "app/ShortcutActionKey.h"
 
 #include "platform/WindowsHotkeyService.h"
+#include "platform/RecordingPathActions.h"
 
 #include <QDialogButtonBox>
+#include <QCheckBox>
+#include <QDir>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHeaderView>
@@ -29,16 +32,25 @@ constexpr ShortcutRow kShortcutRows[] = {
     {ShortcutAction::ToggleToolbar, "Toggle toolbar"},
     {ShortcutAction::ToggleAspectRatio, "Toggle aspect ratio"},
     {ShortcutAction::ToggleVideoFit, "Toggle video fit"},
+    {ShortcutAction::ToggleRecording, "Toggle recording"},
 };
 
 }
 
-SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
+SettingsDialog::SettingsDialog(const AppSettings &settings,
+                               QWidget *parent,
+                               RecordingPathActions *recordingPathActions)
     : QDialog(parent),
       settings_(settings),
       receiverNameEdit_(new QLineEdit(settings.receiverName(), this)),
       table_(new QTableWidget(this)),
-      errorLabel_(new QLabel(this)) {
+      errorLabel_(new QLabel(this)),
+      ownedRecordingPathActions_(recordingPathActions == nullptr
+                                     ? std::make_unique<WindowsRecordingPathActions>()
+                                     : nullptr),
+      recordingPathActions_(recordingPathActions != nullptr
+                                ? recordingPathActions
+                                : ownedRecordingPathActions_.get()) {
     setWindowTitle("Settings");
 
     auto *generalGroup = new QGroupBox("General", this);
@@ -70,6 +82,71 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
     auto *videoLayout = new QFormLayout(videoGroup);
     videoLayout->addRow("Resolution", videoResolutionCombo_);
     videoLayout->addRow("Frame rate", videoFrameRateCombo_);
+
+    auto *recordingGroup = new QGroupBox("Recording", this);
+    recordingGroup->setObjectName("recordingSettingsGroup");
+
+    recordingFormatCombo_ = new QComboBox(recordingGroup);
+    recordingFormatCombo_->setObjectName("recordingFormatCombo");
+    recordingFormatCombo_->addItem("MP4", static_cast<int>(RecordingFormat::Mp4));
+    recordingFormatCombo_->setCurrentIndex(
+        recordingFormatCombo_->findData(static_cast<int>(settings_.recordingFormat())));
+
+    recordingOutputDirectoryEdit_ = new QLineEdit(recordingGroup);
+    recordingOutputDirectoryEdit_->setObjectName("recordingOutputDirectoryEdit");
+    recordingOutputDirectoryEdit_->setReadOnly(true);
+    recordingOutputDirectoryEdit_->setText(
+        QDir::toNativeSeparators(settings_.recordingOutputDirectory()));
+
+    auto *chooseDirectoryButton = new QPushButton("Choose...", recordingGroup);
+    chooseDirectoryButton->setObjectName("chooseRecordingDirectoryButton");
+    auto *openDirectoryButton = new QPushButton("Open", recordingGroup);
+    openDirectoryButton->setObjectName("openRecordingDirectoryButton");
+
+    connect(chooseDirectoryButton, &QPushButton::clicked, this, [this]() {
+        if (recordingPathActions_ == nullptr) {
+            return;
+        }
+        const QString initialDirectory = QDir::fromNativeSeparators(
+            recordingOutputDirectoryEdit_->text());
+        const QString chosen = recordingPathActions_->chooseExistingDirectory(
+            this, initialDirectory);
+        if (!chosen.isEmpty()) {
+            recordingOutputDirectoryEdit_->setText(QDir::toNativeSeparators(chosen));
+        }
+    });
+    connect(openDirectoryButton, &QPushButton::clicked, this, [this]() {
+        if (recordingPathActions_ == nullptr) {
+            return;
+        }
+        const QString directory = QDir::fromNativeSeparators(
+            recordingOutputDirectoryEdit_->text());
+        const QString error = recordingPathActions_->ensureAndOpenDirectory(directory);
+        if (error.isEmpty()) {
+            errorLabel_->clear();
+            errorLabel_->hide();
+            return;
+        }
+        errorLabel_->setText(error);
+        errorLabel_->show();
+    });
+
+    auto *directoryLayout = new QHBoxLayout;
+    directoryLayout->addWidget(recordingOutputDirectoryEdit_);
+    directoryLayout->addWidget(chooseDirectoryButton);
+    directoryLayout->addWidget(openDirectoryButton);
+
+    showRecordingCompletionMessageCheckBox_ = new QCheckBox(
+        "Show a message when recording completes", recordingGroup);
+    showRecordingCompletionMessageCheckBox_->setObjectName(
+        "showRecordingCompletionMessageCheckBox");
+    showRecordingCompletionMessageCheckBox_->setChecked(
+        settings_.showRecordingCompletionMessage());
+
+    auto *recordingLayout = new QFormLayout(recordingGroup);
+    recordingLayout->addRow("Format", recordingFormatCombo_);
+    recordingLayout->addRow("Output folder", directoryLayout);
+    recordingLayout->addRow(showRecordingCompletionMessageCheckBox_);
 
     auto *hotkeyGroup = new QGroupBox("Hotkey Binding", this);
     hotkeyGroup->setObjectName("hotkeyBindingGroup");
@@ -129,10 +206,13 @@ SettingsDialog::SettingsDialog(const AppSettings &settings, QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(generalGroup);
     layout->addWidget(videoGroup);
+    layout->addWidget(recordingGroup);
     layout->addWidget(hotkeyGroup);
     layout->addWidget(errorLabel_);
     layout->addWidget(buttons);
 }
+
+SettingsDialog::~SettingsDialog() = default;
 
 AppSettings SettingsDialog::settings() const {
     return settings_;
@@ -152,6 +232,12 @@ void SettingsDialog::accept() {
     vq.resolution = static_cast<VideoResolution>(videoResolutionCombo_->currentData().toInt());
     vq.frameRate = static_cast<VideoFrameRate>(videoFrameRateCombo_->currentData().toInt());
     candidate.setVideoQuality(vq);
+    candidate.setRecordingFormat(
+        static_cast<RecordingFormat>(recordingFormatCombo_->currentData().toInt()));
+    candidate.setRecordingOutputDirectory(
+        QDir::fromNativeSeparators(recordingOutputDirectoryEdit_->text()));
+    candidate.setShowRecordingCompletionMessage(
+        showRecordingCompletionMessageCheckBox_->isChecked());
 
     QStringList errors = candidate.validateGeneral();
     errors.append(candidate.validateShortcuts());

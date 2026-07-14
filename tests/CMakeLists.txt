@@ -47,6 +47,10 @@ add_executable(HotkeyServiceTest platform/HotkeyServiceTest.cpp)
 target_link_libraries(HotkeyServiceTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME HotkeyServiceTest COMMAND HotkeyServiceTest)
 
+add_executable(RecordingPathActionsTest platform/RecordingPathActionsTest.cpp)
+target_link_libraries(RecordingPathActionsTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME RecordingPathActionsTest COMMAND RecordingPathActionsTest)
+
 add_executable(AspectRatioSizingTest platform/AspectRatioSizingTest.cpp)
 target_link_libraries(AspectRatioSizingTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AspectRatioSizingTest COMMAND AspectRatioSizingTest)
@@ -207,6 +211,7 @@ set(AIRPLAY_QT_TESTS
     ToolbarWidgetTest
     SettingsDialogTest
     HotkeyServiceTest
+    RecordingPathActionsTest
     AspectRatioSizingTest
     WindowsWindowBehaviorTest
     DependencyDiagnosticsTest
