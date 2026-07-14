@@ -29,3 +29,17 @@ $registryBlockStartsPortableOnly = $buildContent -match 'if \(\$IsPortable\) \{\
 if ($registryBlockStartsPortableOnly) {
     throw "scripts\build.ps1 must generate the GStreamer registry for every deployed standalone build, not only portable builds."
 }
+
+if ($buildContent -notmatch 'function Build-CTestPrerequisiteTargets') {
+    throw "scripts\build.ps1 must define a CTest prerequisite target builder."
+}
+if ($buildContent -notmatch '--target\s+RendererSampleTapsTest') {
+    throw "scripts\build.ps1 -Test must explicitly build RendererSampleTapsTest before CTest."
+}
+if ($buildContent -notmatch 'third_party\\uxplay\\tests\\RendererSampleTapsTest\.exe') {
+    throw "scripts\build.ps1 must verify the excluded RendererSampleTapsTest executable exists."
+}
+$prerequisiteCalls = [regex]::Matches($buildContent, 'Build-CTestPrerequisiteTargets\s+-Directory').Count
+if ($prerequisiteCalls -lt 3) {
+    throw "scripts\build.ps1 must build CTest prerequisites for both -All directories and the single selected variant."
+}
