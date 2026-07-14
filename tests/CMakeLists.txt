@@ -154,8 +154,8 @@ if(AIRPLAY_WITH_UXPLAY)
         renderers
         PkgConfig::GST_PBUTILS
     )
-    # Launch through an already-running CMake process so the CTest-provided
-    # GStreamer PATH is inherited before Windows loads the test executable.
+    # Keep CMake as the launcher: this has been the stable Windows boundary
+    # across loader and antivirus timing variations while preserving CTest env.
     add_test(NAME RecordingControllerTest
         COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingControllerTest>)
     get_filename_component(AIRPLAY_GSTREAMER_BIN_DIR "${PKG_CONFIG_EXECUTABLE}" DIRECTORY)

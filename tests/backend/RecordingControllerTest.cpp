@@ -142,6 +142,7 @@ struct FakeEnvironment {
     std::atomic_int removeOwnedFinalThrowsRemaining{0};
     std::function<void()> afterVideoPush;
     std::atomic_int scheduledDrainCount{0};
+    std::atomic_int completedDrainCount{0};
     std::atomic<qint64> monotonicNow{0};
     std::atomic_bool blockMonotonicClock{false};
     std::atomic_bool monotonicClockEntered{false};
@@ -212,6 +213,9 @@ struct FakeEnvironment {
         };
         hooks.drainInvocationScheduled = [this] {
             scheduledDrainCount.fetch_add(1, std::memory_order_relaxed);
+        };
+        hooks.workerDrainCompleted = [this] {
+            completedDrainCount.fetch_add(1, std::memory_order_release);
         };
         hooks.workerFinalizeEntered = [this] {
             videoPushCountAtWorkerFinalizeEntry.store(
@@ -633,6 +637,36 @@ private slots:
         controller.discard();
     }
 
+    void audioQueuedBeforeFirstVideoWaitsForTimelineOrigin()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        GstSample *early = makeAudioSample(500'000'000);
+        QVERIFY(controller.tryEnqueueAudioSample(early));
+        gst_sample_unref(early);
+        GstSample *late = makeAudioSample(2 * GST_SECOND);
+        QVERIFY(controller.tryEnqueueAudioSample(late));
+        gst_sample_unref(late);
+
+        QTRY_COMPARE(environment.completedDrainCount.load(std::memory_order_acquire), 1);
+        QCOMPARE(environment.pushedAudioPts(), QVector<qint64>{});
+        const int quietScheduleCount = environment.scheduledDrainCount.load(
+            std::memory_order_acquire);
+        QCoreApplication::processEvents();
+        QCOMPARE(environment.scheduledDrainCount.load(std::memory_order_acquire),
+                 quietScheduleCount);
+
+        GstSample *firstVideo = makeVideoSample(640, 360, GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(firstVideo));
+        gst_sample_unref(firstVideo);
+        QTRY_COMPARE(environment.startCount(), 1);
+        QTRY_COMPARE(environment.pushedAudioPts(), QVector<qint64>{GST_SECOND});
+        controller.discard();
+    }
+
     void boundedQueuesDropImmediatelyAndCoalesceDrainInvocation()
     {
         static_assert(RecordingController::VideoQueueCapacity > 0);
@@ -868,6 +902,40 @@ private slots:
         GstSample *accepted = makeVideoSample(640, 360, GST_SECOND);
         QVERIFY(controller.tryEnqueueVideoSample(accepted));
         gst_sample_unref(accepted);
+        QTRY_COMPARE(environment.startCount(), 1);
+        controller.discard();
+    }
+
+    void callbackFromDiscardedSessionCannotEnterNewRecording()
+    {
+        FakeEnvironment environment;
+        RecordingController controller(30, environment.hooks());
+        observeVideo(controller);
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+
+        environment.monotonicClockEntered.store(false, std::memory_order_release);
+        environment.blockMonotonicClock.store(true, std::memory_order_release);
+        std::atomic_bool oldAccepted{true};
+        std::thread oldCallback([&] {
+            GstSample *oldVideo = makeVideoSample(640, 360, GST_SECOND);
+            oldAccepted.store(controller.tryEnqueueVideoSample(oldVideo),
+                              std::memory_order_release);
+            gst_sample_unref(oldVideo);
+        });
+        while (!environment.monotonicClockEntered.load(std::memory_order_acquire)) {
+            QThread::yieldCurrentThread();
+        }
+
+        controller.discard();
+        QVERIFY(controller.start({QStringLiteral("C:/recordings"), RecordingFormat::Mp4}).accepted);
+        environment.releaseMonotonicClock.store(true, std::memory_order_release);
+        oldCallback.join();
+        QVERIFY(!oldAccepted.load(std::memory_order_acquire));
+        QCOMPARE(environment.startCount(), 0);
+
+        GstSample *freshVideo = makeVideoSample(640, 360, 2 * GST_SECOND);
+        QVERIFY(controller.tryEnqueueVideoSample(freshVideo));
+        gst_sample_unref(freshVideo);
         QTRY_COMPARE(environment.startCount(), 1);
         controller.discard();
     }
