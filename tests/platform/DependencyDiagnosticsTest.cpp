@@ -249,6 +249,7 @@ private slots:
 
     void packageLocalGStreamerEnvironmentOverridesExternalPaths() {
         const QStringList names{
+            "PATH",
             "GST_PLUGIN_PATH", "GST_PLUGIN_PATH_1_0",
             "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0",
             "GST_REGISTRY", "GST_REGISTRY_1_0",
@@ -280,8 +281,37 @@ private slots:
         QCOMPARE(qEnvironmentVariable("GST_PLUGIN_SCANNER_1_0"), scanner);
     }
 
+    void packageLocalGStreamerEnvironmentPrependsRuntimePathOnce() {
+        EnvironmentSnapshot restore({"PATH"});
+        QTemporaryDir package;
+        QVERIFY(package.isValid());
+        QVERIFY(QDir().mkpath(package.filePath("gstreamer-plugins")));
+        const QString originalPath = "C:\\external-one;C:\\external-two";
+        qputenv("PATH", originalPath.toUtf8());
+
+        QVERIFY(DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+            package.path() + "/."));
+        QVERIFY(DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+            package.path().toUpper()));
+
+        const QString packageRoot = QDir::toNativeSeparators(
+            QDir::cleanPath(QDir(package.path().toUpper()).absolutePath()));
+        const QStringList pathEntries = qEnvironmentVariable("PATH").split(';');
+        QCOMPARE(pathEntries.constFirst(), packageRoot);
+        QCOMPARE(pathEntries.mid(1).join(';'), originalPath);
+        int packageRootCount = 0;
+        for (const QString &entry : pathEntries) {
+            if (QDir::toNativeSeparators(QDir::cleanPath(entry)).compare(
+                    packageRoot, Qt::CaseInsensitive) == 0) {
+                ++packageRootCount;
+            }
+        }
+        QCOMPARE(packageRootCount, 1);
+    }
+
     void developmentModeWithoutPackagePluginDirectoryPreservesEnvironment() {
         const QStringList names{
+            "PATH",
             "GST_PLUGIN_PATH", "GST_PLUGIN_PATH_1_0",
             "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0",
             "GST_REGISTRY", "GST_REGISTRY_1_0",

@@ -89,11 +89,28 @@ QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directo
 
 bool DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
     const QString &applicationDirectory) {
-    const QDir applicationDir(applicationDirectory);
+    const QString applicationPath = QDir::toNativeSeparators(
+        QDir::cleanPath(QDir(applicationDirectory).absolutePath()));
+    const QDir applicationDir(applicationPath);
     const QString pluginDirectory = applicationDir.filePath("gstreamer-plugins");
     if (!QDir(pluginDirectory).exists()) {
         return false;
     }
+
+    QStringList pathEntries;
+    const QString currentPath = qEnvironmentVariable("PATH");
+    if (!currentPath.isEmpty()) {
+        pathEntries = currentPath.split(QDir::listSeparator(), Qt::KeepEmptyParts);
+    }
+    for (qsizetype index = pathEntries.size() - 1; index >= 0; --index) {
+        const QString candidate = QDir::toNativeSeparators(
+            QDir::cleanPath(pathEntries.at(index).trimmed()));
+        if (candidate.compare(applicationPath, Qt::CaseInsensitive) == 0) {
+            pathEntries.removeAt(index);
+        }
+    }
+    pathEntries.prepend(applicationPath);
+    qputenv("PATH", pathEntries.join(QDir::listSeparator()).toUtf8());
 
     const auto setPath = [](const char *name, const QString &path) {
         qputenv(name, QDir::toNativeSeparators(path).toUtf8());
