@@ -322,6 +322,10 @@ private slots:
         QVERIFY(button->isEnabled());
         receiver.reset();
 
+        QVERIFY(!button->isEnabled());
+        QVERIFY(!button->isChecked());
+        QCOMPARE(button->text(), QString("Record"));
+
         emit hotkeys.activated(ShortcutAction::ToggleRecording);
 
         QCOMPARE(status->text(), QString("No recordable mirrored content"));

@@ -147,6 +147,9 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
                 [this](bool) { updateRecordingUi(); });
         connect(receiver_, &AirPlayReceiver::recordingStateChanged,
                 this, &MainWindow::handleRecordingStateChanged);
+        connect(receiver_, &QObject::destroyed, this, [this]() {
+            updateRecordingUi();
+        });
         updateRecordingUi();
         if (receiver_->receiverName() != settings_.receiverName()) {
             receiver_->applyReceiverName(settings_.receiverName());
