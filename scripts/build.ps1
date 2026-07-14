@@ -342,6 +342,21 @@ function Start-PortableProcess {
     }
 }
 
+function Build-CTestPrerequisiteTargets {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+
+    Write-Host "Building CTest prerequisite: RendererSampleTapsTest [$Directory]" -ForegroundColor Gray
+    cmake --build $Directory --target RendererSampleTapsTest
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not build RendererSampleTapsTest in $Directory"
+    }
+    $rendererSampleTapsTest = Join-Path $Directory `
+        "third_party\uxplay\tests\RendererSampleTapsTest.exe"
+    if (-not (Test-Path -LiteralPath $rendererSampleTapsTest)) {
+        throw "RendererSampleTapsTest target completed without producing: $rendererSampleTapsTest"
+    }
+}
+
 function Invoke-Build {
     param(
         [string]$VariantBuildDir,
@@ -554,14 +569,17 @@ if ($All) {
 if ($Test) {
     if ($All) {
         Write-Host "`n=== CTest [build-uxplay] ===" -ForegroundColor Cyan
+        Build-CTestPrerequisiteTargets -Directory (Join-Path $ProjectRoot "build-uxplay")
         ctest --test-dir (Join-Path $ProjectRoot "build-uxplay") --output-on-failure
         if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed in build-uxplay"; exit 1 }
 
         Write-Host "`n=== CTest [build-uxplay-portable] ===" -ForegroundColor Cyan
+        Build-CTestPrerequisiteTargets -Directory (Join-Path $ProjectRoot "build-uxplay-portable")
         ctest --test-dir (Join-Path $ProjectRoot "build-uxplay-portable") --output-on-failure
         if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed in build-uxplay-portable"; exit 1 }
     } else {
         Write-Host "`n=== CTest ===" -ForegroundColor Cyan
+        Build-CTestPrerequisiteTargets -Directory $BuildDir
         ctest --test-dir $BuildDir --output-on-failure
         if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed"; exit 1 }
     }
