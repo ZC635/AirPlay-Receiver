@@ -119,7 +119,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
         if (!chosen.isEmpty()) {
             recordingOutputDirectoryEdit_->setText(
                 QDir::toNativeSeparators(normalizedAbsolutePath(chosen)));
-            clearPathActionError();
+            pathActionError_.clear();
+            refreshErrorLabel();
         }
     });
     connect(openDirectoryButton, &QPushButton::clicked, this, [this]() {
@@ -130,10 +131,12 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             recordingOutputDirectoryEdit_->text()));
         const QString error = recordingPathActions_->ensureAndOpenDirectory(directory);
         if (error.isEmpty()) {
-            clearPathActionError();
+            pathActionError_.clear();
+            refreshErrorLabel();
             return;
         }
-        showError(error, ErrorSource::PathAction);
+        pathActionError_ = error;
+        refreshErrorLabel();
     });
 
     auto *directoryLayout = new QHBoxLayout;
@@ -223,19 +226,21 @@ AppSettings SettingsDialog::settings() const {
     return settings_;
 }
 
-void SettingsDialog::showError(const QString &error, ErrorSource source) {
-    errorLabel_->setText(error);
-    errorLabel_->show();
-    errorSource_ = source;
-}
-
-void SettingsDialog::clearPathActionError() {
-    if (errorSource_ != ErrorSource::PathAction) {
-        return;
+void SettingsDialog::refreshErrorLabel() {
+    QStringList errors;
+    if (!validationError_.isEmpty()) {
+        errors.push_back(validationError_);
     }
-    errorLabel_->clear();
-    errorLabel_->hide();
-    errorSource_ = ErrorSource::None;
+    if (!pathActionError_.isEmpty()) {
+        errors.push_back(pathActionError_);
+    }
+    if (errors.isEmpty()) {
+        errorLabel_->clear();
+        errorLabel_->hide();
+    } else {
+        errorLabel_->setText(errors.join('\n'));
+        errorLabel_->show();
+    }
 }
 
 void SettingsDialog::accept() {
@@ -274,13 +279,14 @@ void SettingsDialog::accept() {
         }
     }
     if (!errors.isEmpty()) {
-        showError(errors.join('\n'), ErrorSource::Validation);
+        validationError_ = errors.join('\n');
+        refreshErrorLabel();
         return;
     }
 
-    errorLabel_->clear();
-    errorLabel_->hide();
-    errorSource_ = ErrorSource::None;
+    validationError_.clear();
+    pathActionError_.clear();
+    refreshErrorLabel();
     settings_ = candidate;
     QDialog::accept();
 }
