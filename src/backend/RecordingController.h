@@ -34,6 +34,7 @@ struct RecordingControllerHooks {
     std::function<QUuid()> uuid;
     std::function<qint64()> monotonicNanoseconds;
     std::function<void()> drainInvocationScheduled;
+    std::function<void()> workerDrainCompleted;
     std::function<void()> workerFinalizeEntered;
     std::function<RecordingPipelineSession()> createPipeline;
     std::function<bool(const QString &)> removeOwnedFinal;

@@ -333,7 +333,8 @@ public:
                 }
             }
 
-            GstSample *audio = m_audioQueue->tryPopOwned();
+            GstSample *audio = m_pipelineStarted
+                ? m_audioQueue->tryPopOwned() : nullptr;
             if (audio) {
                 processAudio(audio);
                 gst_sample_unref(audio);
@@ -590,7 +591,9 @@ private:
     void finishDrainScheduling()
     {
         m_drainScheduled->store(false, std::memory_order_release);
-        if ((m_videoQueue->size() > 0 || m_audioQueue->size() > 0) &&
+        const bool processable = m_videoQueue->size() > 0 ||
+                                 (m_pipelineStarted && m_audioQueue->size() > 0);
+        if (processable &&
             m_active && !m_finalizing) {
             bool expected = false;
             if (m_drainScheduled->compare_exchange_strong(
@@ -603,6 +606,10 @@ private:
                 }
                 QMetaObject::invokeMethod(this, [this] { drain(); }, Qt::QueuedConnection);
             }
+        }
+        try {
+            if (m_hooks.workerDrainCompleted) m_hooks.workerDrainCompleted();
+        } catch (...) {
         }
     }
 
@@ -737,6 +744,18 @@ public:
         audioQueue.clear();
     }
 
+    void closeAcceptance()
+    {
+        acceptingGeneration.store(0, std::memory_order_release);
+        accepting.store(false, std::memory_order_release);
+    }
+
+    void openAcceptance(quint64 generationToken)
+    {
+        acceptingGeneration.store(generationToken, std::memory_order_release);
+        accepting.store(true, std::memory_order_release);
+    }
+
     int negotiatedFrameRate;
     RecordingControllerHooks hooks;
     QMutex queueGate;
@@ -747,6 +766,7 @@ public:
     std::atomic_bool available{false};
     std::atomic<RecordingState> state{RecordingState::Idle};
     std::atomic_bool accepting{false};
+    std::atomic<quint64> acceptingGeneration{0};
     std::atomic_bool cancelled{false};
     std::atomic_bool drainScheduled{false};
     quint64 generation = 0;
@@ -850,7 +870,7 @@ RecordingStartResult RecordingController::start(const RecordingOptions &options)
                            : reservationResult.error};
     }
 
-    d->accepting.store(false, std::memory_order_release);
+    d->closeAcceptance();
     d->cancelled.store(false, std::memory_order_release);
     d->clearQueues();
     d->drainScheduled.store(false, std::memory_order_release);
@@ -867,7 +887,7 @@ RecordingStartResult RecordingController::start(const RecordingOptions &options)
         return {false, QStringLiteral("Recording Start was cancelled")};
     }
     d->state.store(RecordingState::Recording, std::memory_order_release);
-    d->accepting.store(true, std::memory_order_release);
+    d->openAcceptance(generation);
     emit stateChanged(RecordingState::Recording);
     return {true, {}};
 }
@@ -879,7 +899,7 @@ void RecordingController::stop()
             expected, RecordingState::Finalizing, std::memory_order_acq_rel)) {
         return;
     }
-    d->accepting.store(false, std::memory_order_release);
+    d->closeAcceptance();
     emit stateChanged(RecordingState::Finalizing);
     const quint64 generation = d->generation;
     QMetaObject::invokeMethod(d->worker,
@@ -891,7 +911,7 @@ void RecordingController::discard()
 {
     const RecordingState prior = d->state.exchange(
         RecordingState::Idle, std::memory_order_acq_rel);
-    d->accepting.store(false, std::memory_order_release);
+    d->closeAcceptance();
     const quint64 generation = d->generation;
     if (prior != RecordingState::Idle) {
         d->cancelled.store(true, std::memory_order_release);
@@ -914,6 +934,8 @@ bool RecordingController::tryEnqueueVideoSample(GstSample *borrowedSample) noexc
         state() != RecordingState::Recording) {
         return false;
     }
+    const quint64 sessionToken = d->acceptingGeneration.load(std::memory_order_acquire);
+    if (sessionToken == 0) return false;
     qint64 arrival = -1;
     try {
         arrival = d->hooks.monotonicNanoseconds();
@@ -926,6 +948,7 @@ bool RecordingController::tryEnqueueVideoSample(GstSample *borrowedSample) noexc
         if (!locker.owns_lock()) return false;
         if (!d->accepting.load(std::memory_order_acquire) ||
             state() != RecordingState::Recording ||
+            d->acceptingGeneration.load(std::memory_order_acquire) != sessionToken ||
             !d->videoQueue.tryPushBorrowed(borrowedSample, arrival)) {
             return false;
         }
@@ -950,11 +973,14 @@ bool RecordingController::tryEnqueueAudioSample(GstSample *borrowedSample) noexc
         state() != RecordingState::Recording) {
         return false;
     }
+    const quint64 sessionToken = d->acceptingGeneration.load(std::memory_order_acquire);
+    if (sessionToken == 0) return false;
     {
         std::unique_lock<QMutex> locker(d->queueGate, std::try_to_lock);
         if (!locker.owns_lock()) return false;
         if (!d->accepting.load(std::memory_order_acquire) ||
             state() != RecordingState::Recording ||
+            d->acceptingGeneration.load(std::memory_order_acquire) != sessionToken ||
             !d->audioQueue.tryPushBorrowed(borrowedSample)) {
             return false;
         }
@@ -975,12 +1001,12 @@ bool RecordingController::tryEnqueueAudioSample(GstSample *borrowedSample) noexc
 void RecordingController::sessionEnded(bool canFinalize)
 {
     setAvailabilityFromAnyThread(false);
+    d->closeAcceptance();
     if (state() != RecordingState::Recording) return;
     if (canFinalize) {
         stop();
         return;
     }
-    d->accepting.store(false, std::memory_order_release);
     d->state.store(RecordingState::Finalizing, std::memory_order_release);
     emit stateChanged(RecordingState::Finalizing);
     const quint64 generation = d->generation;
@@ -1011,7 +1037,7 @@ void RecordingController::handleWorkerFinalizing(quint64 generation,
                                                   const QString &)
 {
     if (generation != d->generation || state() != RecordingState::Recording) return;
-    d->accepting.store(false, std::memory_order_release);
+    d->closeAcceptance();
     d->state.store(RecordingState::Finalizing, std::memory_order_release);
     emit stateChanged(RecordingState::Finalizing);
 }
@@ -1024,7 +1050,7 @@ void RecordingController::handleWorkerFinished(quint64 generation,
         [worker = d->worker, generation, path = result.finalPath] {
             worker->relinquishCommittedFinal(generation, path);
         }, Qt::QueuedConnection);
-    d->accepting.store(false, std::memory_order_release);
+    d->closeAcceptance();
     d->state.store(RecordingState::Idle, std::memory_order_release);
     emit stateChanged(RecordingState::Idle);
     emit finished(result);
@@ -1033,7 +1059,7 @@ void RecordingController::handleWorkerFinished(quint64 generation,
 void RecordingController::handleWorkerFailed(quint64 generation, const QString &error)
 {
     if (generation != d->generation || d->cancelled.load(std::memory_order_acquire)) return;
-    d->accepting.store(false, std::memory_order_release);
+    d->closeAcceptance();
     d->state.store(RecordingState::Idle, std::memory_order_release);
     emit stateChanged(RecordingState::Idle);
     emit failed(error);
