@@ -119,6 +119,8 @@ struct TapControllerEnvironment {
     std::atomic_int finalizeCalls{0};
     std::atomic_int commitCalls{0};
     std::atomic_int discardCalls{0};
+    bool finalizeSucceeds = true;
+    QString finalizeError;
 
     RecordingControllerHooks hooks() {
         RecordingControllerHooks hooks;
@@ -166,7 +168,7 @@ struct TapControllerEnvironment {
                     QThread::msleep(1);
                 }
                 finalizeCompleted.store(true, std::memory_order_release);
-                return GstRecordingFinalizeResult{true, {}};
+                return GstRecordingFinalizeResult{finalizeSucceeds, finalizeError};
             };
             session.abort = [] {};
             return session;
@@ -395,6 +397,41 @@ private slots:
 #endif
     }
 
+    void onVideoPlayResetDoesNotEndRecordingOrDisableCurrentTap() {
+#if AIRPLAY_WITH_UXPLAY
+        TapControllerEnvironment environment;
+        FakeMdnsPublishing publisher;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver ON_VIDEO_PLAY Reset Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        config.recordingControllerHooks = environment.hooks();
+        UxPlayReceiver receiver(config);
+        receiver.start();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        GstSample *availability = makeTapVideoSample();
+        UxPlayReceiver::videoSampleTap(availability,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(availability);
+        QTemporaryDir directory;
+        QVERIFY(receiver.startRecording(
+            {directory.path(), RecordingFormat::Mp4}).accepted);
+        auto *tapContext = receiver.m_videoTapContext.get();
+
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_ON_VIDEO_PLAY);
+
+        QVERIFY(receiver.recordingAvailable());
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        QVERIFY(receiver.m_acceptingVideoTapSamples.load());
+        QCOMPARE(receiver.m_videoTapContext.get(), tapContext);
+        QCOMPARE(environment.finalizeCalls.load(), 0);
+        QCOMPARE(environment.discardCalls.load(), 0);
+        receiver.discardRecording();
+        receiver.stop();
+#endif
+    }
+
     void videoResetClearsOldTapBeforeDestroyAndRegistersNewTapBeforeInit() {
 #if AIRPLAY_WITH_UXPLAY
         FakeMdnsPublishing publisher;
@@ -505,32 +542,159 @@ private slots:
 #endif
     }
 
+    void recoverableBackendErrorFinalizesAndSavesBeforeRendererCleanup() {
+#if AIRPLAY_WITH_UXPLAY
+        TapControllerEnvironment environment;
+        FakeMdnsPublishing publisher;
+        bool cleanupSawCommittedRecording = false;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Recoverable Backend Error Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        config.recordingControllerHooks = environment.hooks();
+        config.rendererCallObserver = [&](const QString &call) {
+            if (call == QStringLiteral("cleanup_after_recording_boundary")) {
+                cleanupSawCommittedRecording = environment.finalizeCompleted.load() &&
+                                               environment.commitCalls.load() == 1;
+            }
+        };
+        UxPlayReceiver receiver(config);
+        receiver.start();
+        GstSample *availability = makeTapVideoSample();
+        UxPlayReceiver::videoSampleTap(availability,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(availability);
+        QTemporaryDir directory;
+        QVERIFY(receiver.startRecording(
+            {directory.path(), RecordingFormat::Mp4}).accepted);
+        GstSample *first = makeTapVideoSample();
+        UxPlayReceiver::videoSampleTap(first, receiver.m_videoTapContext.get());
+        gst_sample_unref(first);
+        QTRY_VERIFY(environment.pipelineStarted.load());
+        QSignalSpy finishedSpy(&receiver, &AirPlayReceiver::recordingFinished);
+        QSignalSpy failedSpy(&receiver, &AirPlayReceiver::recordingFailed);
+        QThread *finishedThread = nullptr;
+        QObject::connect(&receiver, &AirPlayReceiver::recordingFinished,
+                         &receiver, [&](const RecordingResult &) {
+            finishedThread = QThread::currentThread();
+        });
+
+        receiver.handleBackendError(QStringLiteral("Injected recoverable backend error"),
+                                    UxPlayReceiver::BackendErrorSafety::CanFinalize);
+
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(finishedSpy.count(), 1);
+        QCOMPARE(failedSpy.count(), 0);
+        QCOMPARE(environment.finalizeCalls.load(), 1);
+        QCOMPARE(environment.commitCalls.load(), 1);
+        QCOMPARE(environment.discardCalls.load(), 0);
+        QVERIFY(cleanupSawCommittedRecording);
+        QCOMPARE(finishedThread, receiver.thread());
+#endif
+    }
+
+    void recoverableBackendErrorForwardsFinalizeFailureBeforeRendererCleanup() {
+#if AIRPLAY_WITH_UXPLAY
+        TapControllerEnvironment environment;
+        environment.finalizeSucceeds = false;
+        environment.finalizeError = QStringLiteral("Injected safe finalize failure");
+        FakeMdnsPublishing publisher;
+        bool cleanupSawFailedRecording = false;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Recoverable Error Failure Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        config.recordingControllerHooks = environment.hooks();
+        config.rendererCallObserver = [&](const QString &call) {
+            if (call == QStringLiteral("cleanup_after_recording_boundary")) {
+                cleanupSawFailedRecording = environment.finalizeCompleted.load() &&
+                                            environment.discardCalls.load() == 1;
+            }
+        };
+        UxPlayReceiver receiver(config);
+        receiver.start();
+        GstSample *availability = makeTapVideoSample();
+        UxPlayReceiver::videoSampleTap(availability,
+                                       receiver.m_videoTapContext.get());
+        gst_sample_unref(availability);
+        QTemporaryDir directory;
+        QVERIFY(receiver.startRecording(
+            {directory.path(), RecordingFormat::Mp4}).accepted);
+        GstSample *first = makeTapVideoSample();
+        UxPlayReceiver::videoSampleTap(first, receiver.m_videoTapContext.get());
+        gst_sample_unref(first);
+        QTRY_VERIFY(environment.pipelineStarted.load());
+        QSignalSpy finishedSpy(&receiver, &AirPlayReceiver::recordingFinished);
+        QSignalSpy failedSpy(&receiver, &AirPlayReceiver::recordingFailed);
+        QThread *failedThread = nullptr;
+        QObject::connect(&receiver, &AirPlayReceiver::recordingFailed,
+                         &receiver, [&](const QString &) {
+            failedThread = QThread::currentThread();
+        });
+
+        receiver.handleBackendError(QStringLiteral("Injected recoverable backend error"),
+                                    UxPlayReceiver::BackendErrorSafety::CanFinalize);
+
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
+        QCOMPARE(finishedSpy.count(), 0);
+        QCOMPARE(failedSpy.count(), 1);
+        QCOMPARE(failedSpy.last().at(0).toString(), environment.finalizeError);
+        QCOMPARE(environment.finalizeCalls.load(), 1);
+        QCOMPARE(environment.commitCalls.load(), 0);
+        QCOMPARE(environment.discardCalls.load(), 1);
+        QVERIFY(cleanupSawFailedRecording);
+        QCOMPARE(failedThread, receiver.thread());
+#endif
+    }
+
     void brokenBackendEndsRecordingWithoutUnsafeFinalize() {
 #if AIRPLAY_WITH_UXPLAY
         TapControllerEnvironment environment;
+        FakeMdnsPublishing publisher;
+        bool cleanupSawAbortedRecording = false;
         UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Broken Backend Error Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
         config.recordingControllerHooks = environment.hooks();
+        config.rendererCallObserver = [&](const QString &call) {
+            if (call == QStringLiteral("cleanup_after_recording_boundary")) {
+                cleanupSawAbortedRecording = environment.discardCalls.load() == 1 &&
+                                             environment.finalizeCalls.load() == 0;
+            }
+        };
         UxPlayReceiver receiver(config);
-        receiver.m_acceptingCallbacks.store(true);
-        receiver.m_acceptingVideoTapSamples.store(true);
-        receiver.m_callbackGeneration.store(12);
-        UxPlayReceiver::CallbackContext context(&receiver, 12);
+        receiver.start();
         GstSample *availability = makeTapVideoSample();
-        UxPlayReceiver::videoSampleTap(availability, &context);
+        UxPlayReceiver::videoSampleTap(availability,
+                                       receiver.m_videoTapContext.get());
         gst_sample_unref(availability);
         QTemporaryDir directory;
-        QVERIFY(receiver.m_recordingController->start(
+        QVERIFY(receiver.startRecording(
             {directory.path(), RecordingFormat::Mp4}).accepted);
-        QSignalSpy failedSpy(receiver.m_recordingController.get(),
-                             &RecordingController::failed);
+        QSignalSpy failedSpy(&receiver, &AirPlayReceiver::recordingFailed);
+        QThread *failedThread = nullptr;
+        QObject::connect(&receiver, &AirPlayReceiver::recordingFailed,
+                         &receiver, [&](const QString &) {
+            failedThread = QThread::currentThread();
+        });
 
-        receiver.setState(ReceiverState::Error);
+        receiver.handleBackendError(QStringLiteral("Injected broken backend error"),
+                                    UxPlayReceiver::BackendErrorSafety::Broken);
 
-        QTRY_COMPARE(receiver.m_recordingController->state(), RecordingState::Idle);
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QCOMPARE(receiver.recordingState(), RecordingState::Idle);
         QCOMPARE(failedSpy.count(), 1);
         QCOMPARE(environment.finalizeCalls.load(), 0);
         QCOMPARE(environment.commitCalls.load(), 0);
         QCOMPARE(environment.discardCalls.load(), 1);
+        QVERIFY(cleanupSawAbortedRecording);
+        QCOMPARE(failedThread, receiver.thread());
 #endif
     }
 
