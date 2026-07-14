@@ -157,6 +157,21 @@ public:
     int discardCallsIncludingIdle = 0;
 };
 
+class AcknowledgementOrderingReceiver final : public FakeAirPlayReceiver {
+public:
+    RecordingStartResult startRecording(const RecordingOptions &options) override {
+        events.append("start");
+        return FakeAirPlayReceiver::startRecording(options);
+    }
+
+    void acknowledgeRecordingResult() override {
+        events.append("ack");
+        FakeAirPlayReceiver::acknowledgeRecordingResult();
+    }
+
+    QStringList events;
+};
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
@@ -493,6 +508,30 @@ private slots:
         QVERIFY(sawInformation);
         QCOMPARE(pathActions.revealedFile, actualPath);
         QCOMPARE(receiver.acknowledgeRecordingResultCount, 1);
+    }
+
+    void completionAcknowledgesOldResultBeforeNestedHotkeyStartsNextSession() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setShowRecordingCompletionMessage(true);
+        AcknowledgementOrderingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        FakeHotkeyService hotkeys;
+        MainWindow window(settings, &hotkeys, &receiver);
+
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+        emit hotkeys.activated(ShortcutAction::ToggleRecording);
+        QTimer::singleShot(0, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box != nullptr);
+            emit hotkeys.activated(ShortcutAction::ToggleRecording);
+            box->button(QMessageBox::Ok)->click();
+        });
+
+        receiver.completeRecordingForTest({"C:/recordings/first.mp4", {}});
+
+        QCOMPARE(receiver.events, QStringList({"start", "ack", "start"}));
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        receiver.discardRecording();
     }
 
     void revealFailureAfterCompletionIsAlwaysVisible() {
