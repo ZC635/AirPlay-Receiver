@@ -21,6 +21,8 @@ add_library(airplay_app_lib
     src/app/AppSettingsStore.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
+    src/app/RecordingStartupCleanup.cpp
+    src/app/RecordingStartupCleanup.h
     src/app/SettingsChangeDeferrer.cpp
     src/app/SettingsChangeDeferrer.h
     src/app/SettingsDialog.cpp
@@ -91,7 +93,7 @@ if(AIRPLAY_WITH_UXPLAY)
         src/backend/GstSampleQueue.cpp
         src/backend/GstSampleQueue.h
     )
-    target_link_libraries(airplay_app_lib PRIVATE uxplay_dependency)
+    target_link_libraries(airplay_app_lib PUBLIC uxplay_dependency)
     if(TARGET qmdnsengine)
         get_target_property(_qmdns_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
         if(_qmdns_inc)

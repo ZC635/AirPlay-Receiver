@@ -1,47 +1,45 @@
 #include "platform/DependencyDiagnostics.h"
 
-#include <QCoreApplication>
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
-#include <QTextStream>
+
+#if AIRPLAY_WITH_UXPLAY
+#include <gst/gst.h>
+#endif
 
 namespace {
-QStringList readPortableRuntimeManifest() {
-    const QString relativeManifestPath = "config/portable-runtime-manifest.txt";
-    const QString appDirPath = QCoreApplication::applicationDirPath();
-    const QString currentDirPath = QDir::currentPath();
-    const QStringList candidatePaths = {
-        QDir(appDirPath).filePath(relativeManifestPath),
-        QDir(appDirPath).filePath("../" + relativeManifestPath),
-        QDir(appDirPath).filePath("../../" + relativeManifestPath),
-        QDir(currentDirPath).filePath(relativeManifestPath),
-        QDir(currentDirPath).filePath("../" + relativeManifestPath),
-        QDir(currentDirPath).filePath("../../" + relativeManifestPath)
+QStringList playbackRuntimePaths() {
+    return {
+        "config/portable-runtime-manifest.txt",
+        "airplay_receiver.exe",
+        "Qt6Core.dll",
+        "Qt6Gui.dll",
+        "Qt6Widgets.dll",
+        "platforms/qwindows.dll",
+        "libgcc_s_seh-1.dll",
+        "libstdc++-6.dll",
+        "libwinpthread-1.dll",
+        "libgstreamer-1.0-0.dll",
+        "gstreamer-plugins/libgstapp.dll",
+        "gstreamer-plugins/libgstplayback.dll",
+        "gstreamer-plugins/libgstautodetect.dll",
+        "gstreamer-plugins/libgstvideoparsersbad.dll",
+        "gstreamer-plugins/libgstlibav.dll",
+        "gstreamer-plugins/libgstd3d11.dll",
+        "gstreamer-plugins/libgstwasapi.dll",
+        "gstreamer-1.0/registry.x86_64.bin",
+        "libqmdnsengine.dll",
     };
+}
 
-    for (const QString &candidatePath : candidatePaths) {
-        QFile file(candidatePath);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            continue;
-        }
-
-        QStringList paths;
-        QTextStream stream(&file);
-        while (!stream.atEnd()) {
-            QString line = stream.readLine().trimmed();
-            if (line.isEmpty() || line.startsWith('#')) {
-                continue;
-            }
-            paths.append(line.replace('\\', '/'));
-        }
-        if (!paths.isEmpty()) {
-            return paths;
-        }
-    }
-
-    return {"config/portable-runtime-manifest.txt"};
+QStringList requiredRecordingFactories() {
+    return {
+        "matroskamux", "matroskademux", "mp4mux", "h264parse",
+        "avenc_aac", "aacparse", "appsrc", "appsink", "videoconvert",
+        "audioconvert", "audioresample", "capsfilter", "filesrc",
+        "filesink", "identity",
+    };
 }
 }
 
@@ -73,7 +71,7 @@ bool DependencyDiagnostics::shouldCheckStandaloneRuntime() {
 }
 
 QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directory) {
-    const QStringList requiredPaths = readPortableRuntimeManifest();
+    const QStringList requiredPaths = playbackRuntimePaths();
 
     QStringList missing;
     const QDir baseDir(directory);
@@ -83,4 +81,70 @@ QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directo
         }
     }
     return missing;
+}
+
+RecordingCapabilityDiagnostics DependencyDiagnostics::checkRecordingCapabilities(
+    bool requireBothEncoders,
+    const std::function<bool(const QString &)> &factoryAvailable) {
+    RecordingCapabilityDiagnostics result;
+    for (const QString &factory : requiredRecordingFactories()) {
+        if (!factoryAvailable(factory)) {
+            result.missingFactories.append(factory);
+        }
+    }
+
+    QStringList availableEncoders;
+    for (const QString &encoder : {QString("mfh264enc"), QString("openh264enc")}) {
+        if (factoryAvailable(encoder)) {
+            availableEncoders.append(encoder);
+        } else if (requireBothEncoders) {
+            result.missingFactories.append(encoder);
+        }
+    }
+    if (!availableEncoders.isEmpty()) {
+        result.selectedEncoder = availableEncoders.constFirst();
+    }
+    const bool encoderRequirementMet = requireBothEncoders
+        ? availableEncoders.size() == 2
+        : !availableEncoders.isEmpty();
+    result.canRecord = result.missingFactories.isEmpty() && encoderRequirementMet;
+    if (!encoderRequirementMet && !requireBothEncoders) {
+        result.missingFactories.append("mfh264enc");
+        result.missingFactories.append("openh264enc");
+    }
+    return result;
+}
+
+RecordingCapabilityDiagnostics DependencyDiagnostics::checkRecordingCapabilities(
+    bool requireBothEncoders) {
+#if AIRPLAY_WITH_UXPLAY
+    GError *error = nullptr;
+    if (!gst_init_check(nullptr, nullptr, &error)) {
+        RecordingCapabilityDiagnostics result;
+        result.missingFactories.append(
+            error && error->message
+                ? QString("GStreamer initialization: %1").arg(error->message)
+                : QString("GStreamer initialization"));
+        g_clear_error(&error);
+        return result;
+    }
+    return checkRecordingCapabilities(requireBothEncoders, [](const QString &name) {
+        GstElementFactory *factory = gst_element_factory_find(name.toUtf8().constData());
+        if (factory == nullptr) {
+            return false;
+        }
+        GstElement *element = gst_element_factory_create(factory, nullptr);
+        gst_object_unref(factory);
+        if (element == nullptr) {
+            return false;
+        }
+        gst_object_unref(element);
+        return true;
+    });
+#else
+    Q_UNUSED(requireBothEncoders);
+    RecordingCapabilityDiagnostics result;
+    result.missingFactories.append("GStreamer recording support");
+    return result;
+#endif
 }

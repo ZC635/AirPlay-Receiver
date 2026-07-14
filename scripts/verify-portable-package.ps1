@@ -1,10 +1,15 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$PackageDir
+    [string]$PackageDir,
+    [switch]$SkipRuntimeProbe
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($SkipRuntimeProbe -and $env:AIRPLAY_PORTABLE_FIXTURE_TEST -ne '1') {
+    throw '-SkipRuntimeProbe is reserved for isolated validation fixtures.'
+}
 
 function Get-PortableRuntimeManifestPaths {
     $projectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
@@ -17,6 +22,35 @@ function Get-PortableRuntimeManifestPaths {
         ForEach-Object { $_.Trim() } |
         Where-Object { $_ -and (-not $_.StartsWith("#")) } |
         ForEach-Object { $_.Replace('/', '\') }
+}
+
+function Remove-MSys2PathEntries {
+    param([string]$PathValue)
+
+    $kept = @()
+    foreach ($entry in ($PathValue -split ';')) {
+        if (-not $entry) { continue }
+        if ($entry -match '(?i)\\msys64\\' -or
+            $entry -match '(?i)\\(ucrt64|mingw64|clang64|clangarm64|mingw32)\\bin$') {
+            continue
+        }
+        $kept += $entry
+    }
+    return ($kept -join ';')
+}
+
+function Restore-EnvironmentVariable {
+    param(
+        [string]$Name,
+        [bool]$WasSet,
+        [string]$Value
+    )
+
+    if ($WasSet) {
+        Set-Item -Path "Env:$Name" -Value $Value
+    } else {
+        Remove-Item -Path "Env:$Name" -ErrorAction SilentlyContinue
+    }
 }
 
 if (-not (Test-Path -LiteralPath $PackageDir)) {
@@ -57,6 +91,67 @@ if ($missing.Count -ne 0 -or $forbidden.Count -ne 0) {
     }
 
     throw ($errors -join "`n")
+}
+
+if (-not $SkipRuntimeProbe) {
+    $trackedEnvironment = @(
+        'PATH',
+        'GST_PLUGIN_PATH', 'GST_PLUGIN_PATH_1_0',
+        'GST_PLUGIN_SYSTEM_PATH', 'GST_PLUGIN_SYSTEM_PATH_1_0',
+        'GST_REGISTRY', 'GST_REGISTRY_1_0',
+        'GST_PLUGIN_SCANNER', 'GST_PLUGIN_SCANNER_1_0'
+    )
+    $savedEnvironment = @{}
+    foreach ($name in $trackedEnvironment) {
+        $savedEnvironment[$name] = @{
+            WasSet = Test-Path "Env:$name"
+            Value = [Environment]::GetEnvironmentVariable($name)
+        }
+    }
+
+    try {
+        $resolvedPackageDir = (Resolve-Path -LiteralPath $PackageDir).Path
+        $pluginDir = Join-Path $resolvedPackageDir 'gstreamer-plugins'
+        $registryPath = Join-Path $resolvedPackageDir 'gstreamer-1.0\registry.x86_64.bin'
+        $env:PATH = "$resolvedPackageDir;$(Remove-MSys2PathEntries $env:PATH)"
+        $env:GST_PLUGIN_PATH = $pluginDir
+        $env:GST_PLUGIN_PATH_1_0 = $pluginDir
+        $env:GST_PLUGIN_SYSTEM_PATH = $pluginDir
+        $env:GST_PLUGIN_SYSTEM_PATH_1_0 = $pluginDir
+        $env:GST_REGISTRY = $registryPath
+        $env:GST_REGISTRY_1_0 = $registryPath
+        $pluginScanner = Join-Path $resolvedPackageDir 'libexec\gstreamer-1.0\gst-plugin-scanner.exe'
+        $env:GST_PLUGIN_SCANNER = $pluginScanner
+        $env:GST_PLUGIN_SCANNER_1_0 = $pluginScanner
+
+        $probeExecutable = Join-Path $resolvedPackageDir 'airplay_receiver.exe'
+        $probeStdoutPath = [System.IO.Path]::GetTempFileName()
+        $probeStderrPath = [System.IO.Path]::GetTempFileName()
+        try {
+            $probeCommand = ('""{0}" --verify-recording-runtime 1>"{1}" 2>"{2}""' -f `
+                $probeExecutable, $probeStdoutPath, $probeStderrPath)
+            & $env:ComSpec /d /s /c $probeCommand
+            $probeExitCode = $LASTEXITCODE
+            $probeOutput = @(
+                Get-Content -LiteralPath $probeStdoutPath -ErrorAction SilentlyContinue
+                Get-Content -LiteralPath $probeStderrPath -ErrorAction SilentlyContinue
+            )
+        } finally {
+            Remove-Item -LiteralPath $probeStdoutPath, $probeStderrPath `
+                -Force -ErrorAction SilentlyContinue
+        }
+        if ($probeExitCode -ne 0) {
+            throw "Portable recording runtime probe failed with exit code ${probeExitCode}: $($probeOutput -join ' ')"
+        }
+        foreach ($line in $probeOutput) {
+            $line
+        }
+    } finally {
+        foreach ($name in $trackedEnvironment) {
+            $saved = $savedEnvironment[$name]
+            Restore-EnvironmentVariable $name $saved.WasSet $saved.Value
+        }
+    }
 }
 
 "Portable package verification passed: $PackageDir"

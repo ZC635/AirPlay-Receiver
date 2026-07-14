@@ -3,9 +3,17 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 struct DiagnosticResult {
     bool ok;
     QString message;
+};
+
+struct RecordingCapabilityDiagnostics {
+    bool canRecord = false;
+    QString selectedEncoder;
+    QStringList missingFactories;
 };
 
 class DependencyDiagnostics {
@@ -15,4 +23,9 @@ public:
     static QStringList checkRuntimeBasics();
     static bool shouldCheckStandaloneRuntime();
     static QStringList checkStandaloneRuntime(const QString &directory);
+    static RecordingCapabilityDiagnostics checkRecordingCapabilities(
+        bool requireBothEncoders);
+    static RecordingCapabilityDiagnostics checkRecordingCapabilities(
+        bool requireBothEncoders,
+        const std::function<bool(const QString &)> &factoryAvailable);
 };

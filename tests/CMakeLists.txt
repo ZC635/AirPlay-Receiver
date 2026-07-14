@@ -6,6 +6,10 @@ add_executable(MainWindowSmokeTest app/MainWindowSmokeTest.cpp)
 target_link_libraries(MainWindowSmokeTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME MainWindowSmokeTest COMMAND MainWindowSmokeTest)
 
+add_executable(RecordingStartupCleanupTest app/RecordingStartupCleanupTest.cpp)
+target_link_libraries(RecordingStartupCleanupTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME RecordingStartupCleanupTest COMMAND RecordingStartupCleanupTest)
+
 set(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS_DEFAULT ON)
 if(DEFINED ENV{CI})
     set(AIRPLAY_ENABLE_WINDOWS_QPA_TESTS_DEFAULT OFF)
@@ -204,6 +208,7 @@ execute_process(
 set(AIRPLAY_QT_TESTS
     SettingsChangeDeferrerTest
     MainWindowSmokeTest
+    RecordingStartupCleanupTest
     AppSettingsTest
     AppSettingsStoreTest
     WindowStateStoreTest
