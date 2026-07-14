@@ -63,6 +63,7 @@ public:
     bool available() const;
     RecordingState state() const;
     RecordingStartResult start(const RecordingOptions &options);
+    void setFallbackFrameRate(int frameRate);
     void stop();
     void discard();
     bool tryEnqueueVideoSample(GstSample *borrowedSample) noexcept;

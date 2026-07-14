@@ -639,6 +639,10 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
     operations.storeQuality = [&](const VideoQualitySettings &requestedQuality) {
         m_config.videoQuality = requestedQuality;
 #if AIRPLAY_WITH_UXPLAY
+        if (m_recordingController) {
+            m_recordingController->setFallbackFrameRate(
+                videoQualityMaxFPS(requestedQuality.frameRate));
+        }
         if (m_discovery) {
             m_discovery->setVideoQuality(requestedQuality);
         }
@@ -965,9 +969,14 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
             video_renderer_start();
             observeRendererCall(m_videoIsH265 ? QStringLiteral("video_choose_h265")
                                               : QStringLiteral("video_choose_h264"));
-            if (video_renderer_choose_codec(false, m_videoIsH265) == 0) {
+            if (chooseVideoRendererCodec(false, m_videoIsH265) == 0) {
                 observeRendererCall(QStringLiteral("video_frame_bridge_attach"));
                 attachVideoFrameBridgeToCurrentPipeline();
+            } else {
+                handleBackendError(
+                    QStringLiteral("Failed to select GStreamer video codec after renderer reset"),
+                    BackendErrorSafety::Broken);
+                return;
             }
             m_videoRendererStopped.store(false);
         };
@@ -1076,6 +1085,14 @@ void UxPlayReceiver::clearAudioSampleTap() {
     m_audioTapRegistered = false;
 }
 
+int UxPlayReceiver::chooseVideoRendererCodec(bool videoIsJpeg,
+                                             bool videoIsH265) const {
+    if (m_config.videoCodecChooser) {
+        return m_config.videoCodecChooser(videoIsJpeg, videoIsH265);
+    }
+    return video_renderer_choose_codec(videoIsJpeg, videoIsH265);
+}
+
 void UxPlayReceiver::applyVideoFitModeToRenderer() {
     video_renderer_set_force_aspect_ratio(m_videoFitMode.load());
 }
@@ -1141,7 +1158,7 @@ int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265) {
 int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265, quint64 generation) {
     int result = -1;
     if (!m_callbackDispatch.runWithRendererStarted(generation, [&] {
-        result = video_renderer_choose_codec(false, video_is_h265);
+        result = chooseVideoRendererCodec(false, video_is_h265);
         if (result == 0) {
             m_videoIsH265 = video_is_h265;
             attachVideoFrameBridgeToCurrentPipeline();
