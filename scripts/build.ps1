@@ -81,6 +81,7 @@ $RequiredPackageSuffixes = @(
     "gst-plugins-good",
     "gst-plugins-bad",
     "gst-libav",
+    "openh264",
     "qmdnsengine"
 )
 
@@ -170,10 +171,17 @@ function Get-MSys2MissingRequirements {
         @{ Name = "GStreamer runtime"; Path = (Join-Path $BinPath "libgstreamer-1.0-0.dll") },
         @{ Name = "GStreamer plugins directory"; Path = $PluginPath },
         @{ Name = "GStreamer app plugin"; Path = (Join-Path $PluginPath "libgstapp.dll") },
+        @{ Name = "GStreamer core elements plugin"; Path = (Join-Path $PluginPath "libgstcoreelements.dll") },
         @{ Name = "GStreamer playback plugin"; Path = (Join-Path $PluginPath "libgstplayback.dll") },
         @{ Name = "GStreamer autodetect plugin"; Path = (Join-Path $PluginPath "libgstautodetect.dll") },
         @{ Name = "GStreamer video parsers plugin"; Path = (Join-Path $PluginPath "libgstvideoparsersbad.dll") },
-        @{ Name = "GStreamer libav plugin"; Path = (Join-Path $PluginPath "libgstlibav.dll") }
+        @{ Name = "GStreamer libav plugin"; Path = (Join-Path $PluginPath "libgstlibav.dll") },
+        @{ Name = "GStreamer MP4 plugin"; Path = (Join-Path $PluginPath "libgstisomp4.dll") },
+        @{ Name = "GStreamer Matroska plugin"; Path = (Join-Path $PluginPath "libgstmatroska.dll") },
+        @{ Name = "GStreamer Media Foundation plugin"; Path = (Join-Path $PluginPath "libgstmediafoundation.dll") },
+        @{ Name = "GStreamer OpenH264 plugin"; Path = (Join-Path $PluginPath "libgstopenh264.dll") },
+        @{ Name = "GStreamer plugin scanner"; Path = (Join-Path (Split-Path $LibPath -Parent) "libexec\gstreamer-1.0\gst-plugin-scanner.exe") },
+        @{ Name = "OpenH264 runtime"; Path = (Join-Path $BinPath "libopenh264-7.dll") }
     )
 
     $missing = @()
@@ -433,6 +441,14 @@ function Invoke-Build {
         $PluginOutDir = Join-Path $VariantBuildDir "gstreamer-plugins"
         if (-not (Test-Path $PluginOutDir)) { New-Item -ItemType Directory -Path $PluginOutDir -Force | Out-Null }
         Get-ChildItem $PluginDir -Filter "*.dll" | Copy-Item -Destination $PluginOutDir -Force
+
+        Write-Host "  Bundling GStreamer plugin scanner..." -ForegroundColor Gray
+        $pluginScannerSource = Join-Path $MSys2Root "libexec\gstreamer-1.0\gst-plugin-scanner.exe"
+        $pluginScannerOutputDir = Join-Path $VariantBuildDir "libexec\gstreamer-1.0"
+        if (-not (Test-Path $pluginScannerOutputDir)) {
+            New-Item -ItemType Directory -Path $pluginScannerOutputDir -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $pluginScannerSource -Destination $pluginScannerOutputDir -Force
 
         Write-Host "  Generating GStreamer registry cache..." -ForegroundColor Gray
         $registryDir = Join-Path $VariantBuildDir "gstreamer-1.0"
