@@ -9,6 +9,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
+#include <QEventLoop>
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
@@ -310,6 +311,24 @@ UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
 #endif
 {
 #if AIRPLAY_WITH_UXPLAY
+    m_recordingController = std::make_unique<RecordingController>(
+        videoQualityMaxFPS(m_config.videoQuality.frameRate),
+        m_config.recordingControllerHooks,
+        this);
+    QObject::connect(m_recordingController.get(),
+                     &RecordingController::availabilityChanged,
+                     this, &AirPlayReceiver::recordingAvailabilityChanged);
+    QObject::connect(m_recordingController.get(),
+                     &RecordingController::stateChanged,
+                     this, &AirPlayReceiver::recordingStateChanged);
+    QObject::connect(m_recordingController.get(),
+                     &RecordingController::finished,
+                     this, &AirPlayReceiver::recordingFinished);
+    QObject::connect(m_recordingController.get(),
+                     &RecordingController::failed,
+                     this, &AirPlayReceiver::recordingFailed);
+    observeRendererCall(QStringLiteral("recording_controller_constructed"));
+
     UxPlayDiscoveryConfig discoveryConfig;
     discoveryConfig.receiverName = m_config.serverName;
     discoveryConfig.videoQuality = m_config.videoQuality;
@@ -324,10 +343,15 @@ UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
 
 UxPlayReceiver::~UxPlayReceiver() {
 #if AIRPLAY_WITH_UXPLAY
+    if (m_recordingController) {
+        m_recordingController->discard();
+    }
     cleanupUxPlay();
+    m_recordingController.reset();
 #endif
 }
 
+#if AIRPLAY_WITH_UXPLAY
 UxPlayReceiver::CallbackContext::CallbackContext(UxPlayReceiver *receiver, quint64 startGeneration)
     : generation(startGeneration), m_receiver(receiver) {
 }
@@ -363,6 +387,34 @@ void UxPlayReceiver::CallbackContext::close() {
         m_idle.wait(&m_mutex);
     }
 }
+
+void UxPlayReceiver::videoSampleTap(GstSample *sample, void *context) {
+    try {
+        CallbackScope callback(context);
+        auto *receiver = callback.receiver();
+        if (receiver && sample &&
+            receiver->m_acceptingVideoTapSamples.load(std::memory_order_acquire) &&
+            receiver->m_callbackDispatch.accepts(callback.generation()) &&
+            receiver->m_recordingController) {
+            (void)receiver->m_recordingController->tryEnqueueVideoSample(sample);
+        }
+    } catch (...) {
+    }
+}
+
+void UxPlayReceiver::audioSampleTap(GstSample *sample, void *context) {
+    try {
+        CallbackScope callback(context);
+        auto *receiver = callback.receiver();
+        if (receiver && sample &&
+            receiver->m_callbackDispatch.accepts(callback.generation()) &&
+            receiver->m_recordingController) {
+            (void)receiver->m_recordingController->tryEnqueueAudioSample(sample);
+        }
+    } catch (...) {
+    }
+}
+#endif
 
 void UxPlayReceiver::start() {
 #if AIRPLAY_WITH_UXPLAY
@@ -404,6 +456,8 @@ void UxPlayReceiver::start() {
     const QByteArray audioSink = m_config.audioSink.toUtf8();
     const bool h265Support = videoQualityH265Support();
     videoflip_t videoFlip[2] = {NONE, NONE};
+    installVideoSampleTap();
+    observeRendererCall(QStringLiteral("video_renderer_init"));
     if (video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
                              "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, h265Support, false,
                              kPlaybinVersion, nullptr) != 0) {
@@ -413,9 +467,12 @@ void UxPlayReceiver::start() {
         setState(ReceiverState::Error);
         return;
     }
+    m_videoRendererInitialized = true;
     video_renderer_start();
     m_videoRendererStopped.store(false);
     attachVideoFrameBridgeToCurrentPipeline();
+    installAudioSampleTap();
+    observeRendererCall(QStringLiteral("audio_renderer_init"));
     if (audio_renderer_init(logger, audioSink.constData(), &kAudioSync, &kVideoSync, "") != 0) {
         m_acceptingCallbacks.store(false);
         setError("Failed to initialize GStreamer audio renderer");
@@ -423,6 +480,7 @@ void UxPlayReceiver::start() {
         setState(ReceiverState::Error);
         return;
     }
+    m_audioRendererInitialized = true;
     m_renderersStarted.store(true);
 
     m_glibTimer = new QTimer();
@@ -609,22 +667,47 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
 }
 
 bool UxPlayReceiver::recordingAvailable() const {
+#if AIRPLAY_WITH_UXPLAY
+    return m_recordingController && m_recordingController->available();
+#else
     return false;
+#endif
 }
 
 RecordingState UxPlayReceiver::recordingState() const {
+#if AIRPLAY_WITH_UXPLAY
+    return m_recordingController ? m_recordingController->state()
+                                 : RecordingState::Idle;
+#else
     return RecordingState::Idle;
+#endif
 }
 
 RecordingStartResult UxPlayReceiver::startRecording(const RecordingOptions &options) {
+#if AIRPLAY_WITH_UXPLAY
+    return m_recordingController
+        ? m_recordingController->start(options)
+        : RecordingStartResult{false, QStringLiteral("Recording is not available")};
+#else
     Q_UNUSED(options);
     return {false, QStringLiteral("Recording is not available")};
+#endif
 }
 
 void UxPlayReceiver::stopRecording() {
+#if AIRPLAY_WITH_UXPLAY
+    if (m_recordingController) {
+        m_recordingController->stop();
+    }
+#endif
 }
 
 void UxPlayReceiver::discardRecording() {
+#if AIRPLAY_WITH_UXPLAY
+    if (m_recordingController) {
+        m_recordingController->discard();
+    }
+#endif
 }
 
 #if AIRPLAY_WITH_UXPLAY
@@ -834,6 +917,10 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType) {
 }
 
 void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 generation) {
+    if (m_callbackDispatch.accepts(generation)) {
+        m_acceptingVideoTapSamples.store(false, std::memory_order_release);
+        endRecordingSession(true, true);
+    }
     m_callbackDispatch.runWithRendererStarted(generation, [&] {
         if (m_state != ReceiverState::Connected) {
             return;
@@ -841,21 +928,38 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
 
         const auto restartVideoRenderer = [this] {
             m_videoRendererStopped.store(true);
+            observeRendererCall(QStringLiteral("video_renderer_stop"));
             video_renderer_stop();
+            clearVideoSampleTap();
+            observeRendererCall(QStringLiteral("video_frame_bridge_reset"));
             resetVideoFrameBridge();
+            observeRendererCall(QStringLiteral("video_renderer_destroy"));
             video_renderer_destroy();
+            m_videoRendererInitialized = false;
 
             auto *logger = static_cast<logger_t *>(m_logger);
             const QByteArray serverName = m_config.serverName.toUtf8();
             const QByteArray videoSink = m_config.videoSink.toUtf8();
             const bool h265Support = videoQualityH265Support();
             videoflip_t videoFlip[2] = {NONE, NONE};
-            video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
-                                "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, h265Support, false,
-                                kPlaybinVersion, nullptr);
+            installVideoSampleTap();
+            observeRendererCall(QStringLiteral("video_renderer_init"));
+            if (video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
+                                    "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync,
+                                    h265Support, false, kPlaybinVersion, nullptr) != 0) {
+                clearVideoSampleTap();
+                setError(QStringLiteral("Failed to reinitialize GStreamer video renderer"));
+                setState(ReceiverState::Error);
+                return;
+            }
+            m_videoRendererInitialized = true;
             applyVideoFitModeToRenderer();
+            observeRendererCall(QStringLiteral("video_renderer_start"));
             video_renderer_start();
-            if (video_renderer_choose_codec(false, false) == 0) {
+            observeRendererCall(m_videoIsH265 ? QStringLiteral("video_choose_h265")
+                                              : QStringLiteral("video_choose_h264"));
+            if (video_renderer_choose_codec(false, m_videoIsH265) == 0) {
+                observeRendererCall(QStringLiteral("video_frame_bridge_attach"));
                 attachVideoFrameBridgeToCurrentPipeline();
             }
             m_videoRendererStopped.store(false);
@@ -880,6 +984,10 @@ void UxPlayReceiver::stopVideoPipelineForDisconnect() {
 }
 
 void UxPlayReceiver::stopVideoPipelineForDisconnect(quint64 generation) {
+    if (m_callbackDispatch.accepts(generation)) {
+        m_acceptingVideoTapSamples.store(false, std::memory_order_release);
+        endRecordingSession(true, true);
+    }
     m_callbackDispatch.runWithRendererStarted(generation, [&] {
         if (m_videoRendererStopped.exchange(true)) {
             return;
@@ -897,7 +1005,68 @@ void UxPlayReceiver::restartVideoPipelineForConnect(quint64 generation) {
         if (m_videoRendererStopped.exchange(false)) {
             video_renderer_start();
         }
+        m_acceptingVideoTapSamples.store(true, std::memory_order_release);
     });
+}
+
+void UxPlayReceiver::observeRendererCall(const QString &call) const {
+    if (m_config.rendererCallObserver) {
+        m_config.rendererCallObserver(call);
+    }
+}
+
+void UxPlayReceiver::installVideoSampleTap() {
+    if (m_videoTapRegistered) {
+        return;
+    }
+    m_videoTapContext = std::make_unique<CallbackContext>(
+        this, m_callbackDispatch.currentGeneration());
+    observeRendererCall(QStringLiteral("video_set_sample_callback"));
+    video_renderer_set_sample_callback(&UxPlayReceiver::videoSampleTap,
+                                       m_videoTapContext.get());
+    m_videoTapRegistered = true;
+    m_acceptingVideoTapSamples.store(true, std::memory_order_release);
+}
+
+void UxPlayReceiver::installAudioSampleTap() {
+    if (m_audioTapRegistered) {
+        return;
+    }
+    m_audioTapContext = std::make_unique<CallbackContext>(
+        this, m_callbackDispatch.currentGeneration());
+    observeRendererCall(QStringLiteral("audio_set_sample_callback"));
+    audio_renderer_set_sample_callback(&UxPlayReceiver::audioSampleTap,
+                                       m_audioTapContext.get());
+    m_audioTapRegistered = true;
+}
+
+void UxPlayReceiver::clearVideoSampleTap() {
+    m_acceptingVideoTapSamples.store(false, std::memory_order_release);
+    if (!m_videoTapRegistered) {
+        return;
+    }
+    observeRendererCall(QStringLiteral("video_clear_sample_callback"));
+    video_renderer_set_sample_callback(nullptr, nullptr);
+    if (m_videoTapContext) {
+        m_videoTapContext->close();
+        observeRendererCall(QStringLiteral("video_tap_context_closed"));
+        m_videoTapContext.reset();
+    }
+    m_videoTapRegistered = false;
+}
+
+void UxPlayReceiver::clearAudioSampleTap() {
+    if (!m_audioTapRegistered) {
+        return;
+    }
+    observeRendererCall(QStringLiteral("audio_clear_sample_callback"));
+    audio_renderer_set_sample_callback(nullptr, nullptr);
+    if (m_audioTapContext) {
+        m_audioTapContext->close();
+        observeRendererCall(QStringLiteral("audio_tap_context_closed"));
+        m_audioTapContext.reset();
+    }
+    m_audioTapRegistered = false;
 }
 
 void UxPlayReceiver::applyVideoFitModeToRenderer() {
@@ -967,6 +1136,7 @@ int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265, quint64 gen
     if (!m_callbackDispatch.runWithRendererStarted(generation, [&] {
         result = video_renderer_choose_codec(false, video_is_h265);
         if (result == 0) {
+            m_videoIsH265 = video_is_h265;
             attachVideoFrameBridgeToCurrentPipeline();
         }
     })) {
@@ -1017,6 +1187,11 @@ void UxPlayReceiver::setState(ReceiverState state) {
         return;
     }
 
+#if AIRPLAY_WITH_UXPLAY
+    if (state == ReceiverState::Error) {
+        endRecordingSession(false, true);
+    }
+#endif
     m_state = state;
     emit stateChanged(m_state);
 }
@@ -1031,7 +1206,46 @@ void UxPlayReceiver::setError(QString error) {
 }
 
 #if AIRPLAY_WITH_UXPLAY
+void UxPlayReceiver::endRecordingSession(bool canFinalize, bool waitForIdle) {
+    if (!m_recordingController) {
+        return;
+    }
+    if (QThread::currentThread() != thread()) {
+        QPointer<UxPlayReceiver> guardedReceiver(this);
+        QMetaObject::invokeMethod(this, [guardedReceiver, canFinalize, waitForIdle] {
+            if (guardedReceiver) {
+                guardedReceiver->endRecordingSession(canFinalize, waitForIdle);
+            }
+        }, Qt::BlockingQueuedConnection);
+        return;
+    }
+
+    m_recordingController->sessionEnded(canFinalize);
+    if (!waitForIdle || m_recordingController->state() == RecordingState::Idle) {
+        return;
+    }
+
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(m_recordingController.get(), &RecordingController::stateChanged,
+                     &loop, [&](RecordingState state) {
+        if (state == RecordingState::Idle) {
+            loop.quit();
+        }
+    });
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeout.start(RecordingController::FinalizeDeadlineMilliseconds + 1'000);
+    loop.exec(QEventLoop::AllEvents);
+    if (m_recordingController->state() != RecordingState::Idle) {
+        m_recordingController->discard();
+    }
+}
+
 void UxPlayReceiver::cleanupUxPlay() {
+    m_acceptingVideoTapSamples.store(false, std::memory_order_release);
+    endRecordingSession(true, true);
+    observeRendererCall(QStringLiteral("cleanup_after_recording_boundary"));
     m_acceptingCallbacks.store(false);
     m_callbackGeneration.fetch_add(1);
     if (m_callbackContext) {
@@ -1055,14 +1269,22 @@ void UxPlayReceiver::cleanupUxPlay() {
     {
         QMutexLocker rendererLocker(&m_rendererMutex);
         resetVideoFrameBridge();
-        if (m_renderersStarted.load()) {
+        clearVideoSampleTap();
+        clearAudioSampleTap();
+        if (m_videoRendererInitialized) {
             video_renderer_stop();
+            observeRendererCall(QStringLiteral("video_renderer_destroy"));
             video_renderer_destroy();
-            audio_renderer_destroy();
-            m_renderersStarted.store(false);
-            m_audioRendererStarted.store(false);
-            m_videoRendererStopped.store(false);
+            m_videoRendererInitialized = false;
         }
+        if (m_audioRendererInitialized) {
+            observeRendererCall(QStringLiteral("audio_renderer_destroy"));
+            audio_renderer_destroy();
+            m_audioRendererInitialized = false;
+        }
+        m_renderersStarted.store(false);
+        m_audioRendererStarted.store(false);
+        m_videoRendererStopped.store(false);
     }
     if (m_logger) {
         logger_destroy(static_cast<logger_t *>(m_logger));
