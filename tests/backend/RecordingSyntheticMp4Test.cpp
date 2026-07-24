@@ -106,8 +106,6 @@ bool discover(const QString &path, MediaSummary *summary, QString *error)
             details.parDenominator = gst_discoverer_video_info_get_par_denom(video);
             if (caps && gst_caps_get_size(caps) > 0) {
                 const GstStructure *structure = gst_caps_get_structure(caps, 0);
-                (void)gst_structure_get_fraction(structure, "framerate",
-                                                 &details.fpsNumerator, &details.fpsDenominator);
                 (void)gst_structure_get_fraction(structure, "pixel-aspect-ratio",
                                                  &details.parNumerator, &details.parDenominator);
             }
@@ -137,14 +135,11 @@ int reportedVideoBitrate(const MediaSummary &media)
 bool reportedBitrateInTier(int reported, int targetBitsPerSecond,
                            int lowerPercent = 35, int upperPercent = 135)
 {
-    // GstDiscoverer backends encountered on Windows report this generated MP4's
-    // stream/tag rate in either bits/s or bytes/s.  Keep this metadata-only
-    // check portable without treating a zero value as evidence of a tier.
+    // GstDiscoverer and GST_TAG_BITRATE report bits per second.
     if (reported <= 0) return false;
     const qint64 lower = targetBitsPerSecond * qint64(lowerPercent) / 100;
     const qint64 upper = targetBitsPerSecond * qint64(upperPercent) / 100;
-    return (reported >= lower && reported <= upper) ||
-           (qint64(reported) * 8 >= lower && qint64(reported) * 8 <= upper);
+    return reported >= lower && reported <= upper;
 }
 
 QString bitrateDiagnostic(const MediaSummary &media)
@@ -206,6 +201,16 @@ GstSample *audioSample(GstClockTime pts)
     GstBuffer *buffer = gst_buffer_new_allocate(nullptr, samples * 2 * sizeof(gint16), nullptr);
     GST_BUFFER_PTS(buffer) = pts;
     GST_BUFFER_DURATION(buffer) = 10 * GST_MSECOND;
+    GstMapInfo map;
+    if (gst_buffer_map(buffer, &map, GST_MAP_WRITE)) {
+        auto *pcm = reinterpret_cast<gint16 *>(map.data);
+        quint32 state = static_cast<quint32>(pts / GST_MSECOND) ^ 0xaac19200u;
+        for (int index = 0; index < samples * 2; ++index) {
+            state = state * 1664525u + 1013904223u;
+            pcm[index] = static_cast<gint16>(state >> 16);
+        }
+        gst_buffer_unmap(buffer, &map);
+    }
     GstCaps *caps = gst_caps_new_simple("audio/x-raw", "format", G_TYPE_STRING, "S16LE",
         "rate", G_TYPE_INT, 44100, "channels", G_TYPE_INT, 2,
         "layout", G_TYPE_STRING, "interleaved", nullptr);
@@ -519,6 +524,12 @@ class RecordingSyntheticMp4Test : public QObject {
 private slots:
     void initTestCase() { gst_init(nullptr, nullptr); }
 
+    void bitrateMetadataUsesBitsPerSecond()
+    {
+        QVERIFY(reportedBitrateInTier(4'000'000, 4'000'000));
+        QVERIFY(!reportedBitrateInTier(500'000, 4'000'000));
+    }
+
     void videoOnly540p30ThroughControllerIsDiscoverable()
     {
         QTemporaryDir output;
@@ -550,40 +561,8 @@ private slots:
         QVERIFY(media.video.first().codec.contains(QStringLiteral("h264"), Qt::CaseInsensitive));
         QCOMPARE(media.video.first().width, 960);
         QCOMPARE(media.video.first().height, 540);
-        if (media.video.first().fpsNumerator != 30 || media.video.first().fpsDenominator != 1) {
-            GstSample *decoded = decodeVideoNear(result.finalPath, 0, 80 * GST_MSECOND, &error);
-            QVERIFY2(decoded, qPrintable(error));
-            GstCaps *caps = gst_sample_get_caps(decoded);
-            const GstStructure *structure = caps ? gst_caps_get_structure(caps, 0) : nullptr;
-            int numerator = 0, denominator = 1;
-            if (structure && gst_structure_get_fraction(
-                    structure, "framerate", &numerator, &denominator) && numerator > 0 && denominator > 0) {
-                QCOMPARE(numerator, 30);
-                QCOMPARE(denominator, 1);
-            } else {
-                const GstSegment *firstSegment = gst_sample_get_segment(decoded);
-                const GstBuffer *firstBuffer = gst_sample_get_buffer(decoded);
-                const GstClockTime firstRunning = firstSegment && firstBuffer
-                    ? gst_segment_to_running_time(firstSegment, GST_FORMAT_TIME,
-                                                  GST_BUFFER_PTS(firstBuffer))
-                    : GST_CLOCK_TIME_NONE;
-                GstSample *next = decodeVideoNear(
-                    result.finalPath, GST_SECOND / 30, 5 * GST_MSECOND, &error);
-                QVERIFY2(next, qPrintable(error));
-                const GstSegment *nextSegment = gst_sample_get_segment(next);
-                const GstBuffer *nextBuffer = gst_sample_get_buffer(next);
-                const GstClockTime nextRunning = nextSegment && nextBuffer
-                    ? gst_segment_to_running_time(nextSegment, GST_FORMAT_TIME,
-                                                  GST_BUFFER_PTS(nextBuffer))
-                    : GST_CLOCK_TIME_NONE;
-                QVERIFY(GST_CLOCK_TIME_IS_VALID(firstRunning));
-                QVERIFY(GST_CLOCK_TIME_IS_VALID(nextRunning));
-                QVERIFY(std::llabs(qint64(nextRunning) - qint64(firstRunning) -
-                                    qint64(GST_SECOND / 30)) <= 1'000);
-                gst_sample_unref(next);
-            }
-            gst_sample_unref(decoded);
-        }
+        QCOMPARE(media.video.first().fpsNumerator, 30);
+        QCOMPARE(media.video.first().fpsDenominator, 1);
         QVERIFY(std::llabs(qint64(media.duration) - 3 * qint64(GST_SECOND)) <= 100 * qint64(GST_MSECOND));
         QCOMPARE(recordingVideoBitrateBitsPerSecond(960, 540, 30), 4'000'000);
         const int observed = reportedVideoBitrate(media);
@@ -693,10 +672,27 @@ private slots:
         Files files;
         constexpr int checkerWidth = 160;
         constexpr int checkerHeight = 120;
+        const auto expectedRed = [](int x, int y) {
+            const quint32 cellX = static_cast<quint32>(x / 8);
+            const quint32 cellY = static_cast<quint32>(y / 8);
+            quint32 coordinateHash = cellX * 0x9e3779b9u ^ cellY * 0x85ebca6bu;
+            coordinateHash ^= coordinateHash >> 16;
+            coordinateHash *= 0x7feb352du;
+            coordinateHash ^= coordinateHash >> 15;
+            return (((cellX + cellY) & 1u) ^ (coordinateHash & 1u)) == 0;
+        };
+        int translatedMismatches = 0;
+        for (int y = 0; y < checkerHeight; ++y) {
+            for (int x = 0; x < checkerWidth - 16; ++x) {
+                if (expectedRed(x, y) != expectedRed(x + 16, y)) ++translatedMismatches;
+            }
+        }
+        QVERIFY2(translatedMismatches > (checkerWidth - 16) * checkerHeight / 3,
+                 "checker pattern must reject a full-cell-period translation");
         QByteArray checker(checkerWidth * checkerHeight * 4, char(0));
         for (int y = 0; y < checkerHeight; ++y) for (int x = 0; x < checkerWidth; ++x) {
             const int offset = (y * checkerWidth + x) * 4;
-            const bool red = ((x / 8) + (y / 8)) % 2 == 0;
+            const bool red = expectedRed(x, y);
             checker[offset] = char(red ? 230 : 20);
             checker[offset + 1] = char(red ? 20 : 220);
             checker[offset + 2] = char(30);
@@ -731,7 +727,7 @@ private slots:
         int mismatches = 0;
         for (int y = 0; y < checkerHeight; ++y) {
             for (int x = 0; x < checkerWidth; ++x) {
-                const bool expectRed = ((x / 8) + (y / 8)) % 2 == 0;
+                const bool expectRed = expectedRed(x, y);
                 const gsize offset = static_cast<gsize>(y) * rowStride + x * 4;
                 const int red = map.data[offset];
                 const int green = map.data[offset + 1];
@@ -839,7 +835,9 @@ private slots:
             if (name == QStringLiteral("mfh264enc")) { *error = QStringLiteral("forced mfh failure"); return false; }
             return true;
         };
-        QCOMPARE(GstRecordingPipeline::probeCapabilities(mfhFail).preferredEncoder, QStringLiteral("openh264enc"));
+        const auto fallback = GstRecordingPipeline::probeCapabilities(mfhFail);
+        QVERIFY(fallback.available);
+        QCOMPARE(fallback.preferredEncoder, QStringLiteral("openh264enc"));
         QSet<QString> noEncoders = all;
         noEncoders.remove(QStringLiteral("mfh264enc")); noEncoders.remove(QStringLiteral("openh264enc"));
         QVERIFY(!GstRecordingPipeline::probeCapabilities(factoryHooks(noEncoders)).available);
