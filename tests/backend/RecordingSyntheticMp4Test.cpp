@@ -368,23 +368,41 @@ QString takePipelineBusErrors(GstElement *pipeline)
     return errors.join(QStringLiteral(" | "));
 }
 
-QString takeBusErrorOrEos(GstBus *bus)
+enum class EosSampleDecision { DrainQueuedSample, FailEos };
+
+EosSampleDecision decideEosSample(bool eosSeen, bool queuedSample)
+{
+    return queuedSample || !eosSeen
+        ? EosSampleDecision::DrainQueuedSample
+        : EosSampleDecision::FailEos;
+}
+
+enum class BusTerminalState { None, Error, Eos };
+
+struct BusTerminalMessage {
+    BusTerminalState state = BusTerminalState::None;
+    QString diagnostic;
+};
+
+BusTerminalMessage takeBusErrorOrEos(GstBus *bus)
 {
     GstMessage *message = gst_bus_pop_filtered(
         bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
     if (!message) return {};
-    QString result;
+    BusTerminalMessage result;
     if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
         GError *gerror = nullptr;
         gchar *debug = nullptr;
         gst_message_parse_error(message, &gerror, &debug);
-        result = QStringLiteral("GST_MESSAGE_ERROR=%1; debug=%2")
+        result.state = BusTerminalState::Error;
+        result.diagnostic = QStringLiteral("GST_MESSAGE_ERROR=%1; debug=%2")
             .arg(QString::fromUtf8(gerror ? gerror->message : "unknown"),
                  QString::fromUtf8(debug ? debug : "<none>"));
         g_clear_error(&gerror);
         g_free(debug);
     } else {
-        result = QStringLiteral("GST_MESSAGE_EOS before matching video sample");
+        result.state = BusTerminalState::Eos;
+        result.diagnostic = QStringLiteral("GST_MESSAGE_EOS before matching video sample");
     }
     gst_message_unref(message);
     return result;
@@ -542,10 +560,24 @@ GstSample *decodeVideoNear(const QString &path, GstClockTime target, GstClockTim
     QElapsedTimer deadline;
     deadline.start();
     QString terminalMessage;
+    bool eosSeen = false;
     while (!result) {
+        GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(sink), 0);
+        const bool queuedSample = sample != nullptr;
+        if (decideEosSample(eosSeen, queuedSample) == EosSampleDecision::DrainQueuedSample && sample) {
+            if (sampleNear(sample, target, tolerance)) {
+                result = sample;
+                break;
+            }
+            gst_sample_unref(sample);
+        }
         if (bus) {
-            terminalMessage = takeBusErrorOrEos(bus);
-            if (!terminalMessage.isEmpty()) break;
+            const BusTerminalMessage busMessage = takeBusErrorOrEos(bus);
+            if (busMessage.state == BusTerminalState::Error) {
+                terminalMessage = busMessage.diagnostic;
+                break;
+            }
+            if (busMessage.state == BusTerminalState::Eos) eosSeen = true;
         }
         const int waitMs = decoderPollWaitMs(deadline.elapsed());
         if (waitMs <= 0) {
@@ -553,13 +585,26 @@ GstSample *decodeVideoNear(const QString &path, GstClockTime target, GstClockTim
                 .arg(decoderDeadlineMs());
             break;
         }
-        GstSample *sample = gst_app_sink_try_pull_sample(
+        sample = gst_app_sink_try_pull_sample(
             GST_APP_SINK(sink), static_cast<GstClockTime>(waitMs) * GST_MSECOND);
-        if (!sample) continue;
-        if (sampleNear(sample, target, tolerance)) {
-            result = sample;
-        } else {
+        if (sample) {
+            if (sampleNear(sample, target, tolerance)) {
+                result = sample;
+                continue;
+            }
             gst_sample_unref(sample);
+            continue;
+        }
+        if (eosSeen) {
+            if (bus) {
+                const BusTerminalMessage busMessage = takeBusErrorOrEos(bus);
+                if (busMessage.state == BusTerminalState::Error) {
+                    terminalMessage = busMessage.diagnostic;
+                    break;
+                }
+            }
+            terminalMessage = QStringLiteral("GST_MESSAGE_EOS after appsink drain");
+            break;
         }
     }
     if (bus) gst_object_unref(bus);
@@ -636,6 +681,12 @@ private slots:
         QCOMPARE(decoderPollWaitMs(0), 100);
         QCOMPARE(decoderPollWaitMs(decoderDeadlineMs() - 1), 1);
         QCOMPARE(decoderPollWaitMs(decoderDeadlineMs()), 0);
+    }
+
+    void decoderEosDrainsQueuedSamples()
+    {
+        QCOMPARE(decideEosSample(true, true), EosSampleDecision::DrainQueuedSample);
+        QCOMPARE(decideEosSample(true, false), EosSampleDecision::FailEos);
     }
 
     void bitrateMetadataUsesBitsPerSecond()
@@ -840,7 +891,8 @@ private slots:
             gst_sample_unref(sample);
         }
         std::atomic_bool cancelled{false};
-        QVERIFY2(pipeline.finalize(30'000, cancelled).success, qPrintable(error));
+        const auto finalized = pipeline.finalize(30'000, cancelled);
+        QVERIFY2(finalized.success, qPrintable(finalized.error));
         QVERIFY2(files.commit().isEmpty(), "could not commit checkerboard MP4");
         MediaSummary media;
         QVERIFY2(discover(files.reservation.finalPath, &media, &error), qPrintable(error));
