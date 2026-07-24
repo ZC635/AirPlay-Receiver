@@ -174,6 +174,9 @@ if(AIRPLAY_WITH_UXPLAY)
         renderers
         PkgConfig::GST_PBUTILS
     )
+    # QtTest's console text output is not captured by CTest on Windows.  One
+    # CTest invocation runs this named test once, so this target-local file has
+    # no concurrent writer and preserves failure diagnostics.
     add_test(NAME RecordingSyntheticMp4Test
         COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingSyntheticMp4Test>
             -o ${CMAKE_CURRENT_BINARY_DIR}/RecordingSyntheticMp4Test-results.txt,txt)
