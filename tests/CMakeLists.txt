@@ -166,6 +166,16 @@ if(AIRPLAY_WITH_UXPLAY)
     # across loader and antivirus timing variations while preserving CTest env.
     add_test(NAME RecordingControllerTest
         COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingControllerTest>)
+
+    add_executable(RecordingSyntheticMp4Test backend/RecordingSyntheticMp4Test.cpp)
+    target_link_libraries(RecordingSyntheticMp4Test PRIVATE
+        airplay_app_lib
+        Qt6::Test
+        renderers
+        PkgConfig::GST_PBUTILS
+    )
+    add_test(NAME RecordingSyntheticMp4Test
+        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingSyntheticMp4Test>)
     get_filename_component(AIRPLAY_GSTREAMER_BIN_DIR "${PKG_CONFIG_EXECUTABLE}" DIRECTORY)
 endif()
 
@@ -234,7 +244,7 @@ set(AIRPLAY_QT_TESTS
     VideoRenderGeometryTest
 )
 if(AIRPLAY_WITH_UXPLAY)
-    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest)
+    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test)
 endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
@@ -244,13 +254,14 @@ foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
 endforeach()
 
 if(AIRPLAY_WITH_UXPLAY)
-    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest PROPERTIES
+    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
         TIMEOUT 30
     )
     set_tests_properties(RecordingControllerTest PROPERTIES TIMEOUT 90)
+    set_tests_properties(RecordingSyntheticMp4Test PROPERTIES TIMEOUT 180)
 endif()
 
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
