@@ -175,7 +175,8 @@ if(AIRPLAY_WITH_UXPLAY)
         PkgConfig::GST_PBUTILS
     )
     add_test(NAME RecordingSyntheticMp4Test
-        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingSyntheticMp4Test>)
+        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingSyntheticMp4Test>
+            -o -,txt)
     get_filename_component(AIRPLAY_GSTREAMER_BIN_DIR "${PKG_CONFIG_EXECUTABLE}" DIRECTORY)
 endif()
 

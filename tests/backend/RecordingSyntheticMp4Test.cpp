@@ -23,6 +23,7 @@ namespace {
 struct StreamSummary {
     QString codec;
     int bitrate = 0;
+    int taggedBitrate = 0;
     int width = 0;
     int height = 0;
     int fpsNumerator = 0;
@@ -89,6 +90,11 @@ bool discover(const QString &path, MediaSummary *summary, QString *error)
         GstCaps *caps = gst_discoverer_stream_info_get_caps(stream);
         StreamSummary details;
         details.codec = capsName(caps);
+        const GstTagList *streamTags = gst_discoverer_stream_info_get_tags(stream);
+        guint taggedBitrate = 0;
+        if (streamTags && gst_tag_list_get_uint(streamTags, GST_TAG_BITRATE, &taggedBitrate)) {
+            details.taggedBitrate = static_cast<int>(taggedBitrate);
+        }
         if (GST_IS_DISCOVERER_VIDEO_INFO(stream)) {
             auto *video = GST_DISCOVERER_VIDEO_INFO(stream);
             details.bitrate = gst_discoverer_video_info_get_bitrate(video);
@@ -119,6 +125,36 @@ bool discover(const QString &path, MediaSummary *summary, QString *error)
     return true;
 }
 
+int reportedVideoBitrate(const MediaSummary &media)
+{
+    for (const StreamSummary &stream : media.video) {
+        if (stream.bitrate > 0) return stream.bitrate;
+        if (stream.taggedBitrate > 0) return stream.taggedBitrate;
+    }
+    return media.reportedBitrate;
+}
+
+bool reportedBitrateInTier(int reported, int targetBitsPerSecond,
+                           int lowerPercent = 35, int upperPercent = 135)
+{
+    // GstDiscoverer backends encountered on Windows report this generated MP4's
+    // stream/tag rate in either bits/s or bytes/s.  Keep this metadata-only
+    // check portable without treating a zero value as evidence of a tier.
+    if (reported <= 0) return false;
+    const qint64 lower = targetBitsPerSecond * qint64(lowerPercent) / 100;
+    const qint64 upper = targetBitsPerSecond * qint64(upperPercent) / 100;
+    return (reported >= lower && reported <= upper) ||
+           (qint64(reported) * 8 >= lower && qint64(reported) * 8 <= upper);
+}
+
+QString bitrateDiagnostic(const MediaSummary &media)
+{
+    const StreamSummary stream = media.video.isEmpty() ? StreamSummary{} : media.video.first();
+    return QStringLiteral("container=%1; video=%2; video-tag=%3; selected=%4")
+        .arg(media.reportedBitrate).arg(stream.bitrate).arg(stream.taggedBitrate)
+        .arg(reportedVideoBitrate(media));
+}
+
 GstSample *videoSample(int width, int height, int fps, GstClockTime pts,
                        const QByteArray &pixels = {})
 {
@@ -143,6 +179,25 @@ GstSample *videoSample(int width, int height, int fps, GstClockTime pts,
     gst_buffer_unref(buffer);
     gst_caps_unref(caps);
     return sample;
+}
+
+GstSample *busyVideoSample(int width, int height, int fps, GstClockTime pts, quint32 seed,
+                           int blockPixels = 4)
+{
+    QByteArray pixels(width * height * 4, char(0));
+    quint32 state = seed;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (x % blockPixels == 0 && y % blockPixels == 0)
+                state = state * 1664525u + 1013904223u;
+            const int offset = (y * width + x) * 4;
+            pixels[offset] = char(state & 0xffu);
+            pixels[offset + 1] = char((state >> 8) & 0xffu);
+            pixels[offset + 2] = char((state >> 16) & 0xffu);
+            pixels[offset + 3] = char(255);
+        }
+    }
+    return videoSample(width, height, fps, pts, pixels);
 }
 
 GstSample *audioSample(GstClockTime pts)
@@ -244,11 +299,32 @@ QString decodeDiagnostic(const QString &uri, const QString &track, GstSample *sa
     return result;
 }
 
+QString takePipelineBusErrors(GstElement *pipeline)
+{
+    GstBus *bus = pipeline ? gst_element_get_bus(pipeline) : nullptr;
+    if (!bus) return QStringLiteral("could not get pipeline bus");
+    QStringList errors;
+    while (GstMessage *message = gst_bus_pop_filtered(bus, GST_MESSAGE_ERROR)) {
+        GError *gerror = nullptr;
+        gchar *debug = nullptr;
+        gst_message_parse_error(message, &gerror, &debug);
+        errors.append(QStringLiteral("GST_MESSAGE_ERROR=%1; debug=%2")
+            .arg(QString::fromUtf8(gerror ? gerror->message : "unknown"),
+                 QString::fromUtf8(debug ? debug : "<none>")));
+        g_clear_error(&gerror);
+        g_free(debug);
+        gst_message_unref(message);
+    }
+    gst_object_unref(bus);
+    return errors.join(QStringLiteral(" | "));
+}
+
 GstClockTime pullRunningTime(GstElement *sink, const QString &uri, const QString &track,
                              QString *diagnostic)
 {
     GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(sink), 15 * GST_SECOND);
-    *diagnostic = decodeDiagnostic(uri, track, sample);
+    *diagnostic = decodeDiagnostic(uri, track, sample,
+                                   sample ? QString() : QStringLiteral("no sample received"));
     if (!sample) return GST_CLOCK_TIME_NONE;
     GstBuffer *buffer = gst_sample_get_buffer(sample);
     const GstSegment *segment = gst_sample_get_segment(sample);
@@ -309,10 +385,13 @@ bool firstDecodedRunningTimes(const QString &path, GstClockTime *video, GstClock
     });
     *video = videoFuture.get();
     *audio = audioFuture.get();
+    const QString busErrors = takePipelineBusErrors(pipeline);
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline);
     if (!GST_CLOCK_TIME_IS_VALID(*video) || !GST_CLOCK_TIME_IS_VALID(*audio)) {
-        *error = videoDiagnostic + QStringLiteral(" | ") + audioDiagnostic;
+        *error = videoDiagnostic + QStringLiteral(" | ") + audioDiagnostic +
+                 QStringLiteral("; pipeline-bus=%1").arg(
+                     busErrors.isEmpty() ? QStringLiteral("no GST_MESSAGE_ERROR") : busErrors);
         return false;
     }
     return true;
@@ -372,7 +451,13 @@ GstSample *decodeVideoNear(const QString &path, GstClockTime target, GstClockTim
         if (sampleNear(sample, target, tolerance)) { result = sample; break; }
         gst_sample_unref(sample);
     }
-    if (!result) *error = decodeDiagnostic(uri, QStringLiteral("video"), result);
+    if (!result) {
+        const QString busErrors = takePipelineBusErrors(pipeline);
+        *error = decodeDiagnostic(uri, QStringLiteral("video"), result,
+                                  busErrors.isEmpty()
+                                      ? QStringLiteral("no sample received; no GST_MESSAGE_ERROR")
+                                      : busErrors);
+    }
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline);
     return result;
@@ -446,8 +531,13 @@ private slots:
         QVERIFY2(start.accepted, qPrintable(start.error));
         QSignalSpy finished(&controller, &RecordingController::finished);
         QSignalSpy failed(&controller, &RecordingController::failed);
-        for (int frame = 0; frame < 90; ++frame)
-            enqueueVideo(controller, videoSample(960, 540, 30, frame * GST_SECOND / 30));
+        QVector<GstSample *> frames;
+        frames.reserve(90);
+        for (int frame = 0; frame < 90; ++frame) {
+            frames.append(busyVideoSample(
+                960, 540, 30, frame * GST_SECOND / 30, 0x540000u + quint32(frame), 24));
+        }
+        for (GstSample *frame : frames) enqueueVideo(controller, frame);
         const RecordingResult result = finish(controller, &finished, &failed);
         QVERIFY(QFileInfo::exists(result.finalPath));
         MediaSummary media;
@@ -460,13 +550,46 @@ private slots:
         QVERIFY(media.video.first().codec.contains(QStringLiteral("h264"), Qt::CaseInsensitive));
         QCOMPARE(media.video.first().width, 960);
         QCOMPARE(media.video.first().height, 540);
-        QCOMPARE(media.video.first().fpsNumerator, 30);
-        QCOMPARE(media.video.first().fpsDenominator, 1);
+        if (media.video.first().fpsNumerator != 30 || media.video.first().fpsDenominator != 1) {
+            GstSample *decoded = decodeVideoNear(result.finalPath, 0, 80 * GST_MSECOND, &error);
+            QVERIFY2(decoded, qPrintable(error));
+            GstCaps *caps = gst_sample_get_caps(decoded);
+            const GstStructure *structure = caps ? gst_caps_get_structure(caps, 0) : nullptr;
+            int numerator = 0, denominator = 1;
+            if (structure && gst_structure_get_fraction(
+                    structure, "framerate", &numerator, &denominator) && numerator > 0 && denominator > 0) {
+                QCOMPARE(numerator, 30);
+                QCOMPARE(denominator, 1);
+            } else {
+                const GstSegment *firstSegment = gst_sample_get_segment(decoded);
+                const GstBuffer *firstBuffer = gst_sample_get_buffer(decoded);
+                const GstClockTime firstRunning = firstSegment && firstBuffer
+                    ? gst_segment_to_running_time(firstSegment, GST_FORMAT_TIME,
+                                                  GST_BUFFER_PTS(firstBuffer))
+                    : GST_CLOCK_TIME_NONE;
+                GstSample *next = decodeVideoNear(
+                    result.finalPath, GST_SECOND / 30, 5 * GST_MSECOND, &error);
+                QVERIFY2(next, qPrintable(error));
+                const GstSegment *nextSegment = gst_sample_get_segment(next);
+                const GstBuffer *nextBuffer = gst_sample_get_buffer(next);
+                const GstClockTime nextRunning = nextSegment && nextBuffer
+                    ? gst_segment_to_running_time(nextSegment, GST_FORMAT_TIME,
+                                                  GST_BUFFER_PTS(nextBuffer))
+                    : GST_CLOCK_TIME_NONE;
+                QVERIFY(GST_CLOCK_TIME_IS_VALID(firstRunning));
+                QVERIFY(GST_CLOCK_TIME_IS_VALID(nextRunning));
+                QVERIFY(std::llabs(qint64(nextRunning) - qint64(firstRunning) -
+                                    qint64(GST_SECOND / 30)) <= 1'000);
+                gst_sample_unref(next);
+            }
+            gst_sample_unref(decoded);
+        }
         QVERIFY(std::llabs(qint64(media.duration) - 3 * qint64(GST_SECOND)) <= 100 * qint64(GST_MSECOND));
         QCOMPARE(recordingVideoBitrateBitsPerSecond(960, 540, 30), 4'000'000);
-        const int observed = media.video.first().bitrate;
-        QVERIFY2(observed == 0 || (observed > 1'000 && observed <= 4'500'000),
-                 qPrintable(QStringLiteral("unexpected 540p video bitrate %1").arg(observed)));
+        const int observed = reportedVideoBitrate(media);
+        QVERIFY2(reportedBitrateInTier(observed, 4'000'000),
+                 qPrintable(QStringLiteral("unexpected 540p reported bitrate: %1")
+                            .arg(bitrateDiagnostic(media))));
         controller.acknowledgeResult();
     }
 
@@ -476,11 +599,13 @@ private slots:
         QVERIFY(!files.reservation.finalPath.isEmpty());
         GstRecordingPipeline pipeline = realOpenH264Pipeline();
         QString error;
-        GstSample *first = videoSample(1280, 720, 60, 10 * GST_SECOND);
+        GstSample *first = busyVideoSample(1280, 720, 60, 10 * GST_SECOND, 0x720000u, 48);
         QVERIFY2(pipeline.start(config(files.reservation, 1280, 720, 60), first, &error), qPrintable(error));
         gst_sample_unref(first);
         for (int frame = 1; frame < 180; ++frame) {
-            GstSample *sample = videoSample(1280, 720, 60, 10 * GST_SECOND + frame * GST_SECOND / 60);
+            GstSample *sample = busyVideoSample(
+                1280, 720, 60, 10 * GST_SECOND + frame * GST_SECOND / 60,
+                0x720000u + quint32(frame), 48);
             QVERIFY2(pipeline.pushVideo(sample, frame * GST_SECOND / 60, &error), qPrintable(error));
             gst_sample_unref(sample);
         }
@@ -505,8 +630,16 @@ private slots:
         QCOMPARE(media.video.first().fpsNumerator, 60);
         QCOMPARE(media.video.first().fpsDenominator, 1);
         QCOMPARE(recordingVideoBitrateBitsPerSecond(1280, 720, 60), 9'000'000);
-        QVERIFY(media.audio.first().bitrate == 0 ||
-                std::llabs(qint64(media.audio.first().bitrate) - 192'000) <= 80'000);
+        const int observed = reportedVideoBitrate(media);
+        QVERIFY2(reportedBitrateInTier(observed, 9'000'000),
+                 qPrintable(QStringLiteral("unexpected 720p reported bitrate: %1")
+                            .arg(bitrateDiagnostic(media))));
+        const int audioBitrate = media.audio.first().bitrate > 0
+            ? media.audio.first().bitrate : media.audio.first().taggedBitrate;
+        QVERIFY2(reportedBitrateInTier(audioBitrate, 192'000, 50, 150),
+                 qPrintable(QStringLiteral("unexpected AAC reported bitrate %1 (stream=%2; tag=%3)")
+                            .arg(audioBitrate).arg(media.audio.first().bitrate)
+                            .arg(media.audio.first().taggedBitrate)));
         GstClockTime videoStart = GST_CLOCK_TIME_NONE, audioStart = GST_CLOCK_TIME_NONE;
         QVERIFY2(firstDecodedRunningTimes(files.reservation.finalPath, &videoStart, &audioStart, &error),
                  qPrintable(error));
@@ -592,9 +725,23 @@ private slots:
         QVERIFY2(decoded, qPrintable(error));
         GstMapInfo map;
         QVERIFY(gst_buffer_map(gst_sample_get_buffer(decoded), &map, GST_MAP_READ));
-        const auto pixel = [&map](int x, int y, int channel) { return map.data[(y * checkerWidth + x) * 4 + channel]; };
-        QVERIFY2(pixel(4, 4, 0) > pixel(4, 4, 1) + 60, "checkerboard was rotated, scaled, or cropped");
-        QVERIFY2(pixel(12, 4, 1) > pixel(12, 4, 0) + 60, "checkerboard lost 1:1 pixel layout");
+        QVERIFY(map.size >= static_cast<gsize>(checkerWidth * checkerHeight * 4));
+        const gsize rowStride = map.size / checkerHeight;
+        QVERIFY(rowStride >= static_cast<gsize>(checkerWidth * 4));
+        int mismatches = 0;
+        for (int y = 0; y < checkerHeight; ++y) {
+            for (int x = 0; x < checkerWidth; ++x) {
+                const bool expectRed = ((x / 8) + (y / 8)) % 2 == 0;
+                const gsize offset = static_cast<gsize>(y) * rowStride + x * 4;
+                const int red = map.data[offset];
+                const int green = map.data[offset + 1];
+                if (expectRed ? red <= green + 30 : green <= red + 30) ++mismatches;
+            }
+        }
+        QVERIFY2(mismatches <= checkerWidth * checkerHeight / 7,
+                 qPrintable(QStringLiteral("checkerboard mismatch count %1/%2: rotation, scale, crop, "
+                                          "or local pixel alignment changed")
+                            .arg(mismatches).arg(checkerWidth * checkerHeight)));
         gst_buffer_unmap(gst_sample_get_buffer(decoded), &map);
         gst_sample_unref(decoded);
 
@@ -607,14 +754,27 @@ private slots:
         QVERIFY(controller.start({output.path(), RecordingFormat::Mp4}).accepted);
         QSignalSpy finished(&controller, &RecordingController::finished);
         QSignalSpy failed(&controller, &RecordingController::failed);
-        enqueueVideo(controller, videoSample(checkerWidth, checkerHeight, 30, 0, checker));
-        enqueueVideo(controller, videoSample(checkerWidth, checkerHeight, 30, GST_SECOND / 30, checker));
-        enqueueVideo(controller, videoSample(200, checkerHeight, 30, 2 * GST_SECOND / 30));
+        for (int frame = 0; frame < 30; ++frame) {
+            enqueueVideo(controller, videoSample(
+                checkerWidth, checkerHeight, 30, frame * GST_SECOND / 30, checker));
+        }
+        enqueueVideo(controller, videoSample(200, checkerHeight, 30, GST_SECOND));
         QTRY_VERIFY_WITH_TIMEOUT(finished.count() == 1 || failed.count() == 1, 60'000);
         QVERIFY2(failed.isEmpty(), qPrintable(failed.isEmpty() ? QString() : failed.at(0).at(0).toString()));
         const RecordingResult changed = qvariant_cast<RecordingResult>(finished.at(0).at(0));
         QVERIFY(QFileInfo::exists(changed.finalPath));
         QVERIFY(changed.warning.contains(QStringLiteral("dimensions changed"), Qt::CaseInsensitive));
+        MediaSummary changedMedia;
+        QVERIFY2(discover(changed.finalPath, &changedMedia, &error), qPrintable(error));
+        QCOMPARE(changedMedia.video.size(), 1);
+        QCOMPARE(changedMedia.audio.size(), 0);
+        QCOMPARE(changedMedia.video.first().width, checkerWidth);
+        QCOMPARE(changedMedia.video.first().height, checkerHeight);
+        QCOMPARE(changedMedia.video.first().parNumerator, 1);
+        QCOMPARE(changedMedia.video.first().parDenominator, 1);
+        GstSample *prefix = decodeVideoNear(changed.finalPath, 0, 80 * GST_MSECOND, &error);
+        QVERIFY2(prefix, qPrintable(error));
+        gst_sample_unref(prefix);
         controller.acknowledgeResult();
     }
 
@@ -672,7 +832,8 @@ private slots:
             QStringLiteral("filesink"), QStringLiteral("identity"), QStringLiteral("mfh264enc"),
             QStringLiteral("openh264enc")};
         const auto mfh = GstRecordingPipeline::probeCapabilities(factoryHooks(all));
-        if (mfh.preferredEncoder == QStringLiteral("mfh264enc")) QVERIFY(mfh.available);
+        QVERIFY(mfh.available);
+        QCOMPARE(mfh.preferredEncoder, QStringLiteral("mfh264enc"));
         auto mfhFail = factoryHooks(all);
         mfhFail.factoryReady = [](const QString &name, QString *error) {
             if (name == QStringLiteral("mfh264enc")) { *error = QStringLiteral("forced mfh failure"); return false; }
@@ -683,9 +844,13 @@ private slots:
         noEncoders.remove(QStringLiteral("mfh264enc")); noEncoders.remove(QStringLiteral("openh264enc"));
         QVERIFY(!GstRecordingPipeline::probeCapabilities(factoryHooks(noEncoders)).available);
         QSet<QString> noAac = all; noAac.remove(QStringLiteral("avenc_aac"));
-        QVERIFY(GstRecordingPipeline::probeCapabilities(factoryHooks(noAac)).error.contains(QStringLiteral("AAC")));
+        const auto aacMissing = GstRecordingPipeline::probeCapabilities(factoryHooks(noAac));
+        QVERIFY(!aacMissing.available);
+        QVERIFY(aacMissing.error.contains(QStringLiteral("AAC")));
         QSet<QString> noMux = all; noMux.remove(QStringLiteral("mp4mux"));
-        QVERIFY(GstRecordingPipeline::probeCapabilities(factoryHooks(noMux)).error.contains(QStringLiteral("MP4")));
+        const auto muxMissing = GstRecordingPipeline::probeCapabilities(factoryHooks(noMux));
+        QVERIFY(!muxMissing.available);
+        QVERIFY(muxMissing.error.contains(QStringLiteral("MP4")));
 
         Files diskFailure;
         GstRecordingPipeline pipeline = realOpenH264Pipeline();
