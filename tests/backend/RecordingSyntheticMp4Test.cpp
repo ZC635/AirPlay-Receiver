@@ -6,6 +6,7 @@
 #include <QtTest>
 
 #include <QFileInfo>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -14,9 +15,11 @@
 #include <gst/gst.h>
 #include <gst/pbutils/pbutils.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <future>
+#include <initializer_list>
 
 namespace {
 
@@ -365,6 +368,35 @@ QString takePipelineBusErrors(GstElement *pipeline)
     return errors.join(QStringLiteral(" | "));
 }
 
+QString takeBusErrorOrEos(GstBus *bus)
+{
+    GstMessage *message = gst_bus_pop_filtered(
+        bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+    if (!message) return {};
+    QString result;
+    if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
+        GError *gerror = nullptr;
+        gchar *debug = nullptr;
+        gst_message_parse_error(message, &gerror, &debug);
+        result = QStringLiteral("GST_MESSAGE_ERROR=%1; debug=%2")
+            .arg(QString::fromUtf8(gerror ? gerror->message : "unknown"),
+                 QString::fromUtf8(debug ? debug : "<none>"));
+        g_clear_error(&gerror);
+        g_free(debug);
+    } else {
+        result = QStringLiteral("GST_MESSAGE_EOS before matching video sample");
+    }
+    gst_message_unref(message);
+    return result;
+}
+
+void unrefUnaddedElements(std::initializer_list<GstElement *> elements)
+{
+    for (GstElement *element : elements) {
+        if (element) gst_object_unref(element);
+    }
+}
+
 GstClockTime pullRunningTime(GstElement *sink, const QString &uri, const QString &track,
                              QString *diagnostic)
 {
@@ -397,6 +429,8 @@ bool firstDecodedRunningTimes(const QString &path, GstClockTime *video, GstClock
         !audioConvert || !audioSink) {
         *error = QStringLiteral("URI=%1; GError=required decoder factory missing; raw PTS=-1; "
                                 "segment=none; running-time=-1; caps=<none>").arg(uri);
+        unrefUnaddedElements({decode, videoQueue, videoConvert, videoSink,
+                               audioQueue, audioConvert, audioSink});
         if (pipeline) gst_object_unref(pipeline);
         return false;
     }
@@ -454,6 +488,18 @@ bool sampleNear(GstSample *sample, GstClockTime target, GstClockTime tolerance)
            std::llabs(qint64(running) - qint64(target)) <= qint64(tolerance);
 }
 
+constexpr int decoderDeadlineMs()
+{
+    return 15'000;
+}
+
+int decoderPollWaitMs(qint64 elapsedMs)
+{
+    constexpr int pollIntervalMs = 100;
+    const qint64 remainingMs = decoderDeadlineMs() - elapsedMs;
+    return remainingMs > 0 ? int(std::min<qint64>(pollIntervalMs, remainingMs)) : 0;
+}
+
 GstSample *decodeVideoNear(const QString &path, GstClockTime target, GstClockTime tolerance,
                            QString *error)
 {
@@ -466,6 +512,7 @@ GstSample *decodeVideoNear(const QString &path, GstClockTime target, GstClockTim
     if (!pipeline || !decode || !queue || !convert || !sink) {
         *error = QStringLiteral("URI=%1; GError=video decode factory missing; raw PTS=-1; "
                                 "segment=none; running-time=-1; caps=<none>").arg(uri);
+        unrefUnaddedElements({decode, queue, convert, sink});
         if (pipeline) gst_object_unref(pipeline);
         return nullptr;
     }
@@ -491,18 +538,36 @@ GstSample *decodeVideoNear(const QString &path, GstClockTime target, GstClockTim
         return nullptr;
     }
     GstSample *result = nullptr;
-    for (int index = 0; index < 180; ++index) {
-        GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(sink), 2 * GST_SECOND);
-        if (!sample) break;
-        if (sampleNear(sample, target, tolerance)) { result = sample; break; }
-        gst_sample_unref(sample);
+    GstBus *bus = gst_element_get_bus(pipeline);
+    QElapsedTimer deadline;
+    deadline.start();
+    QString terminalMessage;
+    while (!result) {
+        if (bus) {
+            terminalMessage = takeBusErrorOrEos(bus);
+            if (!terminalMessage.isEmpty()) break;
+        }
+        const int waitMs = decoderPollWaitMs(deadline.elapsed());
+        if (waitMs <= 0) {
+            terminalMessage = QStringLiteral("decode deadline of %1 ms expired")
+                .arg(decoderDeadlineMs());
+            break;
+        }
+        GstSample *sample = gst_app_sink_try_pull_sample(
+            GST_APP_SINK(sink), static_cast<GstClockTime>(waitMs) * GST_MSECOND);
+        if (!sample) continue;
+        if (sampleNear(sample, target, tolerance)) {
+            result = sample;
+        } else {
+            gst_sample_unref(sample);
+        }
     }
+    if (bus) gst_object_unref(bus);
     if (!result) {
-        const QString busErrors = takePipelineBusErrors(pipeline);
         *error = decodeDiagnostic(uri, QStringLiteral("video"), result,
-                                  busErrors.isEmpty()
+                                  terminalMessage.isEmpty()
                                       ? QStringLiteral("no sample received; no GST_MESSAGE_ERROR")
-                                      : busErrors);
+                                      : terminalMessage);
     }
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline);
@@ -564,6 +629,14 @@ class RecordingSyntheticMp4Test : public QObject {
 
 private slots:
     void initTestCase() { gst_init(nullptr, nullptr); }
+
+    void decoderDeadlineFitsCTest()
+    {
+        QVERIFY(decoderDeadlineMs() <= 20'000);
+        QCOMPARE(decoderPollWaitMs(0), 100);
+        QCOMPARE(decoderPollWaitMs(decoderDeadlineMs() - 1), 1);
+        QCOMPARE(decoderPollWaitMs(decoderDeadlineMs()), 0);
+    }
 
     void bitrateMetadataUsesBitsPerSecond()
     {
@@ -693,7 +766,8 @@ private slots:
             gst_sample_unref(sample);
         }
         std::atomic_bool cancelled{false};
-        QVERIFY2(pipeline.finalize(60'000, cancelled).success, qPrintable(error));
+        const auto finalized = pipeline.finalize(60'000, cancelled);
+        QVERIFY2(finalized.success, qPrintable(finalized.error));
         QVERIFY2(files.commit().isEmpty(), "could not commit black-frame MP4");
         GstSample *gap = decodeVideoNear(files.reservation.finalPath, 1550 * GST_MSECOND, 80 * GST_MSECOND, &error);
         QVERIFY2(gap, qPrintable(error));
@@ -905,7 +979,10 @@ private slots:
         GstRecordingPipeline pipeline = realOpenH264Pipeline();
         QString error;
         auto invalid = config(diskFailure.reservation, 64, 48, 30);
-        invalid.videoSpoolPath = QDir::rootPath() + QStringLiteral("airplay-recording-unwritable/video.mkv");
+        QFile blocker(diskFailure.directory.filePath(QStringLiteral("blocker")));
+        QVERIFY(blocker.open(QIODevice::WriteOnly));
+        blocker.close();
+        invalid.videoSpoolPath = diskFailure.directory.filePath(QStringLiteral("blocker/video.mkv"));
         GstSample *sample = videoSample(64, 48, 30, 0);
         QVERIFY(!pipeline.start(invalid, sample, &error));
         gst_sample_unref(sample);
