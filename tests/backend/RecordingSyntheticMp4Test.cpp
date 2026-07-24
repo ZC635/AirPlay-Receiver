@@ -220,6 +220,47 @@ GstSample *audioSample(GstClockTime pts)
     return sample;
 }
 
+struct RgbComparison {
+    int mismatches = 0;
+    int total = 0;
+};
+
+RgbComparison compareRgbPixels(const QByteArray &expected, const quint8 *actual,
+                               int width, int height, gsize actualRowStride,
+                               int channelTolerance)
+{
+    RgbComparison result;
+    const auto *expectedPixels = reinterpret_cast<const quint8 *>(expected.constData());
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const quint8 *want = expectedPixels + (y * width + x) * 4;
+            const quint8 *got = actual + y * actualRowStride + x * 4;
+            ++result.total;
+            if (std::abs(int(want[0]) - int(got[0])) > channelTolerance ||
+                std::abs(int(want[1]) - int(got[1])) > channelTolerance ||
+                std::abs(int(want[2]) - int(got[2])) > channelTolerance) {
+                ++result.mismatches;
+            }
+        }
+    }
+    return result;
+}
+
+QByteArray shiftPixelsHorizontally(const QByteArray &pixels, int width, int height, int shift)
+{
+    QByteArray shifted(pixels.size(), char(0));
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int sourceX = (x + shift) % width;
+            const int destination = (y * width + x) * 4;
+            const int source = (y * width + sourceX) * 4;
+            for (int channel = 0; channel < 4; ++channel)
+                shifted[destination + channel] = pixels[source + channel];
+        }
+    }
+    return shifted;
+}
+
 struct Files {
     QTemporaryDir directory;
     RecordingFileReservation reservation;
@@ -672,32 +713,48 @@ private slots:
         Files files;
         constexpr int checkerWidth = 160;
         constexpr int checkerHeight = 120;
-        const auto expectedRed = [](int x, int y) {
-            const quint32 cellX = static_cast<quint32>(x / 8);
-            const quint32 cellY = static_cast<quint32>(y / 8);
+        constexpr int checkerCellSize = 4;
+        constexpr int rgbTolerance = 84;
+        constexpr int maxPixelMismatches = 3'000;
+        constexpr quint8 palette[8][3] = {
+            {245, 20, 20}, {105, 70, 20},
+            {20, 245, 20}, {70, 105, 20},
+            {20, 20, 245}, {20, 70, 105},
+            {245, 245, 20}, {105, 105, 20},
+        };
+        const auto paletteIndex = [](int x, int y) {
+            const quint32 cellX = static_cast<quint32>(x / checkerCellSize);
+            const quint32 cellY = static_cast<quint32>(y / checkerCellSize);
             quint32 coordinateHash = cellX * 0x9e3779b9u ^ cellY * 0x85ebca6bu;
             coordinateHash ^= coordinateHash >> 16;
             coordinateHash *= 0x7feb352du;
             coordinateHash ^= coordinateHash >> 15;
-            return (((cellX + cellY) & 1u) ^ (coordinateHash & 1u)) == 0;
+            const quint32 baseColor = (cellX & 1u) | ((cellY & 1u) << 1u);
+            return int(baseColor * 2u + (coordinateHash & 1u));
         };
-        int translatedMismatches = 0;
-        for (int y = 0; y < checkerHeight; ++y) {
-            for (int x = 0; x < checkerWidth - 16; ++x) {
-                if (expectedRed(x, y) != expectedRed(x + 16, y)) ++translatedMismatches;
-            }
-        }
-        QVERIFY2(translatedMismatches > (checkerWidth - 16) * checkerHeight / 3,
-                 "checker pattern must reject a full-cell-period translation");
         QByteArray checker(checkerWidth * checkerHeight * 4, char(0));
         for (int y = 0; y < checkerHeight; ++y) for (int x = 0; x < checkerWidth; ++x) {
             const int offset = (y * checkerWidth + x) * 4;
-            const bool red = expectedRed(x, y);
-            checker[offset] = char(red ? 230 : 20);
-            checker[offset + 1] = char(red ? 20 : 220);
-            checker[offset + 2] = char(30);
+            const quint8 *color = palette[paletteIndex(x, y)];
+            checker[offset] = char(color[0]);
+            checker[offset + 1] = char(color[1]);
+            checker[offset + 2] = char(color[2]);
             checker[offset + 3] = char(255);
         }
+        const auto onePixelShift = shiftPixelsHorizontally(
+            checker, checkerWidth, checkerHeight, 1);
+        const auto oldCheckerPeriodShift = shiftPixelsHorizontally(
+            checker, checkerWidth, checkerHeight, 16);
+        const RgbComparison onePixelNegative = compareRgbPixels(
+            checker, reinterpret_cast<const quint8 *>(onePixelShift.constData()),
+            checkerWidth, checkerHeight, checkerWidth * 4, 0);
+        const RgbComparison oldCheckerPeriodNegative = compareRgbPixels(
+            checker, reinterpret_cast<const quint8 *>(oldCheckerPeriodShift.constData()),
+            checkerWidth, checkerHeight, checkerWidth * 4, 0);
+        QVERIFY2(onePixelNegative.mismatches > maxPixelMismatches,
+                 "pixel-fidelity threshold must reject a one-pixel translation");
+        QVERIFY2(oldCheckerPeriodNegative.mismatches > maxPixelMismatches,
+                 "pixel-fidelity threshold must reject the old checker period translation");
         GstRecordingPipeline pipeline = realOpenH264Pipeline();
         QString error;
         GstSample *first = videoSample(checkerWidth, checkerHeight, 30, 0, checker);
@@ -724,20 +781,14 @@ private slots:
         QVERIFY(map.size >= static_cast<gsize>(checkerWidth * checkerHeight * 4));
         const gsize rowStride = map.size / checkerHeight;
         QVERIFY(rowStride >= static_cast<gsize>(checkerWidth * 4));
-        int mismatches = 0;
-        for (int y = 0; y < checkerHeight; ++y) {
-            for (int x = 0; x < checkerWidth; ++x) {
-                const bool expectRed = expectedRed(x, y);
-                const gsize offset = static_cast<gsize>(y) * rowStride + x * 4;
-                const int red = map.data[offset];
-                const int green = map.data[offset + 1];
-                if (expectRed ? red <= green + 30 : green <= red + 30) ++mismatches;
-            }
-        }
-        QVERIFY2(mismatches <= checkerWidth * checkerHeight / 7,
-                 qPrintable(QStringLiteral("checkerboard mismatch count %1/%2: rotation, scale, crop, "
-                                          "or local pixel alignment changed")
-                            .arg(mismatches).arg(checkerWidth * checkerHeight)));
+        const RgbComparison decodedComparison = compareRgbPixels(
+            checker, map.data, checkerWidth, checkerHeight, rowStride, rgbTolerance);
+        QVERIFY2(decodedComparison.mismatches <= maxPixelMismatches,
+                 qPrintable(QStringLiteral("RGB mismatch count %1/%2 (tolerance=%3; 1px=%4; "
+                                          "old-period=%5): crop, scale, or alignment changed")
+                            .arg(decodedComparison.mismatches).arg(decodedComparison.total).arg(rgbTolerance)
+                            .arg(onePixelNegative.mismatches)
+                            .arg(oldCheckerPeriodNegative.mismatches)));
         gst_buffer_unmap(gst_sample_get_buffer(decoded), &map);
         gst_sample_unref(decoded);
 
