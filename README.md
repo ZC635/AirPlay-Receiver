@@ -1,6 +1,6 @@
 # AirPlay Receiver
 
-AirPlay Receiver is a Windows desktop receiver for native iPhone AirPlay Screen Mirroring. It advertises itself over mDNS, receives mirroring streams, displays the mirrored video, plays synchronized audio, and provides a compact toolbar for volume, always-on-top, aspect-ratio, video-fit, settings, and configurable global shortcuts.
+AirPlay Receiver is a Windows desktop receiver for native iPhone AirPlay Screen Mirroring. It advertises itself over mDNS, receives mirroring streams, displays the mirrored video, plays synchronized audio, records mirrored content to MP4, and provides a compact toolbar for volume, always-on-top, aspect-ratio, video-fit, recording, settings, and configurable global shortcuts.
 
 This project was developed with assistance from OpenCode, Codex, and DeepSeek. It builds on UxPlay and GStreamer for AirPlay protocol handling and media playback, with a Qt-based Windows desktop interface around the receiver experience.
 
@@ -12,7 +12,7 @@ This project is Windows-only. The application, build scripts, tests, and runtime
 
 Download the newest Windows portable build from the [latest release](https://github.com/ZC635/AirPlay-Receiver/releases/latest). Extract the archive, run `airplay_receiver.exe`, then open Control Center on an iPhone, choose Screen Mirroring, and select the advertised receiver name. Keep the iPhone and Windows PC on the same network, and allow the receiver through the Windows firewall if prompted.
 
-Default global shortcuts are available as soon as the receiver starts: `Ctrl+Alt+T` toggles always-on-top, `Ctrl+Alt+Up` and `Ctrl+Alt+Down` adjust volume, `Ctrl+Alt+B` toggles toolbar visibility, `Ctrl+Alt+A` toggles aspect-ratio lock, and `Ctrl+Alt+F` toggles video fit. Open the toolbar settings button to customize shortcut bindings or reset them to defaults.
+Default global shortcuts are available as soon as the receiver starts: `Ctrl+Alt+T` toggles always-on-top, `Ctrl+Alt+Up` and `Ctrl+Alt+Down` adjust volume, `Ctrl+Alt+B` toggles toolbar visibility, `Ctrl+Alt+A` toggles aspect-ratio lock, `Ctrl+Alt+F` toggles video fit, and `Ctrl+Alt+R` starts or stops recording. Open the toolbar settings button to customize shortcut bindings or reset them to defaults.
 
 ## Usage
 
@@ -119,14 +119,23 @@ $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 
 After the receiver starts, open Control Center on an iPhone, choose Screen Mirroring, and select the advertised receiver name. Keep the Windows host and iPhone on the same network, and allow mDNS and receiver traffic through the firewall.
 
+### Record Mirrored Content
+
+Once an iPhone is mirroring and recordable samples are available, click **Record** on the toolbar or press `Ctrl+Alt+R`. Click **Stop** or press the shortcut again to finish. The button shows **Saving...** while the recording is finalized into an MP4 file.
+
+Recordings are saved by default under the Windows Videos folder in `AirPlay Receiver Recording`. Open **Settings > Recording** to choose another output folder or control whether a completion message is shown. Closing the application while a recording is active or being saved asks for confirmation before discarding it.
+
+The recording pipeline selects an available H.264 encoder at runtime, preferring Windows Media Foundation when usable and falling back to OpenH264. Portable builds include the required GStreamer recording plugins and verify them during packaging.
+
 ## Features
 
 - Native iPhone AirPlay Screen Mirroring discovery and connection via UxPlay/GStreamer
 - Mirrored video display through an appsink-to-`QImage` bridge and a Qt `QWidget`/`QPainter` surface with cached-frame repainting to reduce resize artifacts
 - Synchronized audio playback
+- MP4 recording of mirrored video and available audio through UxPlay raw-sample taps, with a toolbar control and configurable global shortcut
 - Bidirectional volume synchronization between iPhone AirPlay volume callbacks and the toolbar slider
-- Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, and settings button
-- Settings dialog for receiver name, video quality, and configurable shortcuts:
+- Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, recording control, and settings button
+- Settings dialog for receiver name, video quality, recording output, and configurable shortcuts:
   - Receiver name shown in the iPhone Screen Mirroring list
   - Video quality: 540p, 720p, or 1080p; 15, 30, or 60 fps
   - Toggle always on top (`Ctrl+Alt+T`)
@@ -135,6 +144,7 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
   - Toggle toolbar visibility (`Ctrl+Alt+B`)
   - Toggle aspect-ratio lock (`Ctrl+Alt+A`)
   - Toggle video fit (`Ctrl+Alt+F`)
+  - Toggle recording (`Ctrl+Alt+R`)
   - Reset hotkey bindings to defaults
 - Global hotkey registration via the Windows hotkey API
 - Windows-native window handling for always-on-top state, decoded-frame aspect-ratio resizing, and reduced resize flicker
@@ -147,7 +157,7 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 ```text
 src/
   app/          Qt UI, toolbar, video surface, settings dialog, settings persistence
-  backend/      Receiver abstraction and UxPlay/GStreamer integration
+  backend/      Receiver, UxPlay/GStreamer integration, and MP4 recording pipeline
   platform/     Windows hotkeys, diagnostics, mDNS helpers, window sizing support
 cmake/          UxPlay, QMdnsEngine, and renderer dependency integration
 config/         Portable runtime manifest
