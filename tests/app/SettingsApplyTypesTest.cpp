@@ -123,6 +123,30 @@ private slots:
         }
     }
 
+    void copiesVideoResolutionWithoutChangingDestinationFrameRate() {
+        AppSettings source = AppSettings::defaults();
+        AppSettings destination = AppSettings::defaults();
+        source.setVideoQuality({VideoResolution::P540, VideoFrameRate::Fps60});
+        destination.setVideoQuality({VideoResolution::P1080, VideoFrameRate::Fps15});
+
+        copySettingsField(source, SettingsFieldId::videoResolution(), &destination);
+
+        QCOMPARE(destination.videoQuality().resolution, VideoResolution::P540);
+        QCOMPARE(destination.videoQuality().frameRate, VideoFrameRate::Fps15);
+    }
+
+    void copiesVideoFrameRateWithoutChangingDestinationResolution() {
+        AppSettings source = AppSettings::defaults();
+        AppSettings destination = AppSettings::defaults();
+        source.setVideoQuality({VideoResolution::P540, VideoFrameRate::Fps60});
+        destination.setVideoQuality({VideoResolution::P1080, VideoFrameRate::Fps15});
+
+        copySettingsField(source, SettingsFieldId::videoFrameRate(), &destination);
+
+        QCOMPARE(destination.videoQuality().resolution, VideoResolution::P1080);
+        QCOMPARE(destination.videoQuality().frameRate, VideoFrameRate::Fps60);
+    }
+
     void formatsEverySupportedValue() {
         QCOMPARE(formatSettingsFieldValue(SettingsFieldValue(QString("Desk Receiver"))),
                  QString("Desk Receiver"));
