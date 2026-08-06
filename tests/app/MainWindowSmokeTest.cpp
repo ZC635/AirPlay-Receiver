@@ -2281,6 +2281,41 @@ private slots:
         QCOMPARE(receiver.lastAppliedVideoQuality.frameRate, VideoFrameRate::Fps60);
     }
 
+    void settingsApplyIsSafeAfterHotkeyAndReceiverAreDestroyed() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        auto *hotkeys = new FakeHotkeyService;
+        auto *receiver = new FakeAirPlayReceiver;
+        MainWindow window(AppSettings::defaults(), hotkeys, receiver, dir.filePath("settings.json"));
+        delete hotkeys;
+        delete receiver;
+
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *shortcut = dialog->findChild<QKeySequenceEdit *>("shortcutEdit_toggleVideoFit");
+            auto *frameRate = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+            QVERIFY(shortcut != nullptr);
+            QVERIFY(frameRate != nullptr);
+            shortcut->setKeySequence(QKeySequence("Ctrl+Shift+F"));
+            frameRate->setCurrentIndex(frameRate->findData(static_cast<int>(VideoFrameRate::Fps60)));
+            dialog->accept();
+
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+            auto *summary = dialog->findChild<QLabel *>("settingsApplySummary");
+            QVERIFY(summary != nullptr);
+            QVERIFY(summary->isVisible());
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(dir.filePath("settings.json")).loadOrDefaults()
+                     .shortcutFor(ShortcutAction::ToggleVideoFit),
+                 QKeySequence("Ctrl+Shift+F"));
+    }
+
     void deferredReceiverFailureShowsOneModalAndRollsBackJson() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
