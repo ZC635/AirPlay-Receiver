@@ -42,6 +42,10 @@ unsigned int toVirtualKey(int key) {
     }
 }
 
+QString unknownHotkeyErrorMessage(quint32 error) {
+    return QStringLiteral("Windows hotkey registration failed (error %1).").arg(error);
+}
+
 HotkeyNativeOperations defaultNativeOperations() {
     return {
         [](int id, unsigned int modifiers, unsigned int virtualKey) {
@@ -55,11 +59,11 @@ HotkeyNativeOperations defaultNativeOperations() {
                 FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                 nullptr, error, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
             if (length == 0 || buffer == nullptr) {
-                return QStringLiteral("Windows hotkey registration failed.");
+                return unknownHotkeyErrorMessage(error);
             }
             const QString message = QString::fromWCharArray(buffer, static_cast<int>(length)).trimmed();
             LocalFree(buffer);
-            return message.isEmpty() ? QStringLiteral("Windows hotkey registration failed.") : message;
+            return message.isEmpty() ? unknownHotkeyErrorMessage(error) : message;
         },
     };
 }
@@ -67,7 +71,7 @@ HotkeyNativeOperations defaultNativeOperations() {
 HotkeyError nativeError(const HotkeyNativeOperations &operations) {
     const quint32 code = operations.lastError();
     const QString message = operations.formatError(code);
-    return {code, message.isEmpty() ? QStringLiteral("Windows hotkey registration failed.") : message};
+    return {code, message.isEmpty() ? unknownHotkeyErrorMessage(code) : message};
 }
 }
 
