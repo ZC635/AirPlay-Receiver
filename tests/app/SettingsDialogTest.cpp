@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 
 #include "app/SettingsDialog.h"
+#include "app/SettingsApplyTypes.h"
 #include "backend/VideoQualitySettings.h"
 #include "platform/RecordingPathActions.h"
 
@@ -50,6 +51,260 @@ class SettingsDialogTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void summaryAppearsAboveEverySettingsGroup() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        auto *layout = qobject_cast<QVBoxLayout *>(dialog.layout());
+        QVERIFY(summary != nullptr);
+        QVERIFY(layout != nullptr);
+        QCOMPARE(layout->indexOf(summary), 0);
+        QVERIFY(layout->indexOf(dialog.findChild<QGroupBox *>("generalSettingsGroup")) > 0);
+        QVERIFY(summary->isHidden());
+    }
+
+    void receiverErrorsAppearBelowTheirControls() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *receiverError = dialog.findChild<QLabel *>("receiverNameError");
+        auto *resolutionError = dialog.findChild<QLabel *>("videoResolutionError");
+        auto *frameRateError = dialog.findChild<QLabel *>("videoFrameRateError");
+        QVERIFY(receiverError != nullptr);
+        QVERIFY(resolutionError != nullptr);
+        QVERIFY(frameRateError != nullptr);
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {
+            {SettingsFieldId::receiverName(), QString("Broken receiver"),
+             SettingsFieldStatus::ValidationFailed, "must be unique"},
+            {SettingsFieldId::videoResolution(), VideoResolution::P720,
+             SettingsFieldStatus::ApplyFailedRolledBack, "restart failed"},
+            {SettingsFieldId::videoFrameRate(), VideoFrameRate::Fps60,
+             SettingsFieldStatus::RecoveryFailed, "restart failed", 12345,
+             "previous configuration could not be restored"},
+        };
+        dialog.presentApplyOutcome(outcome);
+
+        QVERIFY(!receiverError->isHidden());
+        QVERIFY(receiverError->text().contains("Receiver name"));
+        QVERIFY(receiverError->text().contains("Broken receiver"));
+        QVERIFY(!resolutionError->isHidden());
+        QVERIFY(resolutionError->text().contains("720p"));
+        QVERIFY(!frameRateError->isHidden());
+        QVERIFY(frameRateError->text().contains("12345"));
+        QVERIFY(frameRateError->text().contains("could not be restored"));
+    }
+
+    void shortcutErrorsAppearInStatusColumn() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
+        QVERIFY(table != nullptr);
+        QCOMPARE(table->columnCount(), 3);
+        QCOMPARE(table->horizontalHeaderItem(2)->text(), QString("Status"));
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
+                                 QKeySequence("Ctrl+Shift+T"),
+                                 SettingsFieldStatus::ApplyFailedRolledBack,
+                                 "already registered"}};
+        dialog.presentApplyOutcome(outcome);
+
+        auto *status = qobject_cast<QLabel *>(table->cellWidget(3, 2));
+        QVERIFY(status != nullptr);
+        QVERIFY(status->wordWrap());
+        QVERIFY(status->text().contains("Toggle toolbar"));
+        QVERIFY(status->text().contains("Ctrl+Shift+T"));
+    }
+
+    void failedDraftRemainsVisibleAfterPartialOutcome() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        QVERIFY(receiver != nullptr);
+        receiver->setText("Attempted receiver");
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::receiverName(), QString("Attempted receiver"),
+                                 SettingsFieldStatus::ApplyFailedRolledBack,
+                                 "restart failed"}};
+        dialog.presentApplyOutcome(outcome);
+
+        QCOMPARE(receiver->text(), QString("Attempted receiver"));
+        QCOMPARE(dialog.draftSettings().receiverName(), QString("Attempted receiver"));
+        QCOMPARE(dialog.committedBaseline().receiverName(),
+                 AppSettings::defaults().receiverName());
+    }
+
+    void editingFailedFieldClearsOnlyItsStaleError() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *resolution = dialog.findChild<QComboBox *>("videoResolutionCombo");
+        auto *receiverError = dialog.findChild<QLabel *>("receiverNameError");
+        auto *resolutionError = dialog.findChild<QLabel *>("videoResolutionError");
+        QVERIFY(receiver != nullptr);
+        QVERIFY(resolution != nullptr);
+        QVERIFY(receiverError != nullptr);
+        QVERIFY(resolutionError != nullptr);
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {
+            {SettingsFieldId::receiverName(), QString("Attempted receiver"),
+             SettingsFieldStatus::ValidationFailed, "not allowed"},
+            {SettingsFieldId::videoResolution(), VideoResolution::P720,
+             SettingsFieldStatus::ValidationFailed, "not available"},
+        };
+        dialog.presentApplyOutcome(outcome);
+
+        receiver->setText("Corrected receiver");
+
+        QVERIFY(receiverError->isHidden());
+        QVERIFY(!resolutionError->isHidden());
+    }
+
+    void partialOutcomeAdoptsSuccessfulCommittedBaseline() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        QVERIFY(receiver != nullptr);
+        receiver->setText("Rejected receiver");
+
+        AppSettings committed = AppSettings::defaults();
+        VideoQualitySettings quality = committed.videoQuality();
+        quality.frameRate = VideoFrameRate::Fps60;
+        committed.setVideoQuality(quality);
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = committed;
+        outcome.fieldResults = {
+            {SettingsFieldId::receiverName(), QString("Rejected receiver"),
+             SettingsFieldStatus::ValidationFailed, "not allowed"},
+            {SettingsFieldId::videoFrameRate(), VideoFrameRate::Fps60,
+             SettingsFieldStatus::Applied, {}},
+        };
+        dialog.presentApplyOutcome(outcome);
+
+        QCOMPARE(dialog.committedBaseline().videoQuality().frameRate, VideoFrameRate::Fps60);
+        QCOMPARE(dialog.committedBaseline().receiverName(), AppSettings::defaults().receiverName());
+        QCOMPARE(dialog.draftSettings().receiverName(), QString("Rejected receiver"));
+    }
+
+    void cancelAfterPartialApplyDoesNotReverseCommittedFields() {
+        SettingsDialog dialog(AppSettings::defaults());
+        AppSettings committed = AppSettings::defaults();
+        committed.setReceiverName("Committed receiver");
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = committed;
+        outcome.fieldResults = {{SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
+                                 QKeySequence("Ctrl+Shift+T"),
+                                 SettingsFieldStatus::ValidationFailed,
+                                 "already registered"}};
+        dialog.presentApplyOutcome(outcome);
+
+        dialog.reject();
+
+        QCOMPARE(dialog.committedBaseline().receiverName(), QString("Committed receiver"));
+    }
+
+    void partialFailureKeepsDialogOpen() {
+        SettingsDialog dialog(AppSettings::defaults());
+        dialog.show();
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::receiverName(), QString("Invalid"),
+                                 SettingsFieldStatus::ValidationFailed, "not allowed"}};
+        outcome.mayClose = false;
+        dialog.presentApplyOutcome(outcome);
+        QVERIFY(dialog.isVisible());
+    }
+
+    void successOrDeferredOnlyOutcomeClosesDialog() {
+        SettingsDialog dialog(AppSettings::defaults());
+        dialog.show();
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::videoFrameRate(), VideoFrameRate::Fps60,
+                                 SettingsFieldStatus::Deferred, {}}};
+        outcome.mayClose = true;
+        dialog.presentApplyOutcome(outcome);
+        QCOMPARE(dialog.result(), static_cast<int>(QDialog::Accepted));
+        QVERIFY(!dialog.isVisible());
+    }
+
+    void applyRequestedEmitsFullDraftWithoutClosing() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *frameRate = dialog.findChild<QComboBox *>("videoFrameRateCombo");
+        auto *shortcut = dialog.findChild<QKeySequenceEdit *>("shortcutEdit_toggleToolbar");
+        QVERIFY(receiver != nullptr);
+        QVERIFY(frameRate != nullptr);
+        QVERIFY(shortcut != nullptr);
+        receiver->setText("Desk Receiver");
+        frameRate->setCurrentText("60 fps");
+        shortcut->setKeySequence(QKeySequence("Ctrl+Shift+T"));
+
+        int requested = 0;
+        AppSettings emitted;
+        connect(&dialog, &SettingsDialog::applyRequested, this, [&requested, &emitted](AppSettings draft) {
+            ++requested;
+            emitted = draft;
+        });
+        dialog.accept();
+
+        QCOMPARE(requested, 1);
+        QCOMPARE(emitted.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(emitted.videoQuality().frameRate, VideoFrameRate::Fps60);
+        QCOMPARE(emitted.shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+T"));
+        QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
+    }
+
+    void summaryShowsUnappliedChangesAndKeepsPathActionErrorsIndependent() {
+        FakeRecordingPathActions actions;
+        actions.openError = "Could not open recording directory";
+        SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        QVERIFY(receiver != nullptr);
+        QVERIFY(open != nullptr);
+        QVERIFY(summary != nullptr);
+
+        receiver->setText("Unapplied receiver");
+        QVERIFY(summary->text().contains("1 setting has unapplied changes."));
+        open->click();
+        QVERIFY(summary->text().contains(actions.openError));
+        receiver->setText("Other receiver");
+        QVERIFY(summary->text().contains(actions.openError));
+    }
+
+    void summaryDescribesPartialAndPersistenceFailuresPrecisely() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        QVERIFY(summary != nullptr);
+
+        SettingsApplyOutcome partial;
+        partial.committedSettings = AppSettings::defaults();
+        partial.fieldResults = {
+            {SettingsFieldId::videoFrameRate(), VideoFrameRate::Fps60,
+             SettingsFieldStatus::Applied, {}},
+            {SettingsFieldId::receiverName(), QString("Invalid"),
+             SettingsFieldStatus::ValidationFailed, "not allowed"},
+            {SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+T"),
+             SettingsFieldStatus::ApplyFailedRolledBack, "already registered"},
+        };
+        dialog.presentApplyOutcome(partial);
+        QCOMPARE(summary->text(),
+                 QString("Some settings were applied. 2 settings were not applied; correct the highlighted fields."));
+
+        SettingsApplyOutcome persistence;
+        persistence.committedSettings = AppSettings::defaults();
+        SettingsApplyGlobalResult global;
+        global.persistence.targetPath = "C:\\path\\airplay-settings.json";
+        global.persistence.errorString = "Access is denied.";
+        persistence.globalResult = global;
+        dialog.presentApplyOutcome(persistence);
+        QCOMPARE(summary->text(),
+                 QString("Could not save C:\\path\\airplay-settings.json: Access is denied. No changes from this Apply were committed."));
+    }
+
     void listsAllShortcutActions() {
         SettingsDialog dialog(AppSettings::defaults());
         auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
@@ -116,7 +371,7 @@ private slots:
         completion->setChecked(false);
         dialog.accept();
 
-        QCOMPARE(dialog.result(), static_cast<int>(QDialog::Accepted));
+        QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
         QCOMPARE(dialog.settings().recordingFormat(), RecordingFormat::Mp4);
         QCOMPARE(dialog.settings().recordingOutputDirectory(), settings.recordingOutputDirectory());
         QVERIFY(!dialog.settings().showRecordingCompletionMessage());
@@ -205,7 +460,7 @@ private slots:
         actions.openError = "Could not open recording directory";
         SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
         auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
-        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
+        auto *error = dialog.findChild<QLabel *>("settingsApplySummary");
         QVERIFY(open != nullptr);
         QVERIFY(error != nullptr);
 
@@ -215,47 +470,12 @@ private slots:
         QVERIFY(!error->isHidden());
     }
 
-    void successfulPathActionsDoNotClearValidationErrors() {
-        FakeRecordingPathActions openActions;
-        SettingsDialog openDialog(AppSettings::defaults(), nullptr, &openActions);
-        auto *openReceiverName = openDialog.findChild<QLineEdit *>("receiverNameEdit");
-        auto *open = openDialog.findChild<QPushButton *>("openRecordingDirectoryButton");
-        auto *openError = openDialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(openReceiverName != nullptr);
-        QVERIFY(open != nullptr);
-        QVERIFY(openError != nullptr);
-        openReceiverName->setText("   ");
-        openDialog.accept();
-        QVERIFY(openError->text().contains("Receiver name"));
-        const QString openValidationError = openError->text();
-        open->click();
-        QCOMPARE(openError->text(), openValidationError);
-        QVERIFY(!openError->isHidden());
-
-        FakeRecordingPathActions chooseActions;
-        chooseActions.chosenDirectory = QDir::temp().filePath("valid recordings");
-        SettingsDialog chooseDialog(AppSettings::defaults(), nullptr, &chooseActions);
-        auto *chooseReceiverName = chooseDialog.findChild<QLineEdit *>("receiverNameEdit");
-        auto *choose = chooseDialog.findChild<QPushButton *>("chooseRecordingDirectoryButton");
-        auto *chooseError = chooseDialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(chooseReceiverName != nullptr);
-        QVERIFY(choose != nullptr);
-        QVERIFY(chooseError != nullptr);
-        chooseReceiverName->setText("   ");
-        chooseDialog.accept();
-        QVERIFY(chooseError->text().contains("Receiver name"));
-        const QString chooseValidationError = chooseError->text();
-        choose->click();
-        QCOMPARE(chooseError->text(), chooseValidationError);
-        QVERIFY(!chooseError->isHidden());
-    }
-
     void successfulPathActionsClearPreviousPathErrors() {
         FakeRecordingPathActions openActions;
         openActions.openError = "Could not open recording directory";
         SettingsDialog openDialog(AppSettings::defaults(), nullptr, &openActions);
         auto *open = openDialog.findChild<QPushButton *>("openRecordingDirectoryButton");
-        auto *openError = openDialog.findChild<QLabel *>("settingsErrorLabel");
+        auto *openError = openDialog.findChild<QLabel *>("settingsApplySummary");
         QVERIFY(open != nullptr);
         QVERIFY(openError != nullptr);
         open->click();
@@ -270,38 +490,40 @@ private slots:
         SettingsDialog chooseDialog(AppSettings::defaults(), nullptr, &chooseActions);
         auto *chooseOpen = chooseDialog.findChild<QPushButton *>("openRecordingDirectoryButton");
         auto *choose = chooseDialog.findChild<QPushButton *>("chooseRecordingDirectoryButton");
-        auto *chooseError = chooseDialog.findChild<QLabel *>("settingsErrorLabel");
+        auto *chooseError = chooseDialog.findChild<QLabel *>("settingsApplySummary");
         QVERIFY(chooseOpen != nullptr);
         QVERIFY(choose != nullptr);
         QVERIFY(chooseError != nullptr);
         chooseOpen->click();
         QVERIFY(!chooseError->isHidden());
         choose->click();
-        QVERIFY(chooseError->isHidden());
+        QVERIFY(!chooseError->text().contains("Could not open recording directory"));
+        QVERIFY(chooseError->text().contains("1 setting has unapplied changes."));
     }
 
     void validationThenPathFailureThenOpenSuccessKeepsValidationVisible() {
         FakeRecordingPathActions actions;
         actions.openError = "Path action failed";
         SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
-        auto *receiverName = dialog.findChild<QLineEdit *>("receiverNameEdit");
         auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
-        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(receiverName != nullptr);
+        auto *error = dialog.findChild<QLabel *>("settingsApplySummary");
         QVERIFY(open != nullptr);
         QVERIFY(error != nullptr);
 
-        receiverName->setText("   ");
-        dialog.accept();
-        QVERIFY(error->text().contains("Receiver name"));
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::receiverName(), QString("Invalid"),
+                                 SettingsFieldStatus::ValidationFailed, "not allowed"}};
+        dialog.presentApplyOutcome(outcome);
+        QVERIFY(error->text().contains("1 setting was not applied"));
 
         open->click();
-        QVERIFY(error->text().contains("Receiver name"));
+        QVERIFY(error->text().contains("1 setting was not applied"));
         QVERIFY(error->text().contains(actions.openError));
 
         actions.openError.clear();
         open->click();
-        QVERIFY(error->text().contains("Receiver name"));
+        QVERIFY(error->text().contains("1 setting was not applied"));
         QVERIFY(!error->text().contains("Path action failed"));
         QVERIFY(!error->isHidden());
     }
@@ -311,11 +533,9 @@ private slots:
         actions.openError = "Path action failed";
         actions.chosenDirectory = QDir::temp().filePath("valid recordings");
         SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
-        auto *receiverName = dialog.findChild<QLineEdit *>("receiverNameEdit");
         auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
         auto *choose = dialog.findChild<QPushButton *>("chooseRecordingDirectoryButton");
-        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(receiverName != nullptr);
+        auto *error = dialog.findChild<QLabel *>("settingsApplySummary");
         QVERIFY(open != nullptr);
         QVERIFY(choose != nullptr);
         QVERIFY(error != nullptr);
@@ -323,13 +543,16 @@ private slots:
         open->click();
         QVERIFY(error->text().contains(actions.openError));
 
-        receiverName->setText("   ");
-        dialog.accept();
-        QVERIFY(error->text().contains("Receiver name"));
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::receiverName(), QString("Invalid"),
+                                 SettingsFieldStatus::ValidationFailed, "not allowed"}};
+        dialog.presentApplyOutcome(outcome);
+        QVERIFY(error->text().contains("1 setting was not applied"));
         QVERIFY(error->text().contains(actions.openError));
 
         choose->click();
-        QVERIFY(error->text().contains("Receiver name"));
+        QVERIFY(error->text().contains("1 setting was not applied"));
         QVERIFY(!error->text().contains("Path action failed"));
         QVERIFY(!error->isHidden());
     }
@@ -355,7 +578,7 @@ private slots:
         edit->setKeySequence(QKeySequence("Ctrl+Shift+V"));
         dialog.accept();
 
-        QCOMPARE(dialog.result(), static_cast<int>(QDialog::Accepted));
+        QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
         QCOMPARE(dialog.settings().shortcutFor(ShortcutAction::ToggleVideoFit), QKeySequence("Ctrl+Shift+V"));
     }
 
@@ -376,7 +599,7 @@ private slots:
         edit->setText("Desk Receiver");
         dialog.accept();
 
-        QCOMPARE(dialog.result(), static_cast<int>(QDialog::Accepted));
+        QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
         QCOMPARE(dialog.settings().receiverName(), QString("Desk Receiver"));
     }
 
@@ -389,9 +612,7 @@ private slots:
         dialog.accept();
 
         QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
-        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(error != nullptr);
-        QVERIFY(error->text().contains("Receiver name"));
+        QCOMPARE(dialog.draftSettings().receiverName(), QString());
     }
 
     void resetHotkeysRestoresDefaultEditsWithoutSaving() {
@@ -408,7 +629,8 @@ private slots:
         button->click();
 
         QCOMPARE(edit->keySequence(), AppSettings::defaults().shortcutFor(ShortcutAction::ToggleToolbar));
-        QCOMPARE(dialog.settings().shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+H"));
+        QCOMPARE(dialog.committedBaseline().shortcutFor(ShortcutAction::ToggleToolbar),
+                 QKeySequence("Ctrl+Shift+H"));
     }
 
     void resetHotkeysRestoresToggleRecordingDefaultWithoutSaving() {
@@ -426,7 +648,7 @@ private slots:
 
         QCOMPARE(edit->keySequence(),
                  AppSettings::defaults().shortcutFor(ShortcutAction::ToggleRecording));
-        QCOMPARE(dialog.settings().shortcutFor(ShortcutAction::ToggleRecording),
+        QCOMPARE(dialog.committedBaseline().shortcutFor(ShortcutAction::ToggleRecording),
                  QKeySequence("Ctrl+Shift+R"));
     }
 
@@ -438,7 +660,7 @@ private slots:
         edit->setKeySequence(QKeySequence("Ctrl+Shift+H"));
         dialog.accept();
 
-        QCOMPARE(dialog.result(), static_cast<int>(QDialog::Accepted));
+        QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
         QCOMPARE(dialog.settings().shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+H"));
     }
 
@@ -451,9 +673,8 @@ private slots:
         dialog.accept();
 
         QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
-        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(error != nullptr);
-        QVERIFY(error->text().contains("Duplicate shortcut"));
+        QCOMPARE(dialog.draftSettings().shortcutFor(ShortcutAction::ToggleToolbar),
+                 QKeySequence("Ctrl+Alt+T"));
     }
 
     void rejectsUnsupportedShortcutsOnAccept() {
@@ -465,9 +686,8 @@ private slots:
         dialog.accept();
 
         QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
-        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(error != nullptr);
-        QVERIFY(error->text().contains("Unsupported shortcut"));
+        QCOMPARE(dialog.draftSettings().shortcutFor(ShortcutAction::ToggleToolbar),
+                 QKeySequence(QKeyCombination(Qt::ControlModifier | Qt::AltModifier, Qt::Key_NumLock)));
     }
 
     void rejectsMultiStepShortcutsOnAccept() {
@@ -479,9 +699,8 @@ private slots:
         dialog.accept();
 
         QVERIFY(dialog.result() != static_cast<int>(QDialog::Accepted));
-        auto *error = dialog.findChild<QLabel *>("settingsErrorLabel");
-        QVERIFY(error != nullptr);
-        QVERIFY(error->text().contains("single key combination"));
+        QCOMPARE(dialog.draftSettings().shortcutFor(ShortcutAction::ToggleToolbar),
+                 QKeySequence("Ctrl+K, Ctrl+C"));
     }
 
     void showsVideoSettingsSection() {
