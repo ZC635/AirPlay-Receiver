@@ -7,6 +7,7 @@
 #include <functional>
 
 #include "backend/ReceiverState.h"
+#include "backend/ReceiverConfigurationChange.h"
 #include "backend/RecordingTypes.h"
 #include "backend/VideoQualitySettings.h"
 
@@ -22,11 +23,37 @@ public:
     virtual void setVolume(double volume) = 0;
     virtual ReceiverState state() const = 0;
     virtual QString receiverName() const = 0;
-    virtual bool applyReceiverName(const QString &name) = 0;
+    virtual VideoQualitySettings videoQuality() const = 0;
+    virtual ReceiverConfigurationBatchResult applyConfigurationBatch(
+        const ReceiverConfigurationBatchRequest &request) = 0;
+    virtual bool applyReceiverName(const QString &name) {
+        const QString normalizedName = name.trimmed();
+        if (normalizedName.isEmpty()) {
+            return false;
+        }
+        const VideoQualitySettings currentQuality = videoQuality();
+        ReceiverConfigurationBatchRequest request;
+        request.receiverNameChanged = normalizedName != receiverName();
+        request.requestedReceiverName = normalizedName;
+        request.rollbackReceiverName = receiverName();
+        request.requestedVideoQuality = currentQuality;
+        request.rollbackVideoQuality = currentQuality;
+        return applyConfigurationBatch(request).status == ReceiverConfigurationBatchStatus::Applied;
+    }
     virtual void setVideoSurface(WId id) { Q_UNUSED(id); }
     virtual void setVideoFrameCallback(FrameCallback callback) { Q_UNUSED(callback); }
     virtual void setVideoFitMode(bool enabled) { Q_UNUSED(enabled); }
-    virtual bool applyVideoQuality(const VideoQualitySettings &quality) { Q_UNUSED(quality); return true; }
+    virtual bool applyVideoQuality(const VideoQualitySettings &quality) {
+        const VideoQualitySettings currentQuality = videoQuality();
+        ReceiverConfigurationBatchRequest request;
+        request.resolutionChanged = quality.resolution != currentQuality.resolution;
+        request.frameRateChanged = quality.frameRate != currentQuality.frameRate;
+        request.requestedReceiverName = receiverName();
+        request.rollbackReceiverName = receiverName();
+        request.requestedVideoQuality = quality;
+        request.rollbackVideoQuality = currentQuality;
+        return applyConfigurationBatch(request).status == ReceiverConfigurationBatchStatus::Applied;
+    }
     virtual bool recordingAvailable() const = 0;
     virtual RecordingState recordingState() const = 0;
     virtual RecordingStartResult startRecording(const RecordingOptions &options) = 0;
