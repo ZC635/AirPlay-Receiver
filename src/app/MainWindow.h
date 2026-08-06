@@ -18,6 +18,11 @@ class QLabel;
 class QImage;
 class QCloseEvent;
 class RecordingPathActions;
+class AppSettingsStore;
+class SettingsApplyCoordinator;
+struct SettingsApplyPlan;
+struct SettingsApplyOutcome;
+enum class ReceiverApplyTiming;
 class VideoSurfaceWidget;
 
 class MainWindow final : public QMainWindow {
@@ -55,13 +60,10 @@ private:
     void closeEvent(QCloseEvent *event) override;
     void setReceiverVolume(int value);
     void syncVolumeFromReceiver(double volume);
-    void handleReceiverNameChange(const QString &receiverName);
-    bool applyReceiverNameNow(const QString &receiverName, bool revertOnFailure = true);
-    void revertReceiverNameToDefaultAfterApplyFailure();
-    void handleVideoQualityChange(const VideoQualitySettings &quality);
-    bool applyVideoQualityNow(const VideoQualitySettings &quality);
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
+    std::optional<ReceiverApplyTiming> chooseReceiverApplyTiming(const SettingsApplyPlan &plan);
+    void presentDeferredReceiverApplyFailure(const SettingsApplyOutcome &outcome);
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void applyAspectRatioLock(bool enabled);
     void applyVideoFitMode(bool enabled);
@@ -81,8 +83,9 @@ private:
     QLabel *statusLabel_;
     VideoSurfaceWidget *videoSurface_;
     AppSettings settings_;
-    QString activeReceiverName_;
     SettingsChangeDeferrer deferrer_;
+    std::unique_ptr<AppSettingsStore> settingsStore_;
+    std::unique_ptr<SettingsApplyCoordinator> settingsApplyCoordinator_;
     QPointer<HotkeyService> hotkeys_;
     QPointer<AirPlayReceiver> receiver_;
     std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
@@ -98,7 +101,6 @@ private:
     bool aspectRatioLock_ = false;
     bool alwaysOnTopEnabled_ = false;
     bool videoFitMode_ = false;
-    VideoQualitySettings activeVideoQuality_;
     RecordingState recordingState_ = RecordingState::Idle;
     bool activeRecordingShowCompletionMessage_ = false;
     bool activeRecordingSession_ = false;

@@ -13,6 +13,7 @@
 
 #include <QComboBox>
 #include <QCheckBox>
+#include <QAbstractButton>
 #include <QDir>
 #include <QLabel>
 #include <QLineEdit>
@@ -113,6 +114,15 @@ void verifyWindowAspectRatio(const QWidget &widget, double expectedRatio) {
              qPrintable(QStringLiteral("actual=%1 expected=%2")
                             .arg(windowAspectRatio(widget))
                             .arg(expectedRatio)));
+}
+
+QAbstractButton *messageButton(QMessageBox *box, const QString &text) {
+    for (QAbstractButton *button : box->buttons()) {
+        if (button->text() == text) {
+            return button;
+        }
+    }
+    return nullptr;
 }
 
 class RejectingRecordingReceiver final : public FakeAirPlayReceiver {
@@ -690,7 +700,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                box->button(QMessageBox::Yes)->click();
+                messageButton(box, "Disconnect and apply now")->click();
             });
             dialog->accept();
         });
@@ -734,7 +744,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                box->button(QMessageBox::Yes)->click();
+                messageButton(box, "Disconnect and apply now")->click();
             });
             dialog->accept();
         });
@@ -1272,7 +1282,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *yes = box->button(QMessageBox::Yes);
+                auto *yes = messageButton(box, "Disconnect and apply now");
                 QVERIFY(yes != nullptr);
                 yes->click();
             });
@@ -1307,7 +1317,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *no = box->button(QMessageBox::No);
+                auto *no = messageButton(box, "Apply after disconnect");
                 QVERIFY(no != nullptr);
                 no->click();
             });
@@ -1345,7 +1355,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *no = box->button(QMessageBox::No);
+                auto *no = messageButton(box, "Apply after disconnect");
                 QVERIFY(no != nullptr);
                 no->click();
             });
@@ -1383,7 +1393,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *yes = box->button(QMessageBox::Yes);
+                auto *yes = messageButton(box, "Disconnect and apply now");
                 QVERIFY(yes != nullptr);
                 yes->click();
             });
@@ -1418,7 +1428,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *no = box->button(QMessageBox::No);
+                auto *no = messageButton(box, "Apply after disconnect");
                 QVERIFY(no != nullptr);
                 no->click();
             });
@@ -1443,7 +1453,7 @@ private slots:
                     return;
                 }
                 promptedAgain = true;
-                auto *no = box->button(QMessageBox::No);
+                auto *no = messageButton(box, "Apply after disconnect");
                 QVERIFY(no != nullptr);
                 no->click();
             });
@@ -1484,7 +1494,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *no = box->button(QMessageBox::No);
+                auto *no = messageButton(box, "Apply after disconnect");
                 QVERIFY(no != nullptr);
                 no->click();
             });
@@ -1502,6 +1512,13 @@ private slots:
             auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
             QVERIFY(edit != nullptr);
             edit->setText("AirPlay Receiver");
+            QTimer::singleShot(0, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(box != nullptr);
+                auto *defer = messageButton(box, "Apply after disconnect");
+                QVERIFY(defer != nullptr);
+                defer->click();
+            });
             dialog->accept();
         });
 
@@ -1533,6 +1550,7 @@ private slots:
             QVERIFY(edit != nullptr);
             edit->setText("Desk Receiver");
             dialog->accept();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
         });
 
         button->click();
@@ -1540,9 +1558,6 @@ private slots:
         QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
         QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("AirPlay Receiver"));
 
-        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
-        QVERIFY(label != nullptr);
-        QVERIFY(label->text().contains("receiver name"));
     }
 
     void savesVolumeChanges() {
@@ -1605,6 +1620,7 @@ private slots:
             edit->setKeySequence(QKeySequence("Ctrl+Shift+H"));
             edited = true;
             dialog->accept();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
         });
 
         button->click();
@@ -1644,6 +1660,7 @@ private slots:
             edit->setKeySequence(QKeySequence("Ctrl+Shift+H"));
             edited = true;
             dialog->accept();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
         });
 
         button->click();
@@ -1659,9 +1676,6 @@ private slots:
         QVERIFY(toggleToolbar != hotkeys.registrations.cend());
         QCOMPARE(toggleToolbar->sequence, defaults.shortcutFor(ShortcutAction::ToggleToolbar));
 
-        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
-        QVERIFY(label != nullptr);
-        QVERIFY(label->text().contains("Could not register"));
     }
 
     void saveFailureUpdatesStatusLabel() {
@@ -2093,6 +2107,264 @@ private slots:
         QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), expected);
     }
 
+    void hotkeyFailureDoesNotBlockSixtyFpsApply() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        FakeHotkeyService hotkeys;
+        const QKeySequence rejected = AppSettings::defaults().shortcutFor(ShortcutAction::VolumeUp);
+        hotkeys.reject(ShortcutAction::VolumeUp, rejected, 1409,
+                       "The requested hotkey is already registered.");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *fpsCombo = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+            QVERIFY(fpsCombo != nullptr);
+            fpsCombo->setCurrentIndex(fpsCombo->findData(static_cast<int>(VideoFrameRate::Fps60)));
+            dialog->accept();
+
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+            QVERIFY(dialog->isVisible());
+            auto *status = dialog->findChild<QLabel *>("shortcutError_volumeUp");
+            QVERIFY(status != nullptr);
+            QVERIFY(status->text().contains("Volume up"));
+            QVERIFY(status->text().contains("Ctrl+Alt+Up"));
+            QVERIFY(status->text().contains("1409"));
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality().frameRate,
+                 VideoFrameRate::Fps60);
+        QCOMPARE(receiver.lastAppliedVideoQuality.frameRate, VideoFrameRate::Fps60);
+    }
+
+    void activeSessionPromptUsesExplicitActionLabels() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        receiver.forceState(ReceiverState::Connected);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *fpsCombo = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+            QVERIFY(fpsCombo != nullptr);
+            fpsCombo->setCurrentIndex(fpsCombo->findData(static_cast<int>(VideoFrameRate::Fps15)));
+            QTimer::singleShot(0, [dialog] {
+                auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(prompt != nullptr);
+                QVERIFY(messageButton(prompt, "Disconnect and apply now") != nullptr);
+                QVERIFY(messageButton(prompt, "Apply after disconnect") != nullptr);
+                auto *cancel = prompt->button(QMessageBox::Cancel);
+                QVERIFY(cancel != nullptr);
+                QTimer::singleShot(0, dialog, &QDialog::reject);
+                cancel->click();
+            });
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
+    }
+
+    void invalidReceiverDraftDoesNotPrompt() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        receiver.forceState(ReceiverState::Connected);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *name = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(name != nullptr);
+            name->clear();
+            dialog->accept();
+
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+            QCOMPARE(QApplication::activeModalWidget(), static_cast<QWidget *>(dialog));
+        });
+
+        button->click();
+        QCOMPARE(receiver.receiverName(), AppSettings::defaults().receiverName());
+    }
+
+    void combinedNameAndQualityApplyRestartsOnce() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Discoverable);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, dir.filePath("settings.json"));
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Desk Receiver");
+            auto *fpsCombo = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+            QVERIFY(fpsCombo != nullptr);
+            fpsCombo->setCurrentIndex(fpsCombo->findData(static_cast<int>(VideoFrameRate::Fps60)));
+            dialog->accept();
+        });
+
+        button->click();
+
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.broadcastRestartCount, 1);
+        QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(receiver.lastAppliedVideoQuality.frameRate, VideoFrameRate::Fps60);
+    }
+
+    void partialShortcutSuccessUpdatesToolbarTooltipImmediately() {
+        FakeHotkeyService hotkeys;
+        hotkeys.reject(ShortcutAction::VolumeUp,
+                       AppSettings::defaults().shortcutFor(ShortcutAction::VolumeUp));
+        MainWindow window(AppSettings::defaults(), &hotkeys);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        auto *fitButton = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(fitButton != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *fitShortcut = dialog->findChild<QKeySequenceEdit *>("shortcutEdit_toggleVideoFit");
+            QVERIFY(fitShortcut != nullptr);
+            fitShortcut->setKeySequence(QKeySequence("Ctrl+Shift+F"));
+            dialog->accept();
+
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+            QCOMPARE(fitButton->toolTip(), QString("Fit: %1").arg(
+                QKeySequence("Ctrl+Shift+F").toString(QKeySequence::NativeText)));
+        });
+
+        button->click();
+    }
+
+    void partialSuccessThenCancelKeepsCommittedJsonAndRuntime() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        FakeHotkeyService hotkeys;
+        hotkeys.reject(ShortcutAction::VolumeUp,
+                       AppSettings::defaults().shortcutFor(ShortcutAction::VolumeUp));
+        FakeAirPlayReceiver receiver;
+        const QString path = dir.filePath("settings.json");
+        MainWindow window(AppSettings::defaults(), &hotkeys, &receiver, path);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *fpsCombo = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+            QVERIFY(fpsCombo != nullptr);
+            fpsCombo->setCurrentIndex(fpsCombo->findData(static_cast<int>(VideoFrameRate::Fps60)));
+            dialog->accept();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+        });
+
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality().frameRate,
+                 VideoFrameRate::Fps60);
+        QCOMPARE(receiver.lastAppliedVideoQuality.frameRate, VideoFrameRate::Fps60);
+    }
+
+    void deferredReceiverFailureShowsOneModalAndRollsBackJson() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        receiver.forceState(ReceiverState::Connected);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *resolution = dialog->findChild<QComboBox *>("videoResolutionCombo");
+            QVERIFY(resolution != nullptr);
+            resolution->setCurrentIndex(resolution->findData(static_cast<int>(VideoResolution::P540)));
+            QTimer::singleShot(0, [] {
+                auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(prompt != nullptr);
+                auto *defer = messageButton(prompt, "Apply after disconnect");
+                QVERIFY(defer != nullptr);
+                defer->click();
+            });
+            dialog->accept();
+        });
+        button->click();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality().resolution, VideoResolution::P540);
+        receiver.rejectedVideoQualities.append({VideoResolution::P540, VideoFrameRate::Fps30});
+        int modalCount = 0;
+        QTimer::singleShot(0, [&] {
+            auto *failure = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(failure != nullptr);
+            ++modalCount;
+            const QString message = failure->text();
+            failure->button(QMessageBox::Ok)->click();
+            QVERIFY(message.contains("Resolution"));
+            QVERIFY(message.contains("540p"));
+            QVERIFY(message.contains("Requested video quality is rejected"));
+        });
+        receiver.forceState(ReceiverState::Discoverable);
+
+        QCOMPARE(modalCount, 1);
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), AppSettings::defaults().videoQuality());
+        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
+    }
+
+    void deferredRecoveryFailureModalDoesNotClaimRollbackSucceeded() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, dir.filePath("settings.json"));
+        receiver.forceState(ReceiverState::Connected);
+        auto *button = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(button != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *resolution = dialog->findChild<QComboBox *>("videoResolutionCombo");
+            QVERIFY(resolution != nullptr);
+            resolution->setCurrentIndex(resolution->findData(static_cast<int>(VideoResolution::P540)));
+            QTimer::singleShot(0, [] {
+                auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(prompt != nullptr);
+                messageButton(prompt, "Apply after disconnect")->click();
+            });
+            dialog->accept();
+        });
+        button->click();
+
+        receiver.requestedConfigurationRestartError = "requested restart failed";
+        receiver.rollbackConfigurationRestartError = "rollback restart failed";
+        QTimer::singleShot(0, [&] {
+            auto *failure = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(failure != nullptr);
+            const QString message = failure->text();
+            failure->button(QMessageBox::Ok)->click();
+            QVERIFY(message.contains("Recovery failed"));
+            QVERIFY(!message.contains("Rollback succeeded"));
+        });
+        receiver.forceState(ReceiverState::Discoverable);
+    }
+
     void videoQualityChangedWhileConnectedCanBeDeferred() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
@@ -2114,7 +2386,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *no = box->button(QMessageBox::No);
+                auto *no = messageButton(box, "Apply after disconnect");
                 QVERIFY(no != nullptr);
                 no->click();
             });
@@ -2153,7 +2425,7 @@ private slots:
             QTimer::singleShot(0, [] {
                 auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
                 QVERIFY(box != nullptr);
-                auto *yes = box->button(QMessageBox::Yes);
+                auto *yes = messageButton(box, "Disconnect and apply now");
                 QVERIFY(yes != nullptr);
                 yes->click();
             });
@@ -2189,26 +2461,13 @@ private slots:
             QVERIFY(resCombo != nullptr);
             resCombo->setCurrentIndex(resCombo->findData(static_cast<int>(VideoResolution::P540)));
             dialog->accept();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
         });
 
         button->click();
 
-        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), rejected);
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoQuality(), AppSettings::defaults().videoQuality());
         QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
-
-        auto *label = window.findChild<QLabel *>("receiverStatusLabel");
-        QVERIFY(label != nullptr);
-        QCOMPARE(label->text(), QString("Could not apply video quality; will retry"));
-
-        receiver.forceState(ReceiverState::Discoverable);
-
-        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
-        QCOMPARE(label->text(), QString("Could not apply video quality; will retry"));
-
-        receiver.forceState(ReceiverState::Error);
-
-        QCOMPARE(receiver.lastAppliedVideoQuality, AppSettings::defaults().videoQuality());
-        QCOMPARE(label->text(), QString("Could not apply video quality; will retry"));
     }
 
     void appliesLoadedVideoQualityToReceiver() {
