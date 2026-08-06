@@ -20,6 +20,9 @@ public:
                            bool receiverSessionActive,
                            RecordingState recordingState) const;
 
+    SettingsApplyOutcome execute(const SettingsApplyPlan &plan,
+                                 ReceiverApplyTiming timing);
+
 private:
     HotkeyService *hotkeys_ = nullptr;
     SettingsPersistence *persistence_ = nullptr;
