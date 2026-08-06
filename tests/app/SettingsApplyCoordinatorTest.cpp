@@ -867,6 +867,101 @@ private slots:
                      SettingsFieldStatus::Unchanged);
     }
 
+    void missingImmediateReceiverCompensatesOnlyReceiverSettingsForRetry() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        candidate.setShowRecordingCompletionMessage(false);
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 2);
+        QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(outcome.committedSettings.showRecordingCompletionMessage(), false);
+        QCOMPARE(persistence.saved.last().receiverName(), baseline.receiverName());
+        QCOMPARE(persistence.saved.last().shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::RecoveryFailed);
+        QVERIFY(requireResult(outcome, SettingsFieldId::receiverName()).reason.contains("saved state was restored"));
+        QVERIFY(requireResult(outcome, SettingsFieldId::receiverName()).recoveryError.contains("unavailable"));
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
+                     SettingsFieldStatus::Applied);
+        QVERIFY(!outcome.mayClose);
+
+        const SettingsApplyPlan retry = coordinator.plan(outcome.committedSettings, candidate, false,
+                                                          RecordingState::Idle);
+        QVERIFY(retry.validChangedReceiverFields.contains(SettingsFieldId::receiverName()));
+    }
+
+    void missingDeferrerCompensatesOnlyReceiverSettingsForRetry() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        VideoQualitySettings quality = candidate.videoQuality();
+        quality.frameRate = VideoFrameRate::Fps60;
+        candidate.setVideoQuality(quality);
+        candidate.setRecordingOutputDirectory("C:/AirPlay-recordings");
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
+            ReceiverApplyTiming::AfterDisconnect);
+
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QCOMPARE(persistence.saved.size(), 2);
+        QCOMPARE(outcome.committedSettings.videoQuality().frameRate,
+                 baseline.videoQuality().frameRate);
+        QCOMPARE(outcome.committedSettings.recordingOutputDirectory(),
+                 candidate.recordingOutputDirectory());
+        QCOMPARE(persistence.saved.last().videoQuality().frameRate,
+                 baseline.videoQuality().frameRate);
+        verifyStatus(outcome, SettingsFieldId::videoFrameRate(), SettingsFieldStatus::RecoveryFailed);
+        QVERIFY(requireResult(outcome, SettingsFieldId::videoFrameRate())
+                     .reason.contains("saved state was restored"));
+        QVERIFY(requireResult(outcome, SettingsFieldId::videoFrameRate())
+                     .recoveryError.contains("unchanged"));
+
+        const SettingsApplyPlan retry = coordinator.plan(outcome.committedSettings, candidate, true,
+                                                          RecordingState::Idle);
+        QVERIFY(retry.validChangedReceiverFields.contains(SettingsFieldId::videoFrameRate()));
+    }
+
+    void missingReceiverCompensationSaveFailureKeepsKnownRequestedSnapshot() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        RecordingSettingsPersistence persistence;
+        const AppSettingsSaveResult compensationFailure{
+            false, "C:/settings.json", AppSettingsSaveStage::Commit, QFileDevice::WriteError,
+            "Compensation commit failed"};
+        persistence.responses = {{true}, compensationFailure};
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
+
+        QCOMPARE(persistence.saved.size(), 2);
+        QVERIFY(outcome.globalResult.has_value());
+        QCOMPARE(outcome.globalResult->persistence.success, compensationFailure.success);
+        QCOMPARE(outcome.globalResult->persistence.targetPath, compensationFailure.targetPath);
+        QCOMPARE(outcome.globalResult->persistence.failureStage, compensationFailure.failureStage);
+        QCOMPARE(outcome.globalResult->persistence.errorString, compensationFailure.errorString);
+        QCOMPARE(outcome.committedSettings.receiverName(), candidate.receiverName());
+        QCOMPARE(result.status, SettingsFieldStatus::RecoveryFailed);
+        QVERIFY(result.reason.contains("requested JSON was saved"));
+        QVERIFY(result.recoveryError.contains("saved state cannot be confirmed"));
+    }
+
     void mayCloseAndSnapshotMergeFollowExecutionResults() {
         const AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
