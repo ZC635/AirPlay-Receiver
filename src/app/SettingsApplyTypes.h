@@ -1,6 +1,6 @@
 #pragma once
 
-#include "app/AppSettings.h"
+#include "app/AppSettingsStore.h"
 
 #include <QVector>
 
@@ -77,9 +77,18 @@ enum class SettingsApplyGlobalStatus {
     PersistenceFailed,
 };
 
-// Task 2 adds SettingsApplyGlobalResult, containing an AppSettingsSaveResult,
-// and SettingsApplyOutcome, containing committed settings, field results, an
-// optional global result, airPlayDeferred, and mayClose.
+struct SettingsApplyGlobalResult {
+    SettingsApplyGlobalStatus status = SettingsApplyGlobalStatus::PersistenceFailed;
+    AppSettingsSaveResult persistence;
+};
+
+struct SettingsApplyOutcome {
+    AppSettings committedSettings;
+    QVector<SettingsFieldResult> fieldResults;
+    std::optional<SettingsApplyGlobalResult> globalResult;
+    bool airPlayDeferred = false;
+    bool mayClose = false;
+};
 
 QVector<SettingsFieldId> allSettingsFields();
 SettingsFieldValue settingsFieldValue(const AppSettings &settings, const SettingsFieldId &field);
