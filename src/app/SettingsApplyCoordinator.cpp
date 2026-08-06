@@ -645,8 +645,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::completeDeferredReceiverApply(
         unavailable.recoveryError = QStringLiteral("No runtime receiver state is available");
         unavailable.knownRuntimeReceiverName = QStringLiteral("unavailable");
         unavailable.knownRuntimeVideoQuality = batch.rollbackVideoQuality;
-        markReceiverRecoveryFailure(&outcome, batch, unavailable,
-                                    describeRequestedConfiguration(batch));
+        compensateUnavailableReceiver(&outcome, batch, currentlyCommitted, persistence_, unavailable);
         updateMayClose(&outcome);
         return outcome;
     }

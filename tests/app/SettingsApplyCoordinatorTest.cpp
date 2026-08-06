@@ -962,6 +962,37 @@ private slots:
         QVERIFY(result.recoveryError.contains("saved state cannot be confirmed"));
     }
 
+    void deferredCompletionWithoutReceiverCompensatesReceiverSettingsForRetry() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings currentlyCommitted = baseline;
+        currentlyCommitted.setReceiverName("Desk Receiver");
+        currentlyCommitted.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        ReceiverConfigurationBatchRequest batch;
+        batch.receiverNameChanged = true;
+        batch.requestedReceiverName = currentlyCommitted.receiverName();
+        batch.rollbackReceiverName = baseline.receiverName();
+        batch.requestedVideoQuality = currentlyCommitted.videoQuality();
+        batch.rollbackVideoQuality = baseline.videoQuality();
+
+        const SettingsApplyOutcome outcome =
+            coordinator.completeDeferredReceiverApply(batch, currentlyCommitted);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 currentlyCommitted.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(persistence.saved.constFirst().receiverName(), baseline.receiverName());
+        verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::RecoveryFailed);
+        QVERIFY(requireResult(outcome, SettingsFieldId::receiverName()).reason.contains("saved state was restored"));
+        QVERIFY(requireResult(outcome, SettingsFieldId::receiverName()).recoveryError.contains("unavailable"));
+
+        const SettingsApplyPlan retry = coordinator.plan(outcome.committedSettings, currentlyCommitted,
+                                                          false, RecordingState::Idle);
+        QVERIFY(retry.validChangedReceiverFields.contains(SettingsFieldId::receiverName()));
+    }
+
     void mayCloseAndSnapshotMergeFollowExecutionResults() {
         const AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
