@@ -1,6 +1,7 @@
 #include "platform/WindowsHotkeyService.h"
 
 #include <QCoreApplication>
+#include <QString>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -40,10 +41,42 @@ unsigned int toVirtualKey(int key) {
     default: return 0;
     }
 }
+
+HotkeyNativeOperations defaultNativeOperations() {
+    return {
+        [](int id, unsigned int modifiers, unsigned int virtualKey) {
+            return RegisterHotKey(nullptr, id, modifiers, virtualKey) != FALSE;
+        },
+        [](int id) { UnregisterHotKey(nullptr, id); },
+        [] { return static_cast<quint32>(GetLastError()); },
+        [](quint32 error) {
+            LPWSTR buffer = nullptr;
+            const DWORD length = FormatMessageW(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                nullptr, error, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+            if (length == 0 || buffer == nullptr) {
+                return QStringLiteral("Windows hotkey registration failed.");
+            }
+            const QString message = QString::fromWCharArray(buffer, static_cast<int>(length)).trimmed();
+            LocalFree(buffer);
+            return message.isEmpty() ? QStringLiteral("Windows hotkey registration failed.") : message;
+        },
+    };
+}
+
+HotkeyError nativeError(const HotkeyNativeOperations &operations) {
+    const quint32 code = operations.lastError();
+    const QString message = operations.formatError(code);
+    return {code, message.isEmpty() ? QStringLiteral("Windows hotkey registration failed.") : message};
+}
 }
 
 WindowsHotkeyService::WindowsHotkeyService(QObject *parent)
-    : HotkeyService(parent) {
+    : WindowsHotkeyService(defaultNativeOperations(), parent) {}
+
+WindowsHotkeyService::WindowsHotkeyService(HotkeyNativeOperations operations, QObject *parent)
+    : HotkeyService(parent),
+      operations_(std::move(operations)) {
     if (QCoreApplication::instance()) {
         QCoreApplication::instance()->installNativeEventFilter(this);
     }
@@ -56,39 +89,53 @@ WindowsHotkeyService::~WindowsHotkeyService() {
     }
 }
 
-bool WindowsHotkeyService::registerShortcut(ShortcutAction action, const QKeySequence &sequence) {
+HotkeyRegistrationResult WindowsHotkeyService::registerShortcut(ShortcutAction action,
+                                                                 const QKeySequence &sequence) {
     const auto native = toNativeHotkey(sequence);
     if (!native.has_value()) {
-        return false;
+        return {false, false, HotkeyError{std::nullopt,
+                                          QStringLiteral("Shortcut is empty or unsupported.")}};
     }
 
     const int id = idForAction(action);
     const auto oldEntry = registrations_.constFind(id);
-    const bool hadPrevious = (oldEntry != registrations_.constEnd());
+    if (oldEntry != registrations_.constEnd() && oldEntry->sequence == sequence) {
+        return {true, true};
+    }
 
-    if (hadPrevious) {
-        UnregisterHotKey(nullptr, id);
+    std::optional<HotkeyEntry> previous;
+    if (oldEntry != registrations_.constEnd()) {
+        previous = *oldEntry;
+        operations_.unregisterHotkey(id);
         registrations_.erase(oldEntry);
     }
 
-    if (!RegisterHotKey(nullptr, id, native->modifiers, native->virtualKey)) {
-        if (hadPrevious) {
-            const auto restoreNative = toNativeHotkey(oldEntry->sequence);
+    if (!operations_.registerHotkey(id, native->modifiers, native->virtualKey)) {
+        HotkeyRegistrationResult result;
+        result.error = nativeError(operations_);
+        if (previous.has_value()) {
+            const auto restoreNative = toNativeHotkey(previous->sequence);
             if (restoreNative.has_value()
-                && RegisterHotKey(nullptr, id, restoreNative->modifiers, restoreNative->virtualKey)) {
-                registrations_.insert(id, {oldEntry->action, oldEntry->sequence});
+                && operations_.registerHotkey(id, restoreNative->modifiers, restoreNative->virtualKey)) {
+                registrations_.insert(id, *previous);
+                result.previousRestored = true;
+            } else if (restoreNative.has_value()) {
+                result.recoveryError = nativeError(operations_);
+            } else {
+                result.recoveryError = HotkeyError{std::nullopt,
+                                                    QStringLiteral("Previous shortcut is empty or unsupported.")};
             }
         }
-        return false;
+        return result;
     }
 
     registrations_.insert(id, {action, sequence});
-    return true;
+    return {true};
 }
 
 void WindowsHotkeyService::unregisterAll() {
     for (const int id : registrations_.keys()) {
-        UnregisterHotKey(nullptr, id);
+        operations_.unregisterHotkey(id);
     }
     registrations_.clear();
 }
