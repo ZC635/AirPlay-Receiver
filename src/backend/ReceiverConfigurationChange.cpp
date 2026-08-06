@@ -59,7 +59,7 @@ ReceiverConfigurationBatchResult applyReceiverConfigurationBatch(
         operations.storeReceiverName(request.requestedReceiverName);
     }
     if (qualityChanged) {
-        operations.storeVideoQuality(request.requestedVideoQuality);
+        operations.storeVideoQuality(result.knownRuntimeVideoQuality);
     }
 
     const ReceiverOperationResult applied = operations.restartWithRequestedConfiguration();
