@@ -89,6 +89,36 @@ private slots:
         }
     }
 
+    void duplicateMultiCombinationKeepsIntrinsicReason() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        const QKeySequence multipleCombinations("Ctrl+A, Ctrl+B");
+        candidate.setShortcut(ShortcutAction::ToggleToolbar, multipleCombinations);
+        candidate.setShortcut(ShortcutAction::ToggleRecording, multipleCombinations);
+
+        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
+                                           .plan(baseline, candidate, false, RecordingState::Idle);
+
+        const QString reason = QStringLiteral("Shortcut must use a single key combination.");
+        verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), reason);
+        verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleRecording), reason);
+    }
+
+    void duplicateUnsupportedKeepsIntrinsicReason() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        const QKeySequence unsupported(Qt::CTRL | Qt::Key_Pause);
+        candidate.setShortcut(ShortcutAction::ToggleToolbar, unsupported);
+        candidate.setShortcut(ShortcutAction::ToggleRecording, unsupported);
+
+        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
+                                           .plan(baseline, candidate, false, RecordingState::Idle);
+
+        const QString reason = QStringLiteral("Shortcut is not supported as a Windows global hotkey.");
+        verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), reason);
+        verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleRecording), reason);
+    }
+
     void multipleValidationFailuresAreAllReported() {
         const AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
