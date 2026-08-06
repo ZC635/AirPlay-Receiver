@@ -3,6 +3,26 @@
 SettingsChangeDeferrer::SettingsChangeDeferrer(QObject *parent)
     : QObject(parent) {}
 
+void SettingsChangeDeferrer::deferReceiverConfiguration(
+    ReceiverConfigurationBatchRequest batch,
+    bool waitForSessionEnd,
+    bool waitForRecordingIdle) {
+    pendingReceiverConfiguration_ = std::move(batch);
+    receiverConfigurationWaitsForSessionEnd_ = waitForSessionEnd;
+    receiverConfigurationWaitsForRecordingIdle_ = waitForRecordingIdle;
+    emitReceiverConfigurationIfReady();
+}
+
+void SettingsChangeDeferrer::cancelPendingReceiverConfiguration() {
+    pendingReceiverConfiguration_.reset();
+    receiverConfigurationWaitsForSessionEnd_ = false;
+    receiverConfigurationWaitsForRecordingIdle_ = false;
+}
+
+bool SettingsChangeDeferrer::hasPendingReceiverConfiguration() const {
+    return pendingReceiverConfiguration_.has_value();
+}
+
 bool SettingsChangeDeferrer::isReceiverNamePending(QString name) const {
     return pendingReceiverName_.has_value() && *pendingReceiverName_ == name;
 }
@@ -43,6 +63,11 @@ void SettingsChangeDeferrer::videoQualityChanged(VideoQualitySettings requestedQ
 
 void SettingsChangeDeferrer::recordingStateChanged(RecordingState previous,
                                                    RecordingState current) {
+    if (current == RecordingState::Idle && receiverConfigurationWaitsForRecordingIdle_) {
+        receiverConfigurationWaitsForRecordingIdle_ = false;
+        emitReceiverConfigurationIfReady();
+    }
+
     if (previous != RecordingState::Finalizing || current != RecordingState::Idle) {
         return;
     }
@@ -77,6 +102,11 @@ void SettingsChangeDeferrer::deferVideoQualityUntilRecordingIdle(
 }
 
 void SettingsChangeDeferrer::receiverSessionChanged(bool wasSessionActive, bool sessionActive) {
+    if (!sessionActive && receiverConfigurationWaitsForSessionEnd_) {
+        receiverConfigurationWaitsForSessionEnd_ = false;
+        emitReceiverConfigurationIfReady();
+    }
+
     if (wasSessionActive && !sessionActive && pendingReceiverName_.has_value() &&
         !receiverNameWaitsForRecordingIdle_) {
         emit receiverNameReady(*pendingReceiverName_);
@@ -100,4 +130,17 @@ void SettingsChangeDeferrer::markVideoQualityApplied(VideoQualitySettings qualit
         pendingVideoQuality_.reset();
         videoQualityWaitsForRecordingIdle_ = false;
     }
+}
+
+void SettingsChangeDeferrer::emitReceiverConfigurationIfReady() {
+    if (!pendingReceiverConfiguration_.has_value() || receiverConfigurationWaitsForSessionEnd_ ||
+        receiverConfigurationWaitsForRecordingIdle_) {
+        return;
+    }
+
+    ReceiverConfigurationBatchRequest ready = std::move(*pendingReceiverConfiguration_);
+    pendingReceiverConfiguration_.reset();
+    receiverConfigurationWaitsForSessionEnd_ = false;
+    receiverConfigurationWaitsForRecordingIdle_ = false;
+    emit receiverConfigurationReady(std::move(ready));
 }

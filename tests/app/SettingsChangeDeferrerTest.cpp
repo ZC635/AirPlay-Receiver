@@ -1,11 +1,185 @@
 #include <QtTest/QtTest>
 #include "app/SettingsChangeDeferrer.h"
+#include "backend/ReceiverConfigurationChange.h"
 #include "backend/VideoQualitySettings.h"
+
+namespace {
+
+ReceiverConfigurationBatchRequest receiverConfigurationBatch(QString suffix) {
+    ReceiverConfigurationBatchRequest batch;
+    batch.receiverNameChanged = true;
+    batch.resolutionChanged = true;
+    batch.frameRateChanged = true;
+    batch.requestedReceiverName = QStringLiteral("Requested Receiver ") + suffix;
+    batch.rollbackReceiverName = QStringLiteral("Rollback Receiver ") + suffix;
+    batch.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps60};
+    batch.rollbackVideoQuality = {VideoResolution::P1080, VideoFrameRate::Fps30};
+    return batch;
+}
+
+void compareReceiverConfigurationBatch(const ReceiverConfigurationBatchRequest &actual,
+                                       const ReceiverConfigurationBatchRequest &expected) {
+    QCOMPARE(actual.receiverNameChanged, expected.receiverNameChanged);
+    QCOMPARE(actual.resolutionChanged, expected.resolutionChanged);
+    QCOMPARE(actual.frameRateChanged, expected.frameRateChanged);
+    QCOMPARE(actual.requestedReceiverName, expected.requestedReceiverName);
+    QCOMPARE(actual.rollbackReceiverName, expected.rollbackReceiverName);
+    QCOMPARE(actual.requestedVideoQuality.resolution, expected.requestedVideoQuality.resolution);
+    QCOMPARE(actual.requestedVideoQuality.frameRate, expected.requestedVideoQuality.frameRate);
+    QCOMPARE(actual.rollbackVideoQuality.resolution, expected.rollbackVideoQuality.resolution);
+    QCOMPARE(actual.rollbackVideoQuality.frameRate, expected.rollbackVideoQuality.frameRate);
+}
+
+} // namespace
 
 class SettingsChangeDeferrerTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void receiverConfigurationSessionOnlyEmitsExactBatchOnceSessionIsInactive() {
+        SettingsChangeDeferrer deferrer;
+        const auto expected = receiverConfigurationBatch(QStringLiteral("session-only"));
+        QVector<ReceiverConfigurationBatchRequest> emitted;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &batch) { emitted.append(batch); });
+
+        deferrer.deferReceiverConfiguration(expected, true, false);
+        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+
+        deferrer.receiverSessionChanged(false, true);
+        QVERIFY(emitted.isEmpty());
+        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+
+        deferrer.receiverSessionChanged(false, false);
+        QCOMPARE(emitted.size(), 1);
+        compareReceiverConfigurationBatch(emitted.constFirst(), expected);
+        QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+    }
+
+    void receiverConfigurationRecordingOnlyEmitsWhenRecordingBecomesIdle() {
+        SettingsChangeDeferrer deferrer;
+        const auto expected = receiverConfigurationBatch(QStringLiteral("recording-only"));
+        QVector<ReceiverConfigurationBatchRequest> emitted;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &batch) { emitted.append(batch); });
+
+        deferrer.deferReceiverConfiguration(expected, false, true);
+        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+
+        deferrer.recordingStateChanged(RecordingState::Recording, RecordingState::Idle);
+
+        QCOMPARE(emitted.size(), 1);
+        compareReceiverConfigurationBatch(emitted.constFirst(), expected);
+        QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+    }
+
+    void receiverConfigurationWaitsForBothBlockersBeforeEmitting() {
+        SettingsChangeDeferrer deferrer;
+        const auto expected = receiverConfigurationBatch(QStringLiteral("both-blockers"));
+        QVector<ReceiverConfigurationBatchRequest> emitted;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &batch) { emitted.append(batch); });
+
+        deferrer.deferReceiverConfiguration(expected, true, true);
+        deferrer.receiverSessionChanged(true, false);
+        QVERIFY(emitted.isEmpty());
+        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+
+        deferrer.recordingStateChanged(RecordingState::Finalizing, RecordingState::Idle);
+
+        QCOMPARE(emitted.size(), 1);
+        compareReceiverConfigurationBatch(emitted.constFirst(), expected);
+        QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+    }
+
+    void receiverConfigurationDoesNotEmitAgainAfterItIsReady() {
+        SettingsChangeDeferrer deferrer;
+        const auto expected = receiverConfigurationBatch(QStringLiteral("once-only"));
+        int emitCount = 0;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &batch) {
+                    ++emitCount;
+                    compareReceiverConfigurationBatch(batch, expected);
+                });
+
+        deferrer.deferReceiverConfiguration(expected, true, true);
+        deferrer.receiverSessionChanged(false, false);
+        deferrer.recordingStateChanged(RecordingState::Recording, RecordingState::Idle);
+        deferrer.receiverSessionChanged(false, false);
+        deferrer.recordingStateChanged(RecordingState::Idle, RecordingState::Idle);
+
+        QCOMPARE(emitCount, 1);
+    }
+
+    void receiverConfigurationNewPendingBatchReplacesPreviousBatch() {
+        SettingsChangeDeferrer deferrer;
+        const auto first = receiverConfigurationBatch(QStringLiteral("first"));
+        auto second = receiverConfigurationBatch(QStringLiteral("second"));
+        second.receiverNameChanged = false;
+        QVector<ReceiverConfigurationBatchRequest> emitted;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &batch) { emitted.append(batch); });
+
+        deferrer.deferReceiverConfiguration(first, true, false);
+        deferrer.deferReceiverConfiguration(second, false, true);
+        deferrer.receiverSessionChanged(false, false);
+        QVERIFY(emitted.isEmpty());
+        deferrer.recordingStateChanged(RecordingState::Finalizing, RecordingState::Idle);
+
+        QCOMPARE(emitted.size(), 1);
+        compareReceiverConfigurationBatch(emitted.constFirst(), second);
+    }
+
+    void cancelPendingReceiverConfigurationPreventsEmission() {
+        SettingsChangeDeferrer deferrer;
+        const auto batch = receiverConfigurationBatch(QStringLiteral("cancelled"));
+        int emitCount = 0;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &) { ++emitCount; });
+
+        deferrer.deferReceiverConfiguration(batch, true, true);
+        deferrer.cancelPendingReceiverConfiguration();
+        QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+        deferrer.receiverSessionChanged(false, false);
+        deferrer.recordingStateChanged(RecordingState::Recording, RecordingState::Idle);
+
+        QCOMPARE(emitCount, 0);
+    }
+
+    void receiverConfigurationWithoutBlockersEmitsImmediatelyOnce() {
+        SettingsChangeDeferrer deferrer;
+        const auto expected = receiverConfigurationBatch(QStringLiteral("immediate"));
+        QVector<ReceiverConfigurationBatchRequest> emitted;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &batch) { emitted.append(batch); });
+
+        deferrer.deferReceiverConfiguration(expected, false, false);
+
+        QCOMPARE(emitted.size(), 1);
+        compareReceiverConfigurationBatch(emitted.constFirst(), expected);
+        QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+    }
+
+    void receiverConfigurationReadyClearsStateBeforeReentrantTransitions() {
+        SettingsChangeDeferrer deferrer;
+        const auto expected = receiverConfigurationBatch(QStringLiteral("reentrant"));
+        int emitCount = 0;
+        connect(&deferrer, &SettingsChangeDeferrer::receiverConfigurationReady,
+                [&](const ReceiverConfigurationBatchRequest &batch) {
+                    ++emitCount;
+                    compareReceiverConfigurationBatch(batch, expected);
+                    deferrer.receiverSessionChanged(false, false);
+                    deferrer.recordingStateChanged(RecordingState::Idle, RecordingState::Idle);
+                });
+
+        deferrer.deferReceiverConfiguration(expected, true, true);
+        deferrer.receiverSessionChanged(false, false);
+        deferrer.recordingStateChanged(RecordingState::Finalizing, RecordingState::Idle);
+
+        QCOMPARE(emitCount, 1);
+        QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+    }
+
     void initiallyHasNoPendingChanges() {
         SettingsChangeDeferrer deferrer;
         QVERIFY(!deferrer.isReceiverNamePending(QString()));
