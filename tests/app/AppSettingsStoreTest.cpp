@@ -59,11 +59,13 @@ class AppSettingsStoreTest : public QObject {
 private slots:
     void saveReportsOpenFailureDetails() {
         const QString path = "settings.json";
+        QString factoryPath;
         auto device = std::make_shared<FakeSettingsSaveDeviceState>();
         device->openResult = false;
         device->fileError = QFileDevice::OpenError;
         device->errorText = "cannot open settings";
-        AppSettingsStore store(path, [device](const QString &) {
+        AppSettingsStore store(path, [&factoryPath, device](const QString &targetPath) {
+            factoryPath = targetPath;
             return std::make_unique<FakeSettingsSaveDevice>(device);
         });
 
@@ -71,12 +73,28 @@ private slots:
 
         QVERIFY(!result.success);
         QCOMPARE(result.targetPath, QFileInfo(path).absoluteFilePath());
+        QCOMPARE(factoryPath, QFileInfo(path).absoluteFilePath());
         QCOMPARE(result.failureStage, std::optional<AppSettingsSaveStage>(AppSettingsSaveStage::Open));
         QCOMPARE(result.fileError, QFileDevice::OpenError);
         QCOMPARE(result.errorString, QString("cannot open settings"));
         QVERIFY(device->openCalled);
         QVERIFY(!device->writeCalled);
         QVERIFY(!device->commitCalled);
+    }
+
+    void saveReportsUnavailableDeviceFactory() {
+        const QString path = "settings.json";
+        AppSettingsStore store(path, [](const QString &) {
+            return std::unique_ptr<SettingsSaveDevice>();
+        });
+
+        const AppSettingsSaveResult result = store.save(AppSettings::defaults());
+
+        QVERIFY(!result.success);
+        QCOMPARE(result.targetPath, QFileInfo(path).absoluteFilePath());
+        QCOMPARE(result.failureStage, std::optional<AppSettingsSaveStage>(AppSettingsSaveStage::Open));
+        QCOMPARE(result.fileError, QFileDevice::NoError);
+        QCOMPARE(result.errorString, QString("Settings save device factory returned null."));
     }
 
     void saveReportsWriteFailureDetails() {
@@ -127,10 +145,12 @@ private slots:
 
     void saveReportsSuccessDetailsAndWritesJsonToDevice() {
         const QString path = "settings.json";
+        QString factoryPath;
         auto device = std::make_shared<FakeSettingsSaveDeviceState>();
         AppSettings settings = AppSettings::defaults();
         settings.setReceiverName("Desk Receiver");
-        AppSettingsStore store(path, [device](const QString &) {
+        AppSettingsStore store(path, [&factoryPath, device](const QString &targetPath) {
+            factoryPath = targetPath;
             return std::make_unique<FakeSettingsSaveDevice>(device);
         });
 
@@ -138,6 +158,7 @@ private slots:
 
         QVERIFY(result.success);
         QCOMPARE(result.targetPath, QFileInfo(path).absoluteFilePath());
+        QCOMPARE(factoryPath, QFileInfo(path).absoluteFilePath());
         QVERIFY(!result.failureStage.has_value());
         QCOMPARE(result.fileError, QFileDevice::NoError);
         QVERIFY(result.errorString.isEmpty());

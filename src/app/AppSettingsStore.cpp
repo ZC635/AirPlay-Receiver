@@ -192,6 +192,11 @@ AppSettingsSaveResult AppSettingsStore::save(const AppSettings &settings) const 
     AppSettingsSaveResult result;
     result.targetPath = QFileInfo(path_).absoluteFilePath();
     const std::unique_ptr<SettingsSaveDevice> device = deviceFactory_(result.targetPath);
+    if (!device) {
+        result.failureStage = AppSettingsSaveStage::Open;
+        result.errorString = "Settings save device factory returned null.";
+        return result;
+    }
     const auto failureResult = [&result, &device](AppSettingsSaveStage stage) {
         result.failureStage = stage;
         result.fileError = device->error();
