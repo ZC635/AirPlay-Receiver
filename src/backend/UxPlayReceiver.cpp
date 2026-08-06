@@ -650,7 +650,9 @@ ReceiverConfigurationBatchResult UxPlayReceiver::applyConfigurationBatch(
 
     const bool restartReceiver = qualityChanged
         && (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected);
-    const auto restart = [this, restartReceiver] {
+    const QString discoveryRecoveryName = request.receiverNameChanged && !restartReceiver
+        ? request.rollbackReceiverName : QString{};
+    const auto restart = [this, restartReceiver, discoveryRecoveryName] {
         if (restartReceiver) {
             stop();
             start();
@@ -661,7 +663,7 @@ ReceiverConfigurationBatchResult UxPlayReceiver::applyConfigurationBatch(
                 ? QStringLiteral("Failed to restart receiver") : m_error};
         }
 #if AIRPLAY_WITH_UXPLAY
-        if (m_discovery && m_discovery->restart()) {
+        if (m_discovery && m_discovery->restart(discoveryRecoveryName)) {
             return ReceiverOperationResult{true, {}};
         }
         QString error = m_discovery ? m_discovery->lastError() : QString{};

@@ -14,6 +14,7 @@
 #endif
 #include "backend/DiscoveryRestartController.h"
 #include "backend/UxPlayCallbackDispatch.h"
+#include "backend/UxPlayDiscovery.h"
 #include "backend/UxPlayReceiver.h"
 #if AIRPLAY_WITH_UXPLAY
 #undef private
@@ -1921,6 +1922,51 @@ private slots:
         QCOMPARE(receiver.receiverName(), request.requestedReceiverName);
         QCOMPARE(receiver.videoQuality(), request.requestedVideoQuality);
         receiver.stop();
+#endif
+    }
+
+    void discoverableBatchesPreserveReceiverNameRecoveryOnlyWhenChanged() {
+#if AIRPLAY_WITH_UXPLAY
+        auto scheduledRecoveryName = [](const ReceiverConfigurationBatchRequest &request) {
+            FakeMdnsPublishing mdns;
+            UxPlayReceiverConfig config;
+            config.serverName = QStringLiteral("AirPlay Receiver Recovery Batch Test");
+            config.videoSink = "fakesink";
+            config.audioSink = "fakesink";
+            config.mdnsPublisher = &mdns;
+            UxPlayReceiver receiver(config);
+            receiver.start();
+            const auto result = receiver.applyConfigurationBatch(request);
+            if (result.status != ReceiverConfigurationBatchStatus::Applied
+                || !receiver.m_discovery
+                || !receiver.m_discovery->m_discoveryRestartController) {
+                return QStringLiteral("<failed to schedule>");
+            }
+            const QString recoveryName = receiver.m_discovery->m_discoveryRestartController->recoveryName();
+            receiver.stop();
+            return recoveryName;
+        };
+
+        ReceiverConfigurationBatchRequest nameRequest;
+        nameRequest.receiverNameChanged = true;
+        nameRequest.requestedReceiverName = QStringLiteral("Updated Receiver");
+        nameRequest.rollbackReceiverName = QStringLiteral("AirPlay Receiver Recovery Batch Test");
+        nameRequest.requestedVideoQuality = {VideoResolution::P1080, VideoFrameRate::Fps30};
+        nameRequest.rollbackVideoQuality = nameRequest.requestedVideoQuality;
+        QCOMPARE(scheduledRecoveryName(nameRequest), nameRequest.rollbackReceiverName);
+
+        ReceiverConfigurationBatchRequest combinedRequest = nameRequest;
+        combinedRequest.resolutionChanged = true;
+        combinedRequest.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps30};
+        QCOMPARE(scheduledRecoveryName(combinedRequest), combinedRequest.rollbackReceiverName);
+
+        ReceiverConfigurationBatchRequest qualityRequest;
+        qualityRequest.resolutionChanged = true;
+        qualityRequest.requestedReceiverName = QStringLiteral("AirPlay Receiver Recovery Batch Test");
+        qualityRequest.rollbackReceiverName = qualityRequest.requestedReceiverName;
+        qualityRequest.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps30};
+        qualityRequest.rollbackVideoQuality = {VideoResolution::P1080, VideoFrameRate::Fps30};
+        QCOMPARE(scheduledRecoveryName(qualityRequest), QString{});
 #endif
     }
 
