@@ -9,17 +9,6 @@ bool hasVideoQualityChange(const ReceiverConfigurationBatchRequest &request) {
     return request.resolutionChanged || request.frameRateChanged;
 }
 
-VideoQualitySettings mergedRuntimeVideoQuality(const ReceiverConfigurationBatchRequest &request) {
-    VideoQualitySettings result = request.rollbackVideoQuality;
-    if (request.resolutionChanged) {
-        result.resolution = request.requestedVideoQuality.resolution;
-    }
-    if (request.frameRateChanged) {
-        result.frameRate = request.requestedVideoQuality.frameRate;
-    }
-    return result;
-}
-
 ReceiverConfigurationBatchResult failedBeforeRestart(const ReceiverConfigurationBatchRequest &request,
                                                       QString error) {
     ReceiverConfigurationBatchResult result;
@@ -31,6 +20,18 @@ ReceiverConfigurationBatchResult failedBeforeRestart(const ReceiverConfiguration
 }
 } // namespace
 
+VideoQualitySettings mergedReceiverConfigurationVideoQuality(
+    const ReceiverConfigurationBatchRequest &request) {
+    VideoQualitySettings result = request.rollbackVideoQuality;
+    if (request.resolutionChanged) {
+        result.resolution = request.requestedVideoQuality.resolution;
+    }
+    if (request.frameRateChanged) {
+        result.frameRate = request.requestedVideoQuality.frameRate;
+    }
+    return result;
+}
+
 ReceiverConfigurationBatchResult applyReceiverConfigurationBatch(
     const ReceiverConfigurationBatchRequest &request,
     const ReceiverConfigurationBatchOperations &operations) {
@@ -40,7 +41,7 @@ ReceiverConfigurationBatchResult applyReceiverConfigurationBatch(
     ReceiverConfigurationBatchResult result;
     result.knownRuntimeReceiverName = request.receiverNameChanged
         ? request.requestedReceiverName : request.rollbackReceiverName;
-    result.knownRuntimeVideoQuality = mergedRuntimeVideoQuality(request);
+    result.knownRuntimeVideoQuality = mergedReceiverConfigurationVideoQuality(request);
     if (!anyChange) {
         return result;
     }

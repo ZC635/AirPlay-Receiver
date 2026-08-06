@@ -1842,6 +1842,30 @@ private slots:
         QCOMPARE(receiver.m_config.videoQuality.frameRate, VideoFrameRate::Fps15);
     }
 
+    void idlePartialVideoQualityBatchPreservesUnchangedFrameRate() {
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Idle Batch Test";
+        config.videoQuality = {VideoResolution::P1080, VideoFrameRate::Fps30};
+        UxPlayReceiver receiver(config);
+        QSignalSpy stateSpy(&receiver, &AirPlayReceiver::stateChanged);
+
+        ReceiverConfigurationBatchRequest request;
+        request.resolutionChanged = true;
+        request.requestedReceiverName = config.serverName;
+        request.rollbackReceiverName = config.serverName;
+        request.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps60};
+        request.rollbackVideoQuality = config.videoQuality;
+
+        const auto result = receiver.applyConfigurationBatch(request);
+
+        const VideoQualitySettings expected{VideoResolution::P720, VideoFrameRate::Fps30};
+        QCOMPARE(result.status, ReceiverConfigurationBatchStatus::Applied);
+        QCOMPARE(receiver.videoQuality(), expected);
+        QCOMPARE(result.knownRuntimeVideoQuality, receiver.videoQuality());
+        QCOMPARE(receiver.state(), ReceiverState::Idle);
+        QCOMPARE(stateSpy.count(), 0);
+    }
+
     void discoverableVideoQualityChangeRestartsWithNewDnsFeature() {
 #if AIRPLAY_WITH_UXPLAY
         UxPlayReceiverConfig config;

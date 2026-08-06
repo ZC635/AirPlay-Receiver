@@ -102,6 +102,27 @@ private slots:
         QCOMPARE(receiver.configurationRestartCount, 2);
     }
 
+    void fakeIdlePartialBatchMergesQualityAndResult() {
+        FakeAirPlayReceiver receiver;
+        const VideoQualitySettings current{VideoResolution::P1080, VideoFrameRate::Fps30};
+        QCOMPARE(receiver.videoQuality(), current);
+
+        ReceiverConfigurationBatchRequest request;
+        request.resolutionChanged = true;
+        request.requestedReceiverName = receiver.receiverName();
+        request.rollbackReceiverName = receiver.receiverName();
+        request.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps60};
+        request.rollbackVideoQuality = current;
+
+        const auto result = receiver.applyConfigurationBatch(request);
+
+        const VideoQualitySettings expected{VideoResolution::P720, VideoFrameRate::Fps30};
+        QCOMPARE(result.status, ReceiverConfigurationBatchStatus::Applied);
+        QCOMPARE(receiver.videoQuality(), expected);
+        QCOMPARE(result.knownRuntimeVideoQuality, receiver.videoQuality());
+        QCOMPARE(receiver.configurationRestartCount, 0);
+    }
+
     void fakeStartsAndStopsRecording() {
         FakeAirPlayReceiver receiver;
         QSignalSpy availabilitySpy(&receiver, &AirPlayReceiver::recordingAvailabilityChanged);

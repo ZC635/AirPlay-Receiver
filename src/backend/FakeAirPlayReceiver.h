@@ -83,18 +83,12 @@ public:
                 storeName(request.requestedReceiverName);
             }
             if (qualityChanged) {
-                storeQuality(request.requestedVideoQuality);
+                storeQuality(mergedReceiverConfigurationVideoQuality(request));
             }
             ReceiverConfigurationBatchResult result;
             result.knownRuntimeReceiverName = request.receiverNameChanged
                 ? request.requestedReceiverName : request.rollbackReceiverName;
-            result.knownRuntimeVideoQuality = request.rollbackVideoQuality;
-            if (request.resolutionChanged) {
-                result.knownRuntimeVideoQuality.resolution = request.requestedVideoQuality.resolution;
-            }
-            if (request.frameRateChanged) {
-                result.knownRuntimeVideoQuality.frameRate = request.requestedVideoQuality.frameRate;
-            }
+            result.knownRuntimeVideoQuality = mergedReceiverConfigurationVideoQuality(request);
             return result;
         }
 

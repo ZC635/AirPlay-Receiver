@@ -17,6 +17,9 @@ struct ReceiverConfigurationBatchRequest {
     VideoQualitySettings rollbackVideoQuality;
 };
 
+VideoQualitySettings mergedReceiverConfigurationVideoQuality(
+    const ReceiverConfigurationBatchRequest &request);
+
 enum class ReceiverConfigurationBatchStatus {
     Applied,
     Deferred,
