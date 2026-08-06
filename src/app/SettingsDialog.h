@@ -1,6 +1,6 @@
 #pragma once
 
-#include "app/AppSettings.h"
+#include "app/SettingsApplyTypes.h"
 
 #include <QDialog>
 #include <QHash>
@@ -23,19 +23,34 @@ public:
                             QWidget *parent = nullptr,
                             RecordingPathActions *recordingPathActions = nullptr);
     ~SettingsDialog() override;
+
     AppSettings settings() const;
+    AppSettings draftSettings() const;
+    const AppSettings &committedBaseline() const;
+    void presentApplyOutcome(const SettingsApplyOutcome &outcome);
+
+signals:
+    void applyRequested(AppSettings draft);
 
 public slots:
     void accept() override;
 
 private:
-    void refreshErrorLabel();
+    void clearFieldResult(const SettingsFieldId &field);
+    void refreshPresentation();
+    void refreshFieldErrors();
+    int unappliedChangeCount() const;
+    QString fieldFailureMessage(const SettingsFieldResult &result) const;
 
-    AppSettings settings_;
+    AppSettings committedBaseline_;
     QLineEdit *receiverNameEdit_;
     QTableWidget *table_;
-    QLabel *errorLabel_;
+    QLabel *summaryLabel_;
+    QLabel *receiverNameError_;
+    QLabel *videoResolutionError_;
+    QLabel *videoFrameRateError_;
     QHash<int, QKeySequenceEdit *> shortcutEdits_;
+    QHash<int, QLabel *> shortcutErrorLabels_;
     QComboBox *videoResolutionCombo_;
     QComboBox *videoFrameRateCombo_;
     QComboBox *recordingFormatCombo_;
@@ -43,6 +58,7 @@ private:
     QCheckBox *showRecordingCompletionMessageCheckBox_;
     std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
     RecordingPathActions *recordingPathActions_;
-    QString validationError_;
+    QVector<SettingsFieldResult> fieldResults_;
+    std::optional<SettingsApplyGlobalResult> globalResult_;
     QString pathActionError_;
 };
