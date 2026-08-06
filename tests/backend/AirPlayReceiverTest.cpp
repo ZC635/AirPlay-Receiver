@@ -57,6 +57,51 @@ private slots:
         QCOMPARE(receiver.lastAppliedVideoQuality, otherQuality);
     }
 
+    void fakeBatchFailureRollsBackWithExactError() {
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Discoverable);
+        receiver.requestedConfigurationRestartError = QStringLiteral("requested restart failed");
+
+        ReceiverConfigurationBatchRequest request;
+        request.receiverNameChanged = true;
+        request.resolutionChanged = true;
+        request.requestedReceiverName = QStringLiteral("Updated Receiver");
+        request.rollbackReceiverName = receiver.receiverName();
+        request.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps30};
+        request.rollbackVideoQuality = receiver.videoQuality();
+
+        const auto result = receiver.applyConfigurationBatch(request);
+
+        QCOMPARE(result.status, ReceiverConfigurationBatchStatus::ApplyFailedRolledBack);
+        QCOMPARE(result.applyError, QStringLiteral("requested restart failed"));
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.configurationRestartCount, 2);
+        QCOMPARE(receiver.receiverName(), request.rollbackReceiverName);
+        QCOMPARE(receiver.videoQuality(), request.rollbackVideoQuality);
+    }
+
+    void fakeBatchRecoveryFailureRetainsDistinctError() {
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Discoverable);
+        receiver.requestedConfigurationRestartError = QStringLiteral("requested restart failed");
+        receiver.rollbackConfigurationRestartError = QStringLiteral("rollback restart failed");
+
+        ReceiverConfigurationBatchRequest request;
+        request.receiverNameChanged = true;
+        request.requestedReceiverName = QStringLiteral("Updated Receiver");
+        request.rollbackReceiverName = receiver.receiverName();
+        request.requestedVideoQuality = receiver.videoQuality();
+        request.rollbackVideoQuality = receiver.videoQuality();
+
+        const auto result = receiver.applyConfigurationBatch(request);
+
+        QCOMPARE(result.status, ReceiverConfigurationBatchStatus::RecoveryFailed);
+        QCOMPARE(result.applyError, QStringLiteral("requested restart failed"));
+        QCOMPARE(result.recoveryError, QStringLiteral("rollback restart failed"));
+        QCOMPARE(receiver.receiverName(), request.rollbackReceiverName);
+        QCOMPARE(receiver.configurationRestartCount, 2);
+    }
+
     void fakeStartsAndStopsRecording() {
         FakeAirPlayReceiver receiver;
         QSignalSpy availabilitySpy(&receiver, &AirPlayReceiver::recordingAvailabilityChanged);

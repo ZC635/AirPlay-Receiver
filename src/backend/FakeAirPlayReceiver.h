@@ -42,20 +42,84 @@ public:
 
     bool lastVideoFitMode() const { return m_videoFitMode; }
 
-    bool applyVideoQuality(const VideoQualitySettings &quality) override {
-        VideoQualityChangeOperations operations;
-        operations.storeQuality = [&](const VideoQualitySettings &requestedQuality) {
-            lastAppliedVideoQuality = requestedQuality;
+    VideoQualitySettings videoQuality() const override { return lastAppliedVideoQuality; }
+
+    ReceiverConfigurationBatchResult applyConfigurationBatch(
+        const ReceiverConfigurationBatchRequest &request) override {
+        ++configurationBatchCount;
+        configurationBatchRequests.append(request);
+        const bool qualityChanged = request.resolutionChanged || request.frameRateChanged;
+
+        auto rejected = [&](const QString &error) {
+            ReceiverConfigurationBatchResult result;
+            result.status = ReceiverConfigurationBatchStatus::ApplyFailedRolledBack;
+            result.applyError = error;
+            result.knownRuntimeReceiverName = request.rollbackReceiverName;
+            result.knownRuntimeVideoQuality = request.rollbackVideoQuality;
+            return result;
         };
-        operations.restartReceiver = [&] {
-            stop();
-            start();
-            return true;
-        };
-        if (lastAppliedVideoQuality != quality && rejectedVideoQualities.contains(quality)) {
-            return false;
+        if (request.receiverNameChanged && rejectedReceiverNames.contains(request.requestedReceiverName)) {
+            return rejected(QStringLiteral("Requested receiver name is rejected"));
         }
-        return applyVideoQualityConfigurationChange(m_state, lastAppliedVideoQuality, quality, operations);
+        if (qualityChanged && rejectedVideoQualities.contains(request.requestedVideoQuality)) {
+            return rejected(QStringLiteral("Requested video quality is rejected"));
+        }
+        if (qualityChanged && (m_state == ReceiverState::Starting || m_state == ReceiverState::Error)) {
+            return rejected(QStringLiteral("Cannot apply video quality while receiver is starting or in error state"));
+        }
+
+        const auto storeName = [&](const QString &name) {
+            m_receiverName = name;
+            appliedReceiverNames.append(name);
+        };
+        const auto storeQuality = [&](const VideoQualitySettings &quality) {
+            lastAppliedVideoQuality = quality;
+        };
+        if (!request.receiverNameChanged && !qualityChanged) {
+            return applyReceiverConfigurationBatch(request, {});
+        }
+        if (m_state == ReceiverState::Idle) {
+            if (request.receiverNameChanged) {
+                storeName(request.requestedReceiverName);
+            }
+            if (qualityChanged) {
+                storeQuality(request.requestedVideoQuality);
+            }
+            ReceiverConfigurationBatchResult result;
+            result.knownRuntimeReceiverName = request.receiverNameChanged
+                ? request.requestedReceiverName : request.rollbackReceiverName;
+            result.knownRuntimeVideoQuality = request.rollbackVideoQuality;
+            if (request.resolutionChanged) {
+                result.knownRuntimeVideoQuality.resolution = request.requestedVideoQuality.resolution;
+            }
+            if (request.frameRateChanged) {
+                result.knownRuntimeVideoQuality.frameRate = request.requestedVideoQuality.frameRate;
+            }
+            return result;
+        }
+
+        const bool restartReceiver = (request.receiverNameChanged || qualityChanged)
+            && (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected);
+        const auto restart = [this, restartReceiver](const QString &error) {
+            ++configurationRestartCount;
+            if (!error.isEmpty()) {
+                return ReceiverOperationResult{false, error};
+            }
+            if (restartReceiver) {
+                stop();
+                start();
+            } else {
+                ++broadcastRestartCount;
+            }
+            return ReceiverOperationResult{true, {}};
+        };
+
+        ReceiverConfigurationBatchOperations operations;
+        operations.storeReceiverName = storeName;
+        operations.storeVideoQuality = storeQuality;
+        operations.restartWithRequestedConfiguration = [&] { return restart(requestedConfigurationRestartError); };
+        operations.restartWithRollbackConfiguration = [&] { return restart(rollbackConfigurationRestartError); };
+        return applyReceiverConfigurationBatch(request, operations);
     }
 
     bool recordingAvailable() const override { return m_recordingAvailable; }
@@ -135,38 +199,18 @@ public:
 
     QString receiverName() const override { return m_receiverName; }
 
-    bool applyReceiverName(const QString &name) override {
-        if (rejectedReceiverNames.contains(name)) {
-            return false;
-        }
-        ReceiverNameChangeOperations operations;
-        operations.storeName = [&](const QString &requestedName) {
-            m_receiverName = requestedName;
-            appliedReceiverNames.append(requestedName);
-        };
-        operations.restartDiscovery = [&] {
-            if (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected) {
-                stop();
-                start();
-            } else {
-                ++broadcastRestartCount;
-            }
-            return true;
-        };
-        operations.restartDiscoveryWithRecovery = [&](const QString &) {
-            ++broadcastRestartCount;
-            return true;
-        };
-        return applyReceiverNameConfigurationChange(m_state, m_receiverName, name, operations);
-    }
-
     double volume() const { return m_volume; }
 
     void forceState(ReceiverState state) { setState(state); }
 
     QStringList appliedReceiverNames;
     QStringList rejectedReceiverNames;
+    QVector<ReceiverConfigurationBatchRequest> configurationBatchRequests;
+    QString requestedConfigurationRestartError;
+    QString rollbackConfigurationRestartError;
     int broadcastRestartCount = 0;
+    int configurationBatchCount = 0;
+    int configurationRestartCount = 0;
     int startCount = 0;
     int stopCount = 0;
     int startRecordingCount = 0;

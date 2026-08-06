@@ -50,8 +50,9 @@ public:
     void setVideoFitMode(bool enabled) override;
     ReceiverState state() const override;
     QString receiverName() const override;
-    bool applyReceiverName(const QString &name) override;
-    bool applyVideoQuality(const VideoQualitySettings &quality) override;
+    VideoQualitySettings videoQuality() const override;
+    ReceiverConfigurationBatchResult applyConfigurationBatch(
+        const ReceiverConfigurationBatchRequest &request) override;
     bool recordingAvailable() const override;
     RecordingState recordingState() const override;
     RecordingStartResult startRecording(const RecordingOptions &options) override;

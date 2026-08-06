@@ -1867,6 +1867,39 @@ private slots:
 #endif
     }
 
+    void combinedNameAndQualityChangeUsesOneDiscoveryRestart() {
+#if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing mdns;
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Batch Test";
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &mdns;
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        const int initialPublishCalls = mdns.publishCalls;
+
+        ReceiverConfigurationBatchRequest request;
+        request.receiverNameChanged = true;
+        request.resolutionChanged = true;
+        request.frameRateChanged = true;
+        request.requestedReceiverName = QStringLiteral("AirPlay Receiver Batch Updated");
+        request.rollbackReceiverName = config.serverName;
+        request.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps60};
+        request.rollbackVideoQuality = config.videoQuality;
+
+        const auto result = receiver.applyConfigurationBatch(request);
+
+        QCOMPARE(result.status, ReceiverConfigurationBatchStatus::Applied);
+        QTRY_COMPARE(mdns.publishCalls, initialPublishCalls + 1);
+        QCOMPARE(receiver.receiverName(), request.requestedReceiverName);
+        QCOMPARE(receiver.videoQuality(), request.requestedVideoQuality);
+        receiver.stop();
+#endif
+    }
+
     void connectedApplyVideoQualityRestartsReceiverAndUpdatesDnsFeature() {
 #if AIRPLAY_WITH_UXPLAY
         UxPlayReceiverConfig config;

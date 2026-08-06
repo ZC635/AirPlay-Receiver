@@ -1,6 +1,5 @@
 #include "backend/UxPlayReceiver.h"
 #include "backend/ReceiverConfigurationChange.h"
-#include "backend/ReceiverStatePolicy.h"
 #include "backend/UxPlayDiscovery.h"
 #include "backend/VideoFrameBridge.h"
 
@@ -595,48 +594,35 @@ QString UxPlayReceiver::receiverName() const {
     return m_config.serverName;
 }
 
-bool UxPlayReceiver::applyReceiverName(const QString &name) {
-    ReceiverNameChangeOperations operations;
-    operations.storeName = [&](const QString &requestedName) {
+VideoQualitySettings UxPlayReceiver::videoQuality() const {
+    return m_config.videoQuality;
+}
+
+ReceiverConfigurationBatchResult UxPlayReceiver::applyConfigurationBatch(
+    const ReceiverConfigurationBatchRequest &request) {
+    const bool qualityChanged = request.resolutionChanged || request.frameRateChanged;
+    const bool anyChange = request.receiverNameChanged || qualityChanged;
+    const auto runtimeRequestedQuality = [&] {
+        VideoQualitySettings quality = request.rollbackVideoQuality;
+        if (request.resolutionChanged) {
+            quality.resolution = request.requestedVideoQuality.resolution;
+        }
+        if (request.frameRateChanged) {
+            quality.frameRate = request.requestedVideoQuality.frameRate;
+        }
+        return quality;
+    };
+    const auto storeName = [&](const QString &requestedName) {
         m_config.serverName = requestedName;
 #if AIRPLAY_WITH_UXPLAY
         if (m_discovery) {
             m_discovery->setReceiverName(requestedName);
         }
 #endif
-        debugLog("applyReceiverName: set config name to \"%s\", state=%d", qPrintable(requestedName), static_cast<int>(m_state));
+        debugLog("applyConfigurationBatch: set config name to \"%s\", state=%d",
+                 qPrintable(requestedName), static_cast<int>(m_state));
     };
-    operations.restartDiscovery = [&] {
-#if AIRPLAY_WITH_UXPLAY
-        return m_discovery && m_discovery->restart();
-#else
-        return true;
-#endif
-    };
-    operations.restartDiscoveryWithRecovery = [&](const QString &recoveryName) {
-#if AIRPLAY_WITH_UXPLAY
-        return m_discovery && m_discovery->restart(recoveryName);
-#else
-        Q_UNUSED(recoveryName);
-        return true;
-#endif
-    };
-    operations.reportRecoveryFailure = [&](const QString &message) {
-        debugLog("applyReceiverName: recovery discovery restart also failed");
-#if AIRPLAY_WITH_UXPLAY
-        handleBackendError(message, BackendErrorSafety::CanFinalize);
-#else
-        setError(message);
-        setState(ReceiverState::Error);
-#endif
-    };
-
-    return applyReceiverNameConfigurationChange(m_state, m_config.serverName, name, operations);
-}
-
-bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
-    VideoQualityChangeOperations operations;
-    operations.storeQuality = [&](const VideoQualitySettings &requestedQuality) {
+    const auto storeQuality = [&](const VideoQualitySettings &requestedQuality) {
         m_config.videoQuality = requestedQuality;
 #if AIRPLAY_WITH_UXPLAY
         if (m_recordingController) {
@@ -648,29 +634,63 @@ bool UxPlayReceiver::applyVideoQuality(const VideoQualitySettings &quality) {
         }
 #endif
     };
-    operations.updateActiveAdvertisement = [&](const VideoQualitySettings &requestedQuality) {
-#if AIRPLAY_WITH_UXPLAY
-        if (m_discovery) {
-            m_discovery->setVideoQuality(requestedQuality);
+
+    if (qualityChanged && (m_state == ReceiverState::Error || m_state == ReceiverState::Starting)) {
+        ReceiverConfigurationBatchResult result;
+        result.status = ReceiverConfigurationBatchStatus::ApplyFailedRolledBack;
+        result.applyError = QStringLiteral("Cannot apply video quality while receiver is starting or in error state");
+        result.knownRuntimeReceiverName = request.rollbackReceiverName;
+        result.knownRuntimeVideoQuality = request.rollbackVideoQuality;
+        return result;
+    }
+
+    if (!anyChange || m_state == ReceiverState::Idle) {
+        if (request.receiverNameChanged) {
+            storeName(request.requestedReceiverName);
         }
-#else
-        Q_UNUSED(requestedQuality);
-#endif
-    };
-    operations.restartDiscovery = [&] {
+        if (qualityChanged) {
+            storeQuality(request.requestedVideoQuality);
+        }
+        ReceiverConfigurationBatchResult result;
+        result.knownRuntimeReceiverName = request.receiverNameChanged
+            ? request.requestedReceiverName : request.rollbackReceiverName;
+        result.knownRuntimeVideoQuality = runtimeRequestedQuality();
+        return result;
+    }
+
+    const bool restartReceiver = qualityChanged
+        && (m_state == ReceiverState::Connecting || m_state == ReceiverState::Connected);
+    const auto restart = [this, restartReceiver] {
+        if (restartReceiver) {
+            stop();
+            start();
+            if (m_state != ReceiverState::Error) {
+                return ReceiverOperationResult{true, {}};
+            }
+            return ReceiverOperationResult{false, m_error.isEmpty()
+                ? QStringLiteral("Failed to restart receiver") : m_error};
+        }
 #if AIRPLAY_WITH_UXPLAY
-        return m_discovery && m_discovery->restart();
+        if (m_discovery && m_discovery->restart()) {
+            return ReceiverOperationResult{true, {}};
+        }
+        QString error = m_discovery ? m_discovery->lastError() : QString{};
+        if (error.isEmpty()) {
+            error = m_error;
+        }
+        return ReceiverOperationResult{false, error.isEmpty()
+            ? QStringLiteral("Failed to restart receiver discovery") : error};
 #else
-        return true;
+        return ReceiverOperationResult{true, {}};
 #endif
-    };
-    operations.restartReceiver = [&] {
-        stop();
-        start();
-        return m_state != ReceiverState::Error;
     };
 
-    return applyVideoQualityConfigurationChange(m_state, m_config.videoQuality, quality, operations);
+    ReceiverConfigurationBatchOperations operations;
+    operations.storeReceiverName = storeName;
+    operations.storeVideoQuality = storeQuality;
+    operations.restartWithRequestedConfiguration = restart;
+    operations.restartWithRollbackConfiguration = restart;
+    return applyReceiverConfigurationBatch(request, operations);
 }
 
 bool UxPlayReceiver::recordingAvailable() const {

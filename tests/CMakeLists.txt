@@ -83,6 +83,10 @@ add_executable(ReceiverStatePolicyTest backend/ReceiverStatePolicyTest.cpp)
 target_link_libraries(ReceiverStatePolicyTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME ReceiverStatePolicyTest COMMAND ReceiverStatePolicyTest)
 
+add_executable(ReceiverConfigurationChangeTest backend/ReceiverConfigurationChangeTest.cpp)
+target_link_libraries(ReceiverConfigurationChangeTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME ReceiverConfigurationChangeTest COMMAND ReceiverConfigurationChangeTest)
+
 add_executable(AirPlayReceiverTest backend/AirPlayReceiverTest.cpp)
 target_link_libraries(AirPlayReceiverTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AirPlayReceiverTest COMMAND AirPlayReceiverTest)
@@ -242,6 +246,7 @@ set(AIRPLAY_QT_TESTS
     MdnsPublisherTest
     DiscoveryRestartControllerTest
     ReceiverStatePolicyTest
+    ReceiverConfigurationChangeTest
     AirPlayReceiverTest
     RecordingFileTransactionTest
     RecordingTimelineTest

@@ -7,6 +7,47 @@
 
 #include <functional>
 
+struct ReceiverConfigurationBatchRequest {
+    bool receiverNameChanged = false;
+    bool resolutionChanged = false;
+    bool frameRateChanged = false;
+    QString requestedReceiverName;
+    QString rollbackReceiverName;
+    VideoQualitySettings requestedVideoQuality;
+    VideoQualitySettings rollbackVideoQuality;
+};
+
+enum class ReceiverConfigurationBatchStatus {
+    Applied,
+    Deferred,
+    ApplyFailedRolledBack,
+    RecoveryFailed,
+};
+
+struct ReceiverConfigurationBatchResult {
+    ReceiverConfigurationBatchStatus status = ReceiverConfigurationBatchStatus::Applied;
+    QString applyError;
+    QString recoveryError;
+    QString knownRuntimeReceiverName;
+    VideoQualitySettings knownRuntimeVideoQuality;
+};
+
+struct ReceiverOperationResult {
+    bool success = false;
+    QString error;
+};
+
+struct ReceiverConfigurationBatchOperations {
+    std::function<void(const QString &)> storeReceiverName;
+    std::function<void(const VideoQualitySettings &)> storeVideoQuality;
+    std::function<ReceiverOperationResult()> restartWithRequestedConfiguration;
+    std::function<ReceiverOperationResult()> restartWithRollbackConfiguration;
+};
+
+ReceiverConfigurationBatchResult applyReceiverConfigurationBatch(
+    const ReceiverConfigurationBatchRequest &request,
+    const ReceiverConfigurationBatchOperations &operations);
+
 struct ReceiverNameChangeOperations {
     std::function<void(const QString &)> storeName;
     std::function<bool()> restartDiscovery;
