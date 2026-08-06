@@ -225,7 +225,7 @@ private slots:
         QVERIFY(!result.registered);
         QVERIFY(result.error.has_value());
         QCOMPARE(result.error->nativeCode, std::optional<quint32>(1234));
-        QCOMPARE(result.error->message, QString("Windows hotkey registration failed."));
+        QCOMPARE(result.error->message, QString("Windows hotkey registration failed (error 1234)."));
     }
 
     void successfulReplacementLeavesOtherActionsRegistered() {
