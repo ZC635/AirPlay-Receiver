@@ -315,7 +315,8 @@ void SettingsDialog::refreshFieldErrors() {
         label->hide();
     }
     for (const SettingsFieldResult &result : fieldResults_) {
-        if (!isFailureStatus(result.status)) {
+        if (!isFailureStatus(result.status)
+            || (globalResult_.has_value() && result.status != SettingsFieldStatus::RecoveryFailed)) {
             continue;
         }
         QLabel *label = nullptr;
@@ -349,24 +350,37 @@ void SettingsDialog::refreshPresentation() {
         lines.push_back(QString("Could not save %1: %2 No changes from this Apply were committed.")
                             .arg(persistence.targetPath, reason));
     }
-    int failures = 0;
-    bool appliedSomething = false;
-    for (const SettingsFieldResult &result : fieldResults_) {
-        failures += isFailureStatus(result.status) ? 1 : 0;
-        appliedSomething = appliedSomething || result.status == SettingsFieldStatus::Applied
-            || result.status == SettingsFieldStatus::Deferred;
-    }
-    if (failures > 0) {
-        const QString noun = failures == 1 ? "setting was" : "settings were";
-        QString line = QString("%1 %2 not applied; correct the highlighted fields.")
-                           .arg(failures).arg(noun);
-        if (appliedSomething) {
-            line.prepend("Some settings were applied. ");
+    if (globalResult_.has_value()) {
+        int recoveryFailures = 0;
+        for (const SettingsFieldResult &result : fieldResults_) {
+            recoveryFailures += result.status == SettingsFieldStatus::RecoveryFailed ? 1 : 0;
         }
-        lines.push_back(line);
-    } else if (const int changes = unappliedChangeCount(); changes > 0) {
-        lines.push_back(changes == 1 ? "1 setting has unapplied changes."
-                                    : QString("%1 settings have unapplied changes.").arg(changes));
+        if (recoveryFailures > 0) {
+            lines.push_back(recoveryFailures == 1
+                ? "Recovery failure requires attention; the previous setting could not be confirmed."
+                : QString("%1 recovery failures require attention; previous settings could not be confirmed.")
+                      .arg(recoveryFailures));
+        }
+    } else {
+        int failures = 0;
+        bool appliedSomething = false;
+        for (const SettingsFieldResult &result : fieldResults_) {
+            failures += isFailureStatus(result.status) ? 1 : 0;
+            appliedSomething = appliedSomething || result.status == SettingsFieldStatus::Applied
+                || result.status == SettingsFieldStatus::Deferred;
+        }
+        if (failures > 0) {
+            const QString noun = failures == 1 ? "setting was" : "settings were";
+            QString line = QString("%1 %2 not applied; correct the highlighted fields.")
+                               .arg(failures).arg(noun);
+            if (appliedSomething) {
+                line.prepend("Some settings were applied. ");
+            }
+            lines.push_back(line);
+        } else if (const int changes = unappliedChangeCount(); changes > 0) {
+            lines.push_back(changes == 1 ? "1 setting has unapplied changes."
+                                        : QString("%1 settings have unapplied changes.").arg(changes));
+        }
     }
     if (!pathActionError_.isEmpty()) {
         lines.push_back(pathActionError_);

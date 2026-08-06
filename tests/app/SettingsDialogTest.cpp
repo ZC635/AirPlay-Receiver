@@ -305,6 +305,86 @@ private slots:
                  QString("Could not save C:\\path\\airplay-settings.json: Access is denied. No changes from this Apply were committed."));
     }
 
+    void persistenceFailureDoesNotHighlightRolledBackFieldsOrSuggestEditingThem() {
+        FakeRecordingPathActions actions;
+        actions.openError = "Could not open recording directory";
+        SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *receiverError = dialog.findChild<QLabel *>("receiverNameError");
+        auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
+        auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        QVERIFY(summary != nullptr);
+        QVERIFY(receiver != nullptr);
+        QVERIFY(receiverError != nullptr);
+        QVERIFY(table != nullptr);
+        QVERIFY(open != nullptr);
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        SettingsApplyGlobalResult global;
+        global.persistence.targetPath = "C:\\path\\airplay-settings.json";
+        global.persistence.errorString = "Access is denied.";
+        outcome.globalResult = global;
+        outcome.fieldResults = {
+            {SettingsFieldId::receiverName(), QString("Attempted receiver"),
+             SettingsFieldStatus::ApplyFailedRolledBack, "persistence failed"},
+            {SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+T"),
+             SettingsFieldStatus::ApplyFailedRolledBack, "persistence failed"},
+            {SettingsFieldId::recordingOutputDirectory(), QString("C:/recordings"),
+             SettingsFieldStatus::ApplyFailedRolledBack, "persistence failed"},
+        };
+        dialog.presentApplyOutcome(outcome);
+
+        QCOMPARE(summary->text(),
+                 QString("Could not save C:\\path\\airplay-settings.json: Access is denied. No changes from this Apply were committed."));
+        QVERIFY(!summary->text().contains("correct the highlighted fields"));
+        QVERIFY(receiverError->isHidden());
+        auto *shortcutStatus = qobject_cast<QLabel *>(table->cellWidget(3, 2));
+        QVERIFY(shortcutStatus != nullptr);
+        QVERIFY(shortcutStatus->isHidden());
+
+        receiver->setText("Edited receiver");
+        QVERIFY(summary->text().contains("Could not save C:\\path\\airplay-settings.json"));
+        open->click();
+        QVERIFY(summary->text().contains(actions.openError));
+        QVERIFY(summary->text().contains("Could not save C:\\path\\airplay-settings.json"));
+    }
+
+    void persistenceFailureStillHighlightsRecoveryFailureDetails() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
+        QVERIFY(summary != nullptr);
+        QVERIFY(table != nullptr);
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        SettingsApplyGlobalResult global;
+        global.persistence.targetPath = "C:\\path\\airplay-settings.json";
+        global.persistence.errorString = "Access is denied.";
+        outcome.globalResult = global;
+        outcome.fieldResults = {
+            {SettingsFieldId::receiverName(), QString("Attempted receiver"),
+             SettingsFieldStatus::ApplyFailedRolledBack, "persistence failed"},
+            {SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+T"),
+             SettingsFieldStatus::RecoveryFailed, "candidate registration failed", 12345,
+             "previous binding could not be restored"},
+        };
+        dialog.presentApplyOutcome(outcome);
+
+        auto *shortcutStatus = qobject_cast<QLabel *>(table->cellWidget(3, 2));
+        QVERIFY(shortcutStatus != nullptr);
+        QVERIFY(!shortcutStatus->isHidden());
+        QVERIFY(shortcutStatus->text().contains("candidate registration failed"));
+        QVERIFY(shortcutStatus->text().contains("12345"));
+        QVERIFY(shortcutStatus->text().contains("previous binding could not be restored"));
+        QVERIFY(summary->text().contains("Could not save C:\\path\\airplay-settings.json"));
+        QVERIFY(summary->text().contains("Recovery failure requires attention"));
+        QVERIFY(!summary->text().contains("correct the highlighted fields"));
+        QVERIFY(!summary->text().contains("Previous setting was restored"));
+    }
+
     void listsAllShortcutActions() {
         SettingsDialog dialog(AppSettings::defaults());
         auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
