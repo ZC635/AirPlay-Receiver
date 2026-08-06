@@ -1,6 +1,7 @@
 #include "app/MainWindow.h"
 
 #include "app/AppSettingsStore.h"
+#include "app/SettingsApplyCoordinator.h"
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyTypes.h"
 #include "app/ToolbarWidget.h"
@@ -91,10 +92,14 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
       statusLabel_(new QLabel("Ready for AirPlay", this)),
       videoSurface_(new VideoSurfaceWidget(this)),
       settings_(std::move(settings)),
-      activeReceiverName_(settings_.receiverName()),
       hotkeys_(hotkeys),
       receiver_(receiver),
       settingsPath_(std::move(settingsPath)) {
+    if (!settingsPath_.isEmpty()) {
+        settingsStore_ = std::make_unique<AppSettingsStore>(settingsPath_);
+    }
+    settingsApplyCoordinator_ = std::make_unique<SettingsApplyCoordinator>(
+        hotkeys_.data(), settingsStore_.get(), receiver_.data(), &deferrer_);
     if (recordingPathActions == nullptr) {
         ownedRecordingPathActions_ = std::make_unique<WindowsRecordingPathActions>();
         recordingPathActions_ = ownedRecordingPathActions_.get();
@@ -172,9 +177,6 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
             updateRecordingUi();
         });
         updateRecordingUi();
-        if (receiver_->receiverName() != settings_.receiverName()) {
-            receiver_->applyReceiverName(settings_.receiverName());
-        }
     } else {
         updateRecordingUi();
     }
@@ -182,9 +184,21 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     applyAspectRatioLock(settings_.aspectRatioLock());
     applyVideoFitMode(settings_.videoFitMode());
 
-    activeVideoQuality_ = settings_.videoQuality();
     if (receiver_ != nullptr) {
-        receiver_->applyVideoQuality(activeVideoQuality_);
+        ReceiverConfigurationBatchRequest startupConfiguration;
+        startupConfiguration.receiverNameChanged = receiver_->receiverName() != settings_.receiverName();
+        startupConfiguration.resolutionChanged = receiver_->videoQuality().resolution
+            != settings_.videoQuality().resolution;
+        startupConfiguration.frameRateChanged = receiver_->videoQuality().frameRate
+            != settings_.videoQuality().frameRate;
+        startupConfiguration.requestedReceiverName = settings_.receiverName();
+        startupConfiguration.rollbackReceiverName = receiver_->receiverName();
+        startupConfiguration.requestedVideoQuality = settings_.videoQuality();
+        startupConfiguration.rollbackVideoQuality = receiver_->videoQuality();
+        if (startupConfiguration.receiverNameChanged || startupConfiguration.resolutionChanged
+            || startupConfiguration.frameRateChanged) {
+            receiver_->applyConfigurationBatch(startupConfiguration);
+        }
     }
 
     setVolume(settings_.volume());
@@ -197,20 +211,14 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
         statusLabel_->setText(formatHotkeyRegistrationFailures(hotkeyFailures));
     }
 
-    connect(&deferrer_, &SettingsChangeDeferrer::receiverNameReady, this, [this](const QString &name) {
-        if (applyReceiverNameNow(name, false)) {
-            deferrer_.markReceiverNameApplied(name);
-        } else if (receiver_ != nullptr) {
-            statusLabel_->setText(QString("Could not apply receiver name \"%1\"; will retry")
-                                      .arg(name));
-        }
-    });
-
-    connect(&deferrer_, &SettingsChangeDeferrer::videoQualityReady, this, [this](const VideoQualitySettings &quality) {
-        if (applyVideoQualityNow(quality)) {
-            deferrer_.markVideoQualityApplied(quality);
-        } else if (receiver_ != nullptr) {
-            statusLabel_->setText("Could not apply video quality; will retry");
+    connect(&deferrer_, &SettingsChangeDeferrer::receiverConfigurationReady, this,
+            [this](const ReceiverConfigurationBatchRequest &batch) {
+        const SettingsApplyOutcome outcome = settingsApplyCoordinator_->completeDeferredReceiverApply(
+            batch, settings_);
+        settings_ = outcome.committedSettings;
+        applyShortcutTooltips();
+        if (!outcome.mayClose) {
+            presentDeferredReceiverApplyFailure(outcome);
         }
     });
 
@@ -345,10 +353,10 @@ QString MainWindow::formatHotkeyRegistrationFailures(const QVector<HotkeyRegistr
 }
 
 bool MainWindow::saveSettings() const {
-    if (settingsPath_.isEmpty()) {
+    if (settingsStore_ == nullptr) {
         return true;
     }
-    return AppSettingsStore(settingsPath_).save(settings_).success;
+    return settingsStore_->save(settings_).success;
 }
 
 void MainWindow::restoreWindowState() {
@@ -406,134 +414,6 @@ void MainWindow::syncVolumeFromReceiver(double volume) {
     }
 }
 
-void MainWindow::handleReceiverNameChange(const QString &receiverName) {
-    if (receiverName == activeReceiverName_) {
-        deferrer_.receiverNameChanged(receiverName, activeReceiverName_);
-        return;
-    }
-
-    if (deferrer_.isReceiverNamePending(receiverName)) {
-        return;
-    }
-
-    if (receiver_ == nullptr) {
-        activeReceiverName_ = receiverName;
-        deferrer_.receiverNameChanged(receiverName, activeReceiverName_);
-        return;
-    }
-
-    if (receiverSessionActive_) {
-        const auto answer = QMessageBox::question(
-            this,
-            "Apply receiver name",
-            "Applying the new receiver name now will disconnect the connected device. Apply now?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No);
-        if (answer != QMessageBox::Yes) {
-            deferrer_.receiverNameChanged(receiverName, activeReceiverName_);
-            return;
-        }
-    }
-
-    if (receiver_->recordingState() != RecordingState::Idle) {
-        deferrer_.deferReceiverNameUntilRecordingIdle(receiverName);
-        if (receiver_->recordingState() == RecordingState::Recording) {
-            receiver_->stopRecording();
-        }
-        return;
-    }
-
-    if (applyReceiverNameNow(receiverName)) {
-        deferrer_.markReceiverNameApplied(receiverName);
-    }
-}
-
-bool MainWindow::applyReceiverNameNow(const QString &receiverName, bool revertOnFailure) {
-    if (receiver_ == nullptr) {
-        activeReceiverName_ = receiverName;
-        return true;
-    }
-
-    if (receiver_->applyReceiverName(receiverName)) {
-        activeReceiverName_ = receiverName;
-        return true;
-    }
-
-    if (revertOnFailure) {
-        revertReceiverNameToDefaultAfterApplyFailure();
-    }
-    return false;
-}
-
-void MainWindow::revertReceiverNameToDefaultAfterApplyFailure() {
-    const QString defaultName = AppSettings::defaults().receiverName();
-    settings_.setReceiverName(defaultName);
-    activeReceiverName_ = defaultName;
-    deferrer_.receiverNameChanged(defaultName, activeReceiverName_);
-    if (receiver_ != nullptr && receiver_->receiverName() != defaultName) {
-        receiver_->applyReceiverName(defaultName);
-    }
-
-    if (!saveSettings()) {
-        statusLabel_->setText("Could not save settings");
-        return;
-    }
-    statusLabel_->setText("Could not apply receiver name; reverted to default");
-}
-
-void MainWindow::handleVideoQualityChange(const VideoQualitySettings &quality) {
-    if (quality == activeVideoQuality_) {
-        deferrer_.videoQualityChanged(quality, activeVideoQuality_);
-        return;
-    }
-
-    if (deferrer_.isVideoQualityPending(quality)) {
-        return;
-    }
-
-    if (receiver_ == nullptr) {
-        activeVideoQuality_ = quality;
-        deferrer_.videoQualityChanged(quality, activeVideoQuality_);
-        return;
-    }
-
-    if (receiverSessionActive_) {
-        const auto answer = QMessageBox::question(
-            this,
-            "Apply video quality",
-            "Applying the new video quality now will restart AirPlay and disconnect the connected device. Apply now?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No);
-        if (answer != QMessageBox::Yes) {
-            deferrer_.videoQualityChanged(quality, activeVideoQuality_);
-            return;
-        }
-    }
-
-    if (receiver_->recordingState() != RecordingState::Idle) {
-        deferrer_.deferVideoQualityUntilRecordingIdle(quality);
-        if (receiver_->recordingState() == RecordingState::Recording) {
-            receiver_->stopRecording();
-        }
-        return;
-    }
-
-    if (applyVideoQualityNow(quality)) {
-        deferrer_.markVideoQualityApplied(quality);
-    } else {
-        deferrer_.videoQualityChanged(quality, activeVideoQuality_);
-        statusLabel_->setText("Could not apply video quality; will retry");
-    }
-}
-
-bool MainWindow::applyVideoQualityNow(const VideoQualitySettings &quality) {
-    if (receiver_ != nullptr && !receiver_->applyVideoQuality(quality)) {
-        return false;
-    }
-    activeVideoQuality_ = quality;
-    return true;
-}
-
 void MainWindow::updateReceiverState(ReceiverState state) {
     const bool wasSessionActive = receiverSessionActive_;
     receiverConnected_ = state == ReceiverState::Connected;
@@ -572,27 +452,67 @@ void MainWindow::updateReceiverState(ReceiverState state) {
 
 void MainWindow::showSettingsDialog() {
     SettingsDialog dialog(settings_, this, recordingPathActions_);
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
+    connect(&dialog, &SettingsDialog::applyRequested, this, [this, &dialog](const AppSettings &draft) {
+        const RecordingState recordingState = receiver_ == nullptr
+            ? RecordingState::Idle : receiver_->recordingState();
+        const SettingsApplyPlan plan = settingsApplyCoordinator_->plan(
+            settings_, draft, receiverSessionActive_, recordingState);
+        const std::optional<ReceiverApplyTiming> timing = chooseReceiverApplyTiming(plan);
+        if (!timing.has_value()) {
+            return;
+        }
+        const SettingsApplyOutcome outcome = settingsApplyCoordinator_->execute(plan, *timing);
+        settings_ = outcome.committedSettings;
+        applyShortcutTooltips();
+        dialog.presentApplyOutcome(outcome);
+    });
+    dialog.exec();
+}
+
+std::optional<ReceiverApplyTiming> MainWindow::chooseReceiverApplyTiming(
+    const SettingsApplyPlan &plan) {
+    if (!plan.requiresReceiverTimingDecision) {
+        return ReceiverApplyTiming::Immediate;
     }
 
-    const AppSettings previousSettings = settings_;
-    settings_ = dialog.settings();
-    const auto hotkeyFailures = registerHotkeys();
-    if (!hotkeyFailures.isEmpty()) {
-        settings_ = previousSettings;
-        registerHotkeys();
-        statusLabel_->setText(formatHotkeyRegistrationFailures(hotkeyFailures));
-        return;
+    QMessageBox prompt(QMessageBox::Question, "Apply receiver configuration",
+                       "Applying receiver configuration now will disconnect the connected device.",
+                       QMessageBox::NoButton, this);
+    auto *applyNow = prompt.addButton("Disconnect and apply now", QMessageBox::AcceptRole);
+    auto *afterDisconnect = prompt.addButton("Apply after disconnect", QMessageBox::ActionRole);
+    prompt.addButton(QMessageBox::Cancel);
+    prompt.exec();
+    if (prompt.clickedButton() == applyNow) {
+        return ReceiverApplyTiming::Immediate;
     }
+    if (prompt.clickedButton() == afterDisconnect) {
+        return ReceiverApplyTiming::AfterDisconnect;
+    }
+    return std::nullopt;
+}
 
-    applyShortcutTooltips();
-    setVolume(settings_.volume());
-    if (!saveSettings()) {
-        statusLabel_->setText("Could not save settings");
+void MainWindow::presentDeferredReceiverApplyFailure(const SettingsApplyOutcome &outcome) {
+    QStringList lines;
+    for (const SettingsFieldResult &field : outcome.fieldResults) {
+        if (!isFailureStatus(field.status)) {
+            continue;
+        }
+        QString line = QString("%1: attempted %2. %3")
+                           .arg(settingsFieldDisplayName(field.field),
+                                formatSettingsFieldValue(field.attemptedValue), field.reason);
+        if (field.status == SettingsFieldStatus::ApplyFailedRolledBack) {
+            line += " Rollback succeeded.";
+        } else if (!field.recoveryError.isEmpty()) {
+            line += QString(" Recovery failed: %1").arg(field.recoveryError);
+        } else if (field.status == SettingsFieldStatus::RecoveryFailed) {
+            line += " Recovery could not be confirmed.";
+        }
+        lines.append(line);
     }
-    handleReceiverNameChange(settings_.receiverName());
-    handleVideoQualityChange(settings_.videoQuality());
+    if (!lines.isEmpty()) {
+        QMessageBox::critical(this, "Deferred receiver configuration failed", lines.join("\n\n"),
+                              QMessageBox::Ok);
+    }
 }
 
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result) {
