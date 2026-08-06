@@ -146,6 +146,10 @@ QString describeRequestedConfiguration(const ReceiverConfigurationBatchRequest &
                                          mergedReceiverConfigurationVideoQuality(batch));
 }
 
+QString describeRollbackConfiguration(const ReceiverConfigurationBatchRequest &batch) {
+    return describeReceiverConfiguration(batch.rollbackReceiverName, batch.rollbackVideoQuality);
+}
+
 void restoreBatchFields(const ReceiverConfigurationBatchRequest &batch, AppSettings *settings) {
     if (settings == nullptr) {
         return;
@@ -261,6 +265,80 @@ void markReceiverCompensationFailure(SettingsApplyOutcome *outcome,
             "The saved state cannot be confirmed.")
             .arg(runtime, compensation.errorString);
     }
+}
+
+void markUnavailableReceiverCompensated(SettingsApplyOutcome *outcome,
+                                        const ReceiverConfigurationBatchRequest &batch,
+                                        const ReceiverConfigurationBatchResult &unavailable) {
+    if (outcome == nullptr) {
+        return;
+    }
+    const QString runtime = describeReceiverConfiguration(unavailable.knownRuntimeReceiverName,
+                                                           unavailable.knownRuntimeVideoQuality);
+    const bool runtimeUnavailable = unavailable.knownRuntimeReceiverName == QStringLiteral("unavailable");
+    for (SettingsFieldResult &fieldResult : outcome->fieldResults) {
+        if (!batchChangesField(batch, fieldResult.field)) {
+            continue;
+        }
+        fieldResult.status = SettingsFieldStatus::RecoveryFailed;
+        fieldResult.reason = QStringLiteral(
+            "Receiver configuration did not start: %1. The saved state was restored to %2.")
+            .arg(unavailable.applyError, describeRollbackConfiguration(batch));
+        fieldResult.recoveryError = runtimeUnavailable
+            ? QStringLiteral("The receiver is unavailable; runtime state is unconfirmed.")
+            : QStringLiteral("No receiver operation was scheduled. Known runtime state is %1 and is unchanged.")
+                  .arg(runtime);
+    }
+}
+
+void markUnavailableReceiverCompensationFailure(
+    SettingsApplyOutcome *outcome,
+    const ReceiverConfigurationBatchRequest &batch,
+    const ReceiverConfigurationBatchResult &unavailable,
+    const AppSettingsSaveResult &compensation) {
+    if (outcome == nullptr) {
+        return;
+    }
+    const QString runtime = describeReceiverConfiguration(unavailable.knownRuntimeReceiverName,
+                                                           unavailable.knownRuntimeVideoQuality);
+    const bool runtimeUnavailable = unavailable.knownRuntimeReceiverName == QStringLiteral("unavailable");
+    for (SettingsFieldResult &fieldResult : outcome->fieldResults) {
+        if (!batchChangesField(batch, fieldResult.field)) {
+            continue;
+        }
+        fieldResult.status = SettingsFieldStatus::RecoveryFailed;
+        fieldResult.reason = QStringLiteral(
+            "Receiver configuration did not start: %1. The requested JSON was saved, but restoring it failed.")
+            .arg(unavailable.applyError);
+        fieldResult.recoveryError = QStringLiteral(
+            "Compensating JSON save failed: %1. The saved state cannot be confirmed. Known runtime state is %2%3.")
+            .arg(compensation.errorString, runtime,
+                 runtimeUnavailable ? QStringLiteral(" (receiver unavailable)")
+                                  : QStringLiteral(" (unchanged because no receiver operation was scheduled)"));
+    }
+}
+
+void compensateUnavailableReceiver(SettingsApplyOutcome *outcome,
+                                   const ReceiverConfigurationBatchRequest &batch,
+                                   const AppSettings &prospective,
+                                   SettingsPersistence *persistence,
+                                   const ReceiverConfigurationBatchResult &unavailable) {
+    if (outcome == nullptr) {
+        return;
+    }
+    AppSettings compensated = prospective;
+    restoreBatchFields(batch, &compensated);
+    const AppSettingsSaveResult compensation = persistence == nullptr
+        ? AppSettingsSaveResult{true} : persistence->save(compensated);
+    if (compensation.success) {
+        outcome->committedSettings = compensated;
+        markUnavailableReceiverCompensated(outcome, batch, unavailable);
+        return;
+    }
+
+    outcome->globalResult = SettingsApplyGlobalResult{
+        SettingsApplyGlobalStatus::PersistenceFailed, compensation};
+    markUnavailableReceiverCompensationFailure(outcome, batch, unavailable, compensation);
 }
 
 SettingsApplyOutcome makeDeferredCompletionOutcome(const AppSettings &currentlyCommitted) {
@@ -449,8 +527,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
                                                                             : receiver_->receiverName();
                 unavailable.knownRuntimeVideoQuality = receiver_ == nullptr
                     ? batch.rollbackVideoQuality : receiver_->videoQuality();
-                markReceiverRecoveryFailure(&outcome, batch, unavailable,
-                                            describeRequestedConfiguration(batch));
+                compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable);
             }
             updateMayClose(&outcome);
             return outcome;
@@ -471,8 +548,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
                                                                             : receiver_->receiverName();
                 unavailable.knownRuntimeVideoQuality = receiver_ == nullptr
                     ? batch.rollbackVideoQuality : receiver_->videoQuality();
-                markReceiverRecoveryFailure(&outcome, batch, unavailable,
-                                            describeRequestedConfiguration(batch));
+                compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable);
             }
             updateMayClose(&outcome);
             return outcome;
@@ -484,8 +560,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
             unavailable.recoveryError = QStringLiteral("No runtime receiver state is available");
             unavailable.knownRuntimeReceiverName = QStringLiteral("unavailable");
             unavailable.knownRuntimeVideoQuality = batch.rollbackVideoQuality;
-            markReceiverRecoveryFailure(&outcome, batch, unavailable,
-                                        describeRequestedConfiguration(batch));
+            compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable);
             updateMayClose(&outcome);
             return outcome;
         }
