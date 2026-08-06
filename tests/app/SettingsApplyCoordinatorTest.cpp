@@ -6,6 +6,8 @@
 #include "backend/FakeAirPlayReceiver.h"
 #include "platform/FakeHotkeyService.h"
 
+#include <QHash>
+
 namespace {
 
 class CountingPersistence final : public SettingsPersistence {
@@ -16,6 +18,71 @@ public:
     }
 
     mutable int saveCount = 0;
+};
+
+class RecordingSettingsPersistence final : public SettingsPersistence {
+public:
+    AppSettingsSaveResult save(const AppSettings &settings) const override {
+        saved.append(settings);
+        if (responses.isEmpty()) {
+            return {true};
+        }
+        return responses.takeFirst();
+    }
+
+    mutable QVector<AppSettings> saved;
+    mutable QVector<AppSettingsSaveResult> responses;
+};
+
+class RecordingHotkeyService final : public HotkeyService {
+public:
+    struct Call {
+        ShortcutAction action;
+        QKeySequence sequence;
+    };
+
+    using HotkeyService::HotkeyService;
+
+    HotkeyRegistrationResult registerShortcut(ShortcutAction action,
+                                              const QKeySequence &sequence) override {
+        calls.append({action, sequence});
+        const HotkeyRegistrationResult result = responses.isEmpty()
+            ? defaultResult(action, sequence)
+            : responses.takeFirst();
+        const int key = static_cast<int>(action);
+        if (result.registered) {
+            activeBindings.insert(key, sequence);
+        } else if (!result.previousRestored) {
+            activeBindings.remove(key);
+        }
+        return result;
+    }
+
+    void unregisterAll() override { ++unregisterAllCount; }
+
+    void seed(const AppSettings &settings) {
+        for (const SettingsFieldId &field : allSettingsFields()) {
+            if (field.kind == SettingsFieldKind::Shortcut && field.shortcutAction.has_value()) {
+                activeBindings.insert(static_cast<int>(*field.shortcutAction),
+                                      settings.shortcutFor(*field.shortcutAction));
+            }
+        }
+    }
+
+    QKeySequence active(ShortcutAction action) const {
+        return activeBindings.value(static_cast<int>(action));
+    }
+
+    QVector<Call> calls;
+    QVector<HotkeyRegistrationResult> responses;
+    QHash<int, QKeySequence> activeBindings;
+    int unregisterAllCount = 0;
+
+private:
+    HotkeyRegistrationResult defaultResult(ShortcutAction action,
+                                           const QKeySequence &sequence) const {
+        return {true, active(action) == sequence};
+    }
 };
 
 const SettingsFieldResult &requireResult(const SettingsApplyPlan &plan, const SettingsFieldId &field) {
@@ -39,6 +106,28 @@ void verifyValidationFailure(const SettingsApplyPlan &plan, const SettingsFieldI
     QCOMPARE(result.reason, reason);
     QVERIFY(!result.nativeErrorCode.has_value());
     QVERIFY(result.recoveryError.isEmpty());
+}
+
+const SettingsFieldResult &requireResult(const SettingsApplyOutcome &outcome,
+                                         const SettingsFieldId &field) {
+    const SettingsFieldResult *result = resultForField(outcome.fieldResults, field);
+    Q_ASSERT(result != nullptr);
+    return *result;
+}
+
+void verifyStatus(const SettingsApplyOutcome &outcome, const SettingsFieldId &field,
+                  SettingsFieldStatus status) {
+    QCOMPARE(requireResult(outcome, field).status, status);
+}
+
+QVector<ShortcutAction> shortcutActionsInSettingsOrder() {
+    QVector<ShortcutAction> actions;
+    for (const SettingsFieldId &field : allSettingsFields()) {
+        if (field.kind == SettingsFieldKind::Shortcut && field.shortcutAction.has_value()) {
+            actions.append(*field.shortcutAction);
+        }
+    }
+    return actions;
 }
 
 } // namespace
@@ -235,8 +324,9 @@ private slots:
         QCOMPARE(plan.candidate.receiverName(), candidate.receiverName());
         QCOMPARE(plan.receiverSessionActive, false);
         QCOMPARE(plan.validationResults.size(), allSettingsFields().size());
+        const QVector<SettingsFieldId> fields = allSettingsFields();
         for (qsizetype index = 0; index < plan.validationResults.size(); ++index) {
-            const SettingsFieldId &field = allSettingsFields().at(index);
+            const SettingsFieldId &field = fields.at(index);
             QCOMPARE(plan.validationResults.at(index).field, field);
             QVERIFY(plan.validationResults.at(index).attemptedValue
                     == settingsFieldValue(candidate, field));
@@ -267,6 +357,317 @@ private slots:
         const SettingsApplyPlan nullPlan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
                                                 .plan(settings, settings, false, RecordingState::Idle);
         QCOMPARE(nullPlan.validationResults.size(), 13);
+    }
+
+    void oneShortcutFailureDoesNotRollbackAnotherShortcut() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        const QKeySequence alwaysOnTop("Ctrl+Alt+Y");
+        const QKeySequence volumeUp("Ctrl+Alt+U");
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, alwaysOnTop);
+        candidate.setShortcut(ShortcutAction::VolumeUp, volumeUp);
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        hotkeys.responses = {{true, false},
+                              {false, false, HotkeyError{123, "Candidate rejected"}, true}};
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(persistence.saved.first().shortcutFor(ShortcutAction::ToggleAlwaysOnTop), alwaysOnTop);
+        QCOMPARE(persistence.saved.first().shortcutFor(ShortcutAction::VolumeUp),
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop), alwaysOnTop);
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::VolumeUp),
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
+                     SettingsFieldStatus::Applied);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        QVERIFY(requireResult(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp))
+                    .reason.contains("previous shortcut was restored"));
+        QCOMPARE(hotkeys.active(ShortcutAction::ToggleAlwaysOnTop), alwaysOnTop);
+        QVERIFY(!outcome.mayClose);
+    }
+
+    void failedShortcutKeepsBaselineWhileRecordingFieldsCommit() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        candidate.setRecordingOutputDirectory("C:/AirPlay-recordings");
+        candidate.setShowRecordingCompletionMessage(false);
+        VideoQualitySettings quality = candidate.videoQuality();
+        quality.frameRate = VideoFrameRate::Fps60;
+        candidate.setVideoQuality(quality);
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        hotkeys.responses = {{false, false, HotkeyError{321, "Denied"}, true}};
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::AfterDisconnect);
+
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 baseline.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(outcome.committedSettings.videoQuality().frameRate, VideoFrameRate::Fps60);
+        QCOMPARE(outcome.committedSettings.recordingOutputDirectory(),
+                 candidate.recordingOutputDirectory());
+        QCOMPARE(outcome.committedSettings.showRecordingCompletionMessage(), false);
+        verifyStatus(outcome, SettingsFieldId::videoFrameRate(), SettingsFieldStatus::Applied);
+        verifyStatus(outcome, SettingsFieldId::recordingOutputDirectory(),
+                     SettingsFieldStatus::Applied);
+        QVERIFY(!outcome.mayClose);
+    }
+
+    void candidateAndRestorationFailureReportsRecoveryFailed() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        hotkeys.responses = {{false, false, HotkeyError{87, "Candidate rejected"}, false,
+                              HotkeyError{88, "Restore rejected"}}};
+        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &result = requireResult(
+            outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop));
+
+        QCOMPARE(result.status, SettingsFieldStatus::RecoveryFailed);
+        QCOMPARE(result.nativeErrorCode, std::optional<quint32>(87));
+        QVERIFY(result.reason.contains("Candidate rejected"));
+        QVERIFY(result.recoveryError.contains("previous shortcut could not be restored"));
+        QVERIFY(result.recoveryError.contains("no confirmed global shortcut"));
+        QVERIFY(result.recoveryError.contains("Restore rejected"));
+        QVERIFY(result.recoveryError.contains("88"));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 baseline.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QVERIFY(!outcome.mayClose);
+    }
+
+    void executeProcessesAllSevenValidShortcutRowsIncludingUnchanged() {
+        const AppSettings baseline = AppSettings::defaults();
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+
+        coordinator.execute(coordinator.plan(baseline, baseline, false, RecordingState::Idle),
+                            ReceiverApplyTiming::Immediate);
+
+        const QVector<ShortcutAction> expected = shortcutActionsInSettingsOrder();
+        QCOMPARE(hotkeys.calls.size(), expected.size());
+        for (qsizetype index = 0; index < expected.size(); ++index) {
+            QCOMPARE(hotkeys.calls.at(index).action, expected.at(index));
+            QCOMPARE(hotkeys.calls.at(index).sequence, baseline.shortcutFor(expected.at(index)));
+        }
+        QCOMPARE(hotkeys.unregisterAllCount, 0);
+    }
+
+    void secondApplyProcessesEveryShortcutAgain() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+
+        const SettingsApplyOutcome first = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        coordinator.execute(coordinator.plan(first.committedSettings, candidate, false, RecordingState::Idle),
+                            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(hotkeys.calls.size(), 14);
+        QCOMPARE(hotkeys.calls.at(7).action, ShortcutAction::ToggleAlwaysOnTop);
+    }
+
+    void multipleValidationFailuresDoNotPreventUnrelatedPersistence() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName({});
+        candidate.setShortcut(ShortcutAction::VolumeUp, {});
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        candidate.setRecordingOutputDirectory("C:/AirPlay-recordings");
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::VolumeUp),
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(outcome.committedSettings.recordingOutputDirectory(), candidate.recordingOutputDirectory());
+        verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::ValidationFailed);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp),
+                     SettingsFieldStatus::ValidationFailed);
+    }
+
+    void persistenceOpenWriteAndCommitFailuresCommitNothing() {
+        for (AppSettingsSaveStage stage : {AppSettingsSaveStage::Open, AppSettingsSaveStage::Write,
+                                           AppSettingsSaveStage::Commit}) {
+            const AppSettings baseline = AppSettings::defaults();
+            AppSettings candidate = baseline;
+            candidate.setReceiverName("Desk Receiver");
+            RecordingHotkeyService hotkeys;
+            hotkeys.seed(baseline);
+            RecordingSettingsPersistence persistence;
+            const AppSettingsSaveResult failure{false, "C:/settings.json", stage,
+                                                QFileDevice::WriteError, "Exact save failure"};
+            persistence.responses.append(failure);
+            FakeAirPlayReceiver receiver;
+            SettingsChangeDeferrer deferrer;
+            SettingsApplyCoordinator coordinator(&hotkeys, &persistence, &receiver, &deferrer);
+
+            const SettingsApplyOutcome outcome = coordinator.execute(
+                coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+                ReceiverApplyTiming::Immediate);
+
+            QCOMPARE(persistence.saved.size(), 1);
+            QVERIFY(outcome.globalResult.has_value());
+            QCOMPARE(outcome.globalResult->persistence.success, failure.success);
+            QCOMPARE(outcome.globalResult->persistence.targetPath, failure.targetPath);
+            QCOMPARE(outcome.globalResult->persistence.failureStage, failure.failureStage);
+            QCOMPARE(outcome.globalResult->persistence.fileError, failure.fileError);
+            QCOMPARE(outcome.globalResult->persistence.errorString, failure.errorString);
+            QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
+            QCOMPARE(receiver.configurationBatchCount, 0);
+            QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+            QVERIFY(!outcome.mayClose);
+        }
+    }
+
+    void persistenceFailureCompensatesEveryChangedHotkeyInReverseOrder() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        candidate.setShortcut(ShortcutAction::VolumeUp, QKeySequence("Ctrl+Alt+U"));
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        RecordingSettingsPersistence persistence;
+        persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                                      QFileDevice::WriteError, "Commit failed"});
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(hotkeys.calls.size(), 9);
+        QCOMPARE(hotkeys.calls.at(7).action, ShortcutAction::VolumeUp);
+        QCOMPARE(hotkeys.calls.at(7).sequence, baseline.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(hotkeys.calls.at(8).action, ShortcutAction::ToggleAlwaysOnTop);
+        QCOMPARE(hotkeys.calls.at(8).sequence, baseline.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(hotkeys.active(ShortcutAction::ToggleAlwaysOnTop),
+                 baseline.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(hotkeys.active(ShortcutAction::VolumeUp), baseline.shortcutFor(ShortcutAction::VolumeUp));
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        QCOMPARE(requireResult(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop)).reason,
+                 QString("Not committed because the settings file could not be saved."));
+        QCOMPARE(requireResult(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp)).reason,
+                 QString("Not committed because the settings file could not be saved."));
+        QVERIFY(!outcome.mayClose);
+    }
+
+    void persistenceFailureWithHotkeyCompensationFailureReportsRecoveryFailed() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        candidate.setShortcut(ShortcutAction::VolumeUp, QKeySequence("Ctrl+Alt+U"));
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        hotkeys.responses = {{true, false}, {true, false}, {true, true}, {true, true}, {true, true},
+                              {true, true}, {true, true},
+                              {false, false, HotkeyError{91, "Baseline rejected"}, false,
+                               HotkeyError{92, "Candidate also unavailable"}},
+                              {true, false}};
+        RecordingSettingsPersistence persistence;
+        persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                                      QFileDevice::WriteError, "Commit failed"});
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &volumeUp = requireResult(
+            outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp));
+
+        QVERIFY(outcome.globalResult.has_value());
+        QCOMPARE(volumeUp.status, SettingsFieldStatus::RecoveryFailed);
+        QCOMPARE(volumeUp.reason, QString("Not committed because the settings file could not be saved."));
+        QVERIFY(volumeUp.recoveryError.contains("baseline shortcut restoration failed",
+                                                Qt::CaseInsensitive));
+        QVERIFY(volumeUp.recoveryError.contains("Baseline rejected"));
+        QVERIFY(volumeUp.recoveryError.contains("Candidate also unavailable"));
+        QCOMPARE(hotkeys.active(ShortcutAction::VolumeUp), QKeySequence());
+        QCOMPARE(hotkeys.active(ShortcutAction::ToggleAlwaysOnTop),
+                 baseline.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+    }
+
+    void nullPersistenceSucceedsAndNullHotkeysAdoptChangedShortcuts() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        SettingsApplyCoordinator coordinator(nullptr, nullptr, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::AfterDisconnect);
+
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
+                     SettingsFieldStatus::Applied);
+        QVERIFY(!outcome.globalResult.has_value());
+        QVERIFY(outcome.mayClose);
+    }
+
+    void mayCloseAndSnapshotMergeFollowExecutionResults() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName({});
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        candidate.setRecordingOutputDirectory("C:/AirPlay-recordings");
+        candidate.setVolume(5);
+        candidate.setAspectRatioLock(true);
+        candidate.setVideoFitMode(true);
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome failedValidation = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        QVERIFY(!failedValidation.mayClose);
+        QCOMPARE(failedValidation.committedSettings.receiverName(), baseline.receiverName());
+        QCOMPARE(failedValidation.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(failedValidation.committedSettings.recordingOutputDirectory(),
+                 candidate.recordingOutputDirectory());
+        QCOMPARE(failedValidation.committedSettings.volume(), baseline.volume());
+        QCOMPARE(failedValidation.committedSettings.aspectRatioLock(), baseline.aspectRatioLock());
+        QCOMPARE(failedValidation.committedSettings.videoFitMode(), baseline.videoFitMode());
+
+        const SettingsApplyOutcome success = coordinator.execute(
+            coordinator.plan(baseline, baseline, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        QVERIFY(success.mayClose);
     }
 };
 
