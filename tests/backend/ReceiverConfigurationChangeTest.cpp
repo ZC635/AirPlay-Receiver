@@ -37,7 +37,7 @@ private slots:
         QCOMPARE(result.knownRuntimeVideoQuality, request.requestedVideoQuality);
     }
 
-    void frameRateOnlyPreservesRequestedResolution() {
+    void frameRateOnlyPreservesRollbackResolution() {
         ReceiverConfigurationBatchRequest request;
         request.frameRateChanged = true;
         request.requestedReceiverName = QStringLiteral("Ignored requested name");
@@ -65,10 +65,29 @@ private slots:
         QCOMPARE(result.status, ReceiverConfigurationBatchStatus::Applied);
         QCOMPARE(nameStoreCount, 0);
         QCOMPARE(qualityStoreCount, 1);
-        QCOMPARE(storedQuality.resolution, VideoResolution::P720);
+        QCOMPARE(storedQuality.resolution, VideoResolution::P1080);
         QCOMPARE(storedQuality.frameRate, VideoFrameRate::Fps60);
         QCOMPARE(restartCount, 1);
         QCOMPARE(result.knownRuntimeReceiverName, request.rollbackReceiverName);
+    }
+
+    void resolutionOnlyPreservesRollbackFrameRate() {
+        ReceiverConfigurationBatchRequest request;
+        request.resolutionChanged = true;
+        request.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps60};
+        request.rollbackVideoQuality = {VideoResolution::P1080, VideoFrameRate::Fps30};
+
+        VideoQualitySettings storedQuality;
+        ReceiverConfigurationBatchOperations operations;
+        operations.storeVideoQuality = [&](const VideoQualitySettings &quality) { storedQuality = quality; };
+        operations.restartWithRequestedConfiguration = [] { return ReceiverOperationResult{true, {}}; };
+
+        const auto result = applyReceiverConfigurationBatch(request, operations);
+
+        QCOMPARE(result.status, ReceiverConfigurationBatchStatus::Applied);
+        QCOMPARE(storedQuality.resolution, VideoResolution::P720);
+        QCOMPARE(storedQuality.frameRate, VideoFrameRate::Fps30);
+        QCOMPARE(result.knownRuntimeVideoQuality, storedQuality);
     }
 
     void requestedRestartFailureRestoresAllChangedValues() {
