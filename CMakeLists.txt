@@ -21,6 +21,8 @@ add_library(airplay_app_lib
     src/app/AppSettingsStore.h
     src/app/SettingsApplyTypes.cpp
     src/app/SettingsApplyTypes.h
+    src/app/SettingsApplyCoordinator.cpp
+    src/app/SettingsApplyCoordinator.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
     src/app/RecordingStartupCleanup.cpp
