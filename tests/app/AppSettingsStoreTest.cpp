@@ -6,10 +6,149 @@
 #include <QTemporaryDir>
 #include "app/AppSettingsStore.h"
 
+struct FakeSettingsSaveDeviceState {
+    bool openResult = true;
+    std::function<qint64(const QByteArray &)> bytesWritten = [](const QByteArray &data) {
+        return data.size();
+    };
+    bool commitResult = true;
+    QFileDevice::FileError fileError = QFileDevice::NoError;
+    QString errorText;
+    bool openCalled = false;
+    bool writeCalled = false;
+    bool commitCalled = false;
+    QByteArray writtenData;
+};
+
+class FakeSettingsSaveDevice final : public SettingsSaveDevice {
+public:
+    explicit FakeSettingsSaveDevice(std::shared_ptr<FakeSettingsSaveDeviceState> state)
+        : state_(std::move(state)) {}
+
+    bool open() override {
+        state_->openCalled = true;
+        return state_->openResult;
+    }
+
+    qint64 write(const QByteArray &data) override {
+        state_->writeCalled = true;
+        state_->writtenData = data;
+        return state_->bytesWritten(data);
+    }
+
+    bool commit() override {
+        state_->commitCalled = true;
+        return state_->commitResult;
+    }
+
+    QFileDevice::FileError error() const override {
+        return state_->fileError;
+    }
+
+    QString errorString() const override {
+        return state_->errorText;
+    }
+
+private:
+    std::shared_ptr<FakeSettingsSaveDeviceState> state_;
+};
+
 class AppSettingsStoreTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void saveReportsOpenFailureDetails() {
+        const QString path = "settings.json";
+        auto device = std::make_shared<FakeSettingsSaveDeviceState>();
+        device->openResult = false;
+        device->fileError = QFileDevice::OpenError;
+        device->errorText = "cannot open settings";
+        AppSettingsStore store(path, [device](const QString &) {
+            return std::make_unique<FakeSettingsSaveDevice>(device);
+        });
+
+        const AppSettingsSaveResult result = store.save(AppSettings::defaults());
+
+        QVERIFY(!result.success);
+        QCOMPARE(result.targetPath, QFileInfo(path).absoluteFilePath());
+        QCOMPARE(result.failureStage, std::optional<AppSettingsSaveStage>(AppSettingsSaveStage::Open));
+        QCOMPARE(result.fileError, QFileDevice::OpenError);
+        QCOMPARE(result.errorString, QString("cannot open settings"));
+        QVERIFY(device->openCalled);
+        QVERIFY(!device->writeCalled);
+        QVERIFY(!device->commitCalled);
+    }
+
+    void saveReportsWriteFailureDetails() {
+        const QString path = "settings.json";
+        auto device = std::make_shared<FakeSettingsSaveDeviceState>();
+        device->bytesWritten = [](const QByteArray &data) {
+            return data.size() - 1;
+        };
+        device->fileError = QFileDevice::WriteError;
+        device->errorText = "cannot write settings";
+        AppSettingsStore store(path, [device](const QString &) {
+            return std::make_unique<FakeSettingsSaveDevice>(device);
+        });
+
+        const AppSettingsSaveResult result = store.save(AppSettings::defaults());
+
+        QVERIFY(!result.success);
+        QCOMPARE(result.targetPath, QFileInfo(path).absoluteFilePath());
+        QCOMPARE(result.failureStage, std::optional<AppSettingsSaveStage>(AppSettingsSaveStage::Write));
+        QCOMPARE(result.fileError, QFileDevice::WriteError);
+        QCOMPARE(result.errorString, QString("cannot write settings"));
+        QVERIFY(device->openCalled);
+        QVERIFY(device->writeCalled);
+        QVERIFY(!device->commitCalled);
+    }
+
+    void saveReportsCommitFailureDetails() {
+        const QString path = "settings.json";
+        auto device = std::make_shared<FakeSettingsSaveDeviceState>();
+        device->commitResult = false;
+        device->fileError = QFileDevice::RenameError;
+        device->errorText = "cannot replace settings";
+        AppSettingsStore store(path, [device](const QString &) {
+            return std::make_unique<FakeSettingsSaveDevice>(device);
+        });
+
+        const AppSettingsSaveResult result = store.save(AppSettings::defaults());
+
+        QVERIFY(!result.success);
+        QCOMPARE(result.targetPath, QFileInfo(path).absoluteFilePath());
+        QCOMPARE(result.failureStage, std::optional<AppSettingsSaveStage>(AppSettingsSaveStage::Commit));
+        QCOMPARE(result.fileError, QFileDevice::RenameError);
+        QCOMPARE(result.errorString, QString("cannot replace settings"));
+        QVERIFY(device->openCalled);
+        QVERIFY(device->writeCalled);
+        QVERIFY(device->commitCalled);
+    }
+
+    void saveReportsSuccessDetailsAndWritesJsonToDevice() {
+        const QString path = "settings.json";
+        auto device = std::make_shared<FakeSettingsSaveDeviceState>();
+        AppSettings settings = AppSettings::defaults();
+        settings.setReceiverName("Desk Receiver");
+        AppSettingsStore store(path, [device](const QString &) {
+            return std::make_unique<FakeSettingsSaveDevice>(device);
+        });
+
+        const AppSettingsSaveResult result = store.save(settings);
+
+        QVERIFY(result.success);
+        QCOMPARE(result.targetPath, QFileInfo(path).absoluteFilePath());
+        QVERIFY(!result.failureStage.has_value());
+        QCOMPARE(result.fileError, QFileDevice::NoError);
+        QVERIFY(result.errorString.isEmpty());
+        QVERIFY(device->openCalled);
+        QVERIFY(device->writeCalled);
+        QVERIFY(device->commitCalled);
+        const QJsonDocument document = QJsonDocument::fromJson(device->writtenData);
+        QVERIFY(document.isObject());
+        QCOMPARE(document.object().value("receiverName").toString(), QString("Desk Receiver"));
+    }
+
     void savesAndLoadsShortcuts() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
@@ -19,7 +158,7 @@ private slots:
         settings.setShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+H"));
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         const AppSettings loaded = store.loadOrDefaults();
         QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+H"));
@@ -38,7 +177,7 @@ private slots:
         settings.setShortcut(ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Shift+R"));
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         const AppSettings loaded = store.loadOrDefaults();
         QCOMPARE(loaded.recordingFormat(), RecordingFormat::Mp4);
@@ -58,7 +197,7 @@ private slots:
         settings.setShortcut(ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Shift+R"));
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         QFile file(path);
         QVERIFY(file.open(QIODevice::ReadOnly));
@@ -169,7 +308,7 @@ private slots:
         settings.setShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+H"));
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         QFile file(path);
         QVERIFY(file.open(QIODevice::ReadOnly));
@@ -188,7 +327,7 @@ private slots:
         settings.setVolume(35);
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         const AppSettings loaded = store.loadOrDefaults();
         QCOMPARE(loaded.volume(), 35);
@@ -218,7 +357,7 @@ private slots:
         settings.setReceiverName("Desk Receiver");
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         const AppSettings loaded = store.loadOrDefaults();
         QCOMPARE(loaded.receiverName(), QString("Desk Receiver"));
@@ -260,7 +399,7 @@ private slots:
 
         AppSettingsStore store(dir.path());
 
-        QVERIFY(!store.save(AppSettings::defaults()));
+        QVERIFY(!store.save(AppSettings::defaults()).success);
     }
 
     void savesAndLoadsAspectRatioLock() {
@@ -272,7 +411,7 @@ private slots:
         settings.setAspectRatioLock(true);
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         const AppSettings loaded = store.loadOrDefaults();
         QVERIFY(loaded.aspectRatioLock());
@@ -302,7 +441,7 @@ private slots:
         settings.setVideoFitMode(true);
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         const AppSettings loaded = store.loadOrDefaults();
         QVERIFY(loaded.videoFitMode());
@@ -425,7 +564,7 @@ private slots:
         settings.setVideoQuality(quality);
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         const AppSettings loaded = store.loadOrDefaults();
         QCOMPARE(loaded.videoQuality(), quality);
@@ -457,7 +596,7 @@ private slots:
         settings.setVideoQuality(quality);
 
         AppSettingsStore store(path);
-        QVERIFY(store.save(settings));
+        QVERIFY(store.save(settings).success);
 
         QFile file(path);
         QVERIFY(file.open(QIODevice::ReadOnly));

@@ -328,7 +328,7 @@ bool MainWindow::saveSettings() const {
     if (settingsPath_.isEmpty()) {
         return true;
     }
-    return AppSettingsStore(settingsPath_).save(settings_);
+    return AppSettingsStore(settingsPath_).save(settings_).success;
 }
 
 void MainWindow::restoreWindowState() {

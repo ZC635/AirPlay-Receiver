@@ -190,6 +190,35 @@ private slots:
         QVERIFY(SettingsApplyGlobalStatus::PersistenceFailed
                 == SettingsApplyGlobalStatus::PersistenceFailed);
     }
+
+    void storesPersistenceFailureInGlobalOutcome() {
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::receiverName(),
+                                 QString("Desk Receiver"),
+                                 SettingsFieldStatus::Applied,
+                                 {},
+                                 std::nullopt,
+                                 {}}};
+        outcome.globalResult = SettingsApplyGlobalResult{
+            SettingsApplyGlobalStatus::PersistenceFailed,
+            {false,
+             "settings.json",
+             AppSettingsSaveStage::Commit,
+             QFileDevice::RenameError,
+             "cannot replace settings"},
+        };
+        outcome.airPlayDeferred = true;
+
+        QCOMPARE(outcome.committedSettings.receiverName(), AppSettings::defaults().receiverName());
+        QCOMPARE(outcome.fieldResults.size(), 1);
+        QVERIFY(outcome.globalResult.has_value());
+        QCOMPARE(outcome.globalResult->status, SettingsApplyGlobalStatus::PersistenceFailed);
+        QCOMPARE(outcome.globalResult->persistence.failureStage,
+                 std::optional<AppSettingsSaveStage>(AppSettingsSaveStage::Commit));
+        QVERIFY(outcome.airPlayDeferred);
+        QVERIFY(!outcome.mayClose);
+    }
 };
 
 QTEST_MAIN(SettingsApplyTypesTest)

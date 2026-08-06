@@ -2,6 +2,7 @@
 #include "app/ShortcutActionKey.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
@@ -50,10 +51,46 @@ RecordingFormat recordingFormatFromString(const QString &value) {
     if (value == "mp4") return RecordingFormat::Mp4;
     return RecordingFormat::Mp4;
 }
+
+class QSaveFileSettingsSaveDevice final : public SettingsSaveDevice {
+public:
+    explicit QSaveFileSettingsSaveDevice(const QString &path)
+        : file_(path) {}
+
+    bool open() override {
+        return file_.open(QIODevice::WriteOnly);
+    }
+
+    qint64 write(const QByteArray &data) override {
+        return file_.write(data);
+    }
+
+    bool commit() override {
+        return file_.commit();
+    }
+
+    QFileDevice::FileError error() const override {
+        return file_.error();
+    }
+
+    QString errorString() const override {
+        return file_.errorString();
+    }
+
+private:
+    QSaveFile file_;
+};
+
+SettingsSaveDeviceFactory defaultSettingsSaveDeviceFactory() {
+    return [](const QString &path) {
+        return std::make_unique<QSaveFileSettingsSaveDevice>(path);
+    };
+}
 }
 
-AppSettingsStore::AppSettingsStore(QString path)
-    : path_(std::move(path)) {}
+AppSettingsStore::AppSettingsStore(QString path, SettingsSaveDeviceFactory deviceFactory)
+    : path_(std::move(path)),
+      deviceFactory_(deviceFactory ? std::move(deviceFactory) : defaultSettingsSaveDeviceFactory()) {}
 
 AppSettings AppSettingsStore::loadOrDefaults() const {
     QFile file(path_);
@@ -127,7 +164,7 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     return settings;
 }
 
-bool AppSettingsStore::save(const AppSettings &settings) const {
+AppSettingsSaveResult AppSettingsStore::save(const AppSettings &settings) const {
     QJsonObject shortcuts;
     for (const ShortcutBinding &binding : settings.shortcuts()) {
         shortcuts.insert(shortcutActionKey(binding.action), binding.sequence.toString(QKeySequence::PortableText));
@@ -151,13 +188,26 @@ bool AppSettingsStore::save(const AppSettings &settings) const {
     root.insert("videoQuality", videoQuality);
     root.insert("recording", recording);
 
-    QSaveFile file(path_);
-    if (!file.open(QIODevice::WriteOnly)) {
-        return false;
-    }
     const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Indented);
-    if (file.write(data) != data.size()) {
-        return false;
+    AppSettingsSaveResult result;
+    result.targetPath = QFileInfo(path_).absoluteFilePath();
+    const std::unique_ptr<SettingsSaveDevice> device = deviceFactory_(result.targetPath);
+    const auto failureResult = [&result, &device](AppSettingsSaveStage stage) {
+        result.failureStage = stage;
+        result.fileError = device->error();
+        result.errorString = device->errorString();
+        return result;
+    };
+
+    if (!device->open()) {
+        return failureResult(AppSettingsSaveStage::Open);
     }
-    return file.commit();
+    if (device->write(data) != data.size()) {
+        return failureResult(AppSettingsSaveStage::Write);
+    }
+    if (!device->commit()) {
+        return failureResult(AppSettingsSaveStage::Commit);
+    }
+    result.success = true;
+    return result;
 }
