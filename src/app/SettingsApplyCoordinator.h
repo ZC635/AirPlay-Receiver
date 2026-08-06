@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/SettingsApplyTypes.h"
+#include "backend/ReceiverConfigurationChange.h"
 #include "backend/RecordingTypes.h"
 
 class AirPlayReceiver;
@@ -22,6 +23,10 @@ public:
 
     SettingsApplyOutcome execute(const SettingsApplyPlan &plan,
                                  ReceiverApplyTiming timing);
+
+    SettingsApplyOutcome completeDeferredReceiverApply(
+        const ReceiverConfigurationBatchRequest &batch,
+        const AppSettings &currentlyCommitted);
 
 private:
     HotkeyService *hotkeys_ = nullptr;

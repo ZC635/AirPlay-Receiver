@@ -407,11 +407,13 @@ private slots:
         hotkeys.seed(baseline);
         hotkeys.responses = {{false, false, HotkeyError{321, "Denied"}, true}};
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        FakeAirPlayReceiver receiver;
+        SettingsChangeDeferrer deferrer;
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, &receiver, &deferrer);
 
         const SettingsApplyOutcome outcome = coordinator.execute(
             coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::AfterDisconnect);
+            ReceiverApplyTiming::Immediate);
 
         QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
                  baseline.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
@@ -419,6 +421,8 @@ private slots:
         QCOMPARE(outcome.committedSettings.recordingOutputDirectory(),
                  candidate.recordingOutputDirectory());
         QCOMPARE(outcome.committedSettings.showRecordingCompletionMessage(), false);
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.videoQuality(), candidate.videoQuality());
         verifyStatus(outcome, SettingsFieldId::videoFrameRate(), SettingsFieldStatus::Applied);
         verifyStatus(outcome, SettingsFieldId::recordingOutputDirectory(),
                      SettingsFieldStatus::Applied);
@@ -637,6 +641,230 @@ private slots:
                      SettingsFieldStatus::Applied);
         QVERIFY(!outcome.globalResult.has_value());
         QVERIFY(outcome.mayClose);
+    }
+
+    void combinedNameAndQualityChangeUsesOneBatch() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        candidate.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        SettingsChangeDeferrer deferrer;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.configurationBatchRequests.size(), 1);
+        const ReceiverConfigurationBatchRequest &batch = receiver.configurationBatchRequests.constFirst();
+        QVERIFY(batch.receiverNameChanged);
+        QVERIFY(batch.resolutionChanged);
+        QVERIFY(batch.frameRateChanged);
+        QCOMPARE(batch.requestedReceiverName, candidate.receiverName());
+        QCOMPARE(batch.requestedVideoQuality, candidate.videoQuality());
+        verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::Applied);
+        verifyStatus(outcome, SettingsFieldId::videoResolution(), SettingsFieldStatus::Applied);
+        verifyStatus(outcome, SettingsFieldId::videoFrameRate(), SettingsFieldStatus::Applied);
+    }
+
+    void sharedRestartFailureRollsBackOnlyChangedReceiverFields() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        VideoQualitySettings quality = candidate.videoQuality();
+        quality.frameRate = VideoFrameRate::Fps60;
+        candidate.setVideoQuality(quality);
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        candidate.setShowRecordingCompletionMessage(false);
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.requestedConfigurationRestartError = "Requested restart failed";
+        SettingsChangeDeferrer deferrer;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(persistence.saved.size(), 2);
+        QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
+        QCOMPARE(outcome.committedSettings.videoQuality().frameRate,
+                 baseline.videoQuality().frameRate);
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(outcome.committedSettings.showRecordingCompletionMessage(), false);
+        verifyStatus(outcome, SettingsFieldId::receiverName(),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        verifyStatus(outcome, SettingsFieldId::videoFrameRate(),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
+                     SettingsFieldStatus::Applied);
+        verifyStatus(outcome, SettingsFieldId::recordingCompletionNotification(),
+                     SettingsFieldStatus::Applied);
+    }
+
+    void unchangedReceiverFieldIsNotMarkedFailedBySharedRestart() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        VideoQualitySettings quality = candidate.videoQuality();
+        quality.frameRate = VideoFrameRate::Fps60;
+        candidate.setVideoQuality(quality);
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.requestedConfigurationRestartError = "Requested restart failed";
+        SettingsChangeDeferrer deferrer;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        verifyStatus(outcome, SettingsFieldId::videoResolution(), SettingsFieldStatus::Unchanged);
+        QCOMPARE(outcome.committedSettings.videoQuality().resolution,
+                 baseline.videoQuality().resolution);
+    }
+
+    void receiverRestorationFailureIsRecoveryFailed() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.requestedConfigurationRestartError = "Requested restart failed";
+        receiver.rollbackConfigurationRestartError = "Rollback restart failed";
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
+
+        QCOMPARE(result.status, SettingsFieldStatus::RecoveryFailed);
+        QVERIFY(result.reason.contains("Requested restart failed"));
+        QVERIFY(result.reason.contains("Known saved state"));
+        QVERIFY(result.recoveryError.contains("Rollback restart failed"));
+        QVERIFY(result.recoveryError.contains("Known runtime state"));
+        QVERIFY(result.recoveryError.contains("cannot be confirmed"));
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(outcome.committedSettings.receiverName(), candidate.receiverName());
+    }
+
+    void compensatingJsonFailureIsRecoveryFailedWithKnownStates() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        RecordingSettingsPersistence persistence;
+        persistence.responses = {{true}, {false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                                  QFileDevice::WriteError, "Compensation commit failed"}};
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.requestedConfigurationRestartError = "Requested restart failed";
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
+
+        QCOMPARE(result.status, SettingsFieldStatus::RecoveryFailed);
+        QVERIFY(result.reason.contains("Known saved state"));
+        QVERIFY(result.recoveryError.contains("Known runtime state"));
+        QVERIFY(result.recoveryError.contains("Compensation commit failed"));
+        QVERIFY(result.recoveryError.contains("cannot be confirmed"));
+        QCOMPARE(persistence.saved.size(), 2);
+        QCOMPARE(outcome.committedSettings.receiverName(), candidate.receiverName());
+    }
+
+    void afterDisconnectTimingPersistsAndDefersOneBatch() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        VideoQualitySettings quality = candidate.videoQuality();
+        quality.resolution = VideoResolution::P720;
+        candidate.setVideoQuality(quality);
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        SettingsChangeDeferrer deferrer;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
+            ReceiverApplyTiming::AfterDisconnect);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+        QVERIFY(outcome.airPlayDeferred);
+        verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::Deferred);
+        verifyStatus(outcome, SettingsFieldId::videoResolution(), SettingsFieldStatus::Deferred);
+        QVERIFY(outcome.mayClose);
+    }
+
+    void recordingInProgressDefersImmediateTimingUntilIdle() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({}).accepted);
+        SettingsChangeDeferrer deferrer;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Recording),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(receiver.stopRecordingCount, 1);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+        QVERIFY(outcome.airPlayDeferred);
+        verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::Deferred);
+        QVERIFY(outcome.mayClose);
+    }
+
+    void deferredFailureRestoresAffectedJsonAndLeavesNoDraft() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("Desk Receiver");
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        RecordingSettingsPersistence persistence;
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.requestedConfigurationRestartError = "Requested restart failed";
+        SettingsChangeDeferrer deferrer;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+        const SettingsApplyPlan plan = coordinator.plan(baseline, candidate, true, RecordingState::Idle);
+        const SettingsApplyOutcome initial = coordinator.execute(plan, ReceiverApplyTiming::AfterDisconnect);
+        verifyStatus(initial, SettingsFieldId::receiverName(), SettingsFieldStatus::Deferred);
+        QVERIFY(initial.mayClose);
+        ReceiverConfigurationBatchRequest batch;
+        batch.receiverNameChanged = true;
+        batch.requestedReceiverName = candidate.receiverName();
+        batch.rollbackReceiverName = baseline.receiverName();
+        batch.requestedVideoQuality = candidate.videoQuality();
+        batch.rollbackVideoQuality = baseline.videoQuality();
+
+        const SettingsApplyOutcome completion =
+            coordinator.completeDeferredReceiverApply(batch, initial.committedSettings);
+
+        QCOMPARE(persistence.saved.size(), 2);
+        QCOMPARE(completion.committedSettings.receiverName(), baseline.receiverName());
+        QCOMPARE(completion.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
+                 candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
+        verifyStatus(completion, SettingsFieldId::receiverName(),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        verifyStatus(completion, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
+                     SettingsFieldStatus::Unchanged);
     }
 
     void mayCloseAndSnapshotMergeFollowExecutionResults() {

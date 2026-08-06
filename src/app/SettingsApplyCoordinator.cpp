@@ -1,5 +1,7 @@
 #include "app/SettingsApplyCoordinator.h"
 
+#include "app/SettingsChangeDeferrer.h"
+#include "backend/AirPlayReceiver.h"
 #include "platform/HotkeyService.h"
 #include "platform/WindowsHotkeyService.h"
 
@@ -103,6 +105,173 @@ QString compensationFailureDescription(const HotkeyRegistrationResult &registrat
     return details.isEmpty() ? QString() : QStringLiteral(" Details: %1").arg(details.join("; "));
 }
 
+bool batchChangesField(const ReceiverConfigurationBatchRequest &batch,
+                       const SettingsFieldId &field) {
+    switch (field.kind) {
+    case SettingsFieldKind::ReceiverName:
+        return batch.receiverNameChanged;
+    case SettingsFieldKind::VideoResolution:
+        return batch.resolutionChanged;
+    case SettingsFieldKind::VideoFrameRate:
+        return batch.frameRateChanged;
+    default:
+        return false;
+    }
+}
+
+bool hasReceiverChanges(const ReceiverConfigurationBatchRequest &batch) {
+    return batch.receiverNameChanged || batch.resolutionChanged || batch.frameRateChanged;
+}
+
+ReceiverConfigurationBatchRequest receiverBatchForPlan(const SettingsApplyPlan &plan) {
+    ReceiverConfigurationBatchRequest batch;
+    batch.receiverNameChanged = plan.validChangedReceiverFields.contains(SettingsFieldId::receiverName());
+    batch.resolutionChanged = plan.validChangedReceiverFields.contains(SettingsFieldId::videoResolution());
+    batch.frameRateChanged = plan.validChangedReceiverFields.contains(SettingsFieldId::videoFrameRate());
+    batch.requestedReceiverName = plan.candidate.receiverName();
+    batch.rollbackReceiverName = plan.baseline.receiverName();
+    batch.requestedVideoQuality = plan.candidate.videoQuality();
+    batch.rollbackVideoQuality = plan.baseline.videoQuality();
+    return batch;
+}
+
+QString describeReceiverConfiguration(const QString &name, const VideoQualitySettings &quality) {
+    return QStringLiteral("receiver name '%1', %2, %3")
+        .arg(name, formatSettingsFieldValue(SettingsFieldValue{quality.resolution}),
+             formatSettingsFieldValue(SettingsFieldValue{quality.frameRate}));
+}
+
+QString describeRequestedConfiguration(const ReceiverConfigurationBatchRequest &batch) {
+    return describeReceiverConfiguration(batch.requestedReceiverName,
+                                         mergedReceiverConfigurationVideoQuality(batch));
+}
+
+void restoreBatchFields(const ReceiverConfigurationBatchRequest &batch, AppSettings *settings) {
+    if (settings == nullptr) {
+        return;
+    }
+    if (batch.receiverNameChanged) {
+        settings->setReceiverName(batch.rollbackReceiverName);
+    }
+    VideoQualitySettings quality = settings->videoQuality();
+    if (batch.resolutionChanged) {
+        quality.resolution = batch.rollbackVideoQuality.resolution;
+    }
+    if (batch.frameRateChanged) {
+        quality.frameRate = batch.rollbackVideoQuality.frameRate;
+    }
+    if (batch.resolutionChanged || batch.frameRateChanged) {
+        settings->setVideoQuality(quality);
+    }
+}
+
+void updateMayClose(SettingsApplyOutcome *outcome) {
+    if (outcome == nullptr) {
+        return;
+    }
+    outcome->mayClose = !outcome->globalResult.has_value()
+        && std::all_of(outcome->fieldResults.cbegin(), outcome->fieldResults.cend(),
+                       [](const SettingsFieldResult &fieldResult) {
+            return fieldResult.status == SettingsFieldStatus::Applied
+                || fieldResult.status == SettingsFieldStatus::Unchanged
+                || fieldResult.status == SettingsFieldStatus::Deferred;
+        });
+}
+
+void markReceiverFieldsDeferred(SettingsApplyOutcome *outcome,
+                                const ReceiverConfigurationBatchRequest &batch) {
+    if (outcome == nullptr) {
+        return;
+    }
+    for (SettingsFieldResult &fieldResult : outcome->fieldResults) {
+        if (batchChangesField(batch, fieldResult.field)) {
+            fieldResult.status = SettingsFieldStatus::Deferred;
+            fieldResult.reason = QStringLiteral("Receiver configuration will be applied when its blocker clears.");
+        }
+    }
+    outcome->airPlayDeferred = true;
+}
+
+void markReceiverRecoveryFailure(SettingsApplyOutcome *outcome,
+                                 const ReceiverConfigurationBatchRequest &batch,
+                                 const ReceiverConfigurationBatchResult &result,
+                                 const QString &knownSavedState) {
+    if (outcome == nullptr) {
+        return;
+    }
+    const QString applyError = result.applyError.isEmpty()
+        ? QStringLiteral("The receiver configuration could not be applied.") : result.applyError;
+    const QString runtime = describeReceiverConfiguration(result.knownRuntimeReceiverName,
+                                                           result.knownRuntimeVideoQuality);
+    for (SettingsFieldResult &fieldResult : outcome->fieldResults) {
+        if (!batchChangesField(batch, fieldResult.field)) {
+            continue;
+        }
+        fieldResult.status = SettingsFieldStatus::RecoveryFailed;
+        fieldResult.reason = QStringLiteral("Receiver configuration apply failed: %1. Known saved state is %2.")
+            .arg(applyError, knownSavedState);
+        fieldResult.recoveryError = QStringLiteral(
+            "Receiver restoration failed: %1. Known runtime state is %2 and cannot be confirmed.")
+            .arg(result.recoveryError.isEmpty()
+                     ? QStringLiteral("the rollback configuration did not complete")
+                     : result.recoveryError,
+                 runtime);
+    }
+}
+
+void markReceiverRollback(SettingsApplyOutcome *outcome,
+                          const ReceiverConfigurationBatchRequest &batch,
+                          const ReceiverConfigurationBatchResult &result) {
+    if (outcome == nullptr) {
+        return;
+    }
+    const QString applyError = result.applyError.isEmpty()
+        ? QStringLiteral("The receiver configuration could not be applied.") : result.applyError;
+    for (SettingsFieldResult &fieldResult : outcome->fieldResults) {
+        if (batchChangesField(batch, fieldResult.field)) {
+            fieldResult.status = SettingsFieldStatus::ApplyFailedRolledBack;
+            fieldResult.reason = QStringLiteral(
+                "Receiver configuration apply failed: %1. The previous receiver configuration was restored.")
+                .arg(applyError);
+        }
+    }
+}
+
+void markReceiverCompensationFailure(SettingsApplyOutcome *outcome,
+                                     const ReceiverConfigurationBatchRequest &batch,
+                                     const ReceiverConfigurationBatchResult &result,
+                                     const AppSettingsSaveResult &compensation) {
+    if (outcome == nullptr) {
+        return;
+    }
+    const QString applyError = result.applyError.isEmpty()
+        ? QStringLiteral("The receiver configuration could not be applied.") : result.applyError;
+    const QString runtime = describeReceiverConfiguration(result.knownRuntimeReceiverName,
+                                                           result.knownRuntimeVideoQuality);
+    for (SettingsFieldResult &fieldResult : outcome->fieldResults) {
+        if (!batchChangesField(batch, fieldResult.field)) {
+            continue;
+        }
+        fieldResult.status = SettingsFieldStatus::RecoveryFailed;
+        fieldResult.reason = QStringLiteral(
+            "Receiver configuration apply failed: %1. Known saved state is %2; the compensating save did not complete.")
+            .arg(applyError, describeRequestedConfiguration(batch));
+        fieldResult.recoveryError = QStringLiteral(
+            "Receiver runtime rollback completed. Known runtime state is %1. Compensating JSON save failed: %2. "
+            "The saved state cannot be confirmed.")
+            .arg(runtime, compensation.errorString);
+    }
+}
+
+SettingsApplyOutcome makeDeferredCompletionOutcome(const AppSettings &currentlyCommitted) {
+    SettingsApplyOutcome outcome;
+    outcome.committedSettings = currentlyCommitted;
+    for (const SettingsFieldId &field : allSettingsFields()) {
+        outcome.fieldResults.append({field, settingsFieldValue(currentlyCommitted, field)});
+    }
+    return outcome;
+}
+
 } // namespace
 
 SettingsApplyCoordinator::SettingsApplyCoordinator(HotkeyService *hotkeys,
@@ -196,8 +365,6 @@ SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
 
 SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &plan,
                                                        ReceiverApplyTiming timing) {
-    Q_UNUSED(timing);
-
     SettingsApplyOutcome outcome;
     outcome.committedSettings = plan.baseline;
     outcome.fieldResults = plan.validationResults;
@@ -264,12 +431,89 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
         : persistence_->save(prospective);
     if (persistenceResult.success) {
         outcome.committedSettings = prospective;
-        outcome.mayClose = std::all_of(outcome.fieldResults.cbegin(), outcome.fieldResults.cend(),
-                                       [](const SettingsFieldResult &fieldResult) {
-            return fieldResult.status == SettingsFieldStatus::Applied
-                || fieldResult.status == SettingsFieldStatus::Unchanged
-                || fieldResult.status == SettingsFieldStatus::Deferred;
-        });
+        const ReceiverConfigurationBatchRequest batch = receiverBatchForPlan(plan);
+        if (!hasReceiverChanges(batch)) {
+            updateMayClose(&outcome);
+            return outcome;
+        }
+
+        if (timing == ReceiverApplyTiming::AfterDisconnect) {
+            if (deferrer_ != nullptr) {
+                deferrer_->deferReceiverConfiguration(batch, true, !plan.recordingIdle);
+                markReceiverFieldsDeferred(&outcome, batch);
+            } else {
+                ReceiverConfigurationBatchResult unavailable;
+                unavailable.applyError = QStringLiteral("Receiver configuration deferrer is unavailable");
+                unavailable.recoveryError = QStringLiteral("No deferred receiver configuration was scheduled");
+                unavailable.knownRuntimeReceiverName = receiver_ == nullptr ? QStringLiteral("unavailable")
+                                                                            : receiver_->receiverName();
+                unavailable.knownRuntimeVideoQuality = receiver_ == nullptr
+                    ? batch.rollbackVideoQuality : receiver_->videoQuality();
+                markReceiverRecoveryFailure(&outcome, batch, unavailable,
+                                            describeRequestedConfiguration(batch));
+            }
+            updateMayClose(&outcome);
+            return outcome;
+        }
+
+        if (!plan.recordingIdle) {
+            if (receiver_ != nullptr && deferrer_ != nullptr) {
+                receiver_->stopRecording();
+                deferrer_->deferReceiverConfiguration(batch, false, true);
+                markReceiverFieldsDeferred(&outcome, batch);
+            } else {
+                ReceiverConfigurationBatchResult unavailable;
+                unavailable.applyError = receiver_ == nullptr
+                    ? QStringLiteral("AirPlay receiver is unavailable")
+                    : QStringLiteral("Receiver configuration deferrer is unavailable");
+                unavailable.recoveryError = QStringLiteral("No deferred receiver configuration was scheduled");
+                unavailable.knownRuntimeReceiverName = receiver_ == nullptr ? QStringLiteral("unavailable")
+                                                                            : receiver_->receiverName();
+                unavailable.knownRuntimeVideoQuality = receiver_ == nullptr
+                    ? batch.rollbackVideoQuality : receiver_->videoQuality();
+                markReceiverRecoveryFailure(&outcome, batch, unavailable,
+                                            describeRequestedConfiguration(batch));
+            }
+            updateMayClose(&outcome);
+            return outcome;
+        }
+
+        if (receiver_ == nullptr) {
+            ReceiverConfigurationBatchResult unavailable;
+            unavailable.applyError = QStringLiteral("AirPlay receiver is unavailable");
+            unavailable.recoveryError = QStringLiteral("No runtime receiver state is available");
+            unavailable.knownRuntimeReceiverName = QStringLiteral("unavailable");
+            unavailable.knownRuntimeVideoQuality = batch.rollbackVideoQuality;
+            markReceiverRecoveryFailure(&outcome, batch, unavailable,
+                                        describeRequestedConfiguration(batch));
+            updateMayClose(&outcome);
+            return outcome;
+        }
+
+        const ReceiverConfigurationBatchResult result = receiver_->applyConfigurationBatch(batch);
+        if (result.status == ReceiverConfigurationBatchStatus::Applied) {
+            updateMayClose(&outcome);
+            return outcome;
+        }
+        if (result.status == ReceiverConfigurationBatchStatus::RecoveryFailed) {
+            markReceiverRecoveryFailure(&outcome, batch, result, describeRequestedConfiguration(batch));
+            updateMayClose(&outcome);
+            return outcome;
+        }
+
+        AppSettings compensated = prospective;
+        restoreBatchFields(batch, &compensated);
+        const AppSettingsSaveResult compensation = persistence_ == nullptr
+            ? AppSettingsSaveResult{true} : persistence_->save(compensated);
+        if (compensation.success) {
+            outcome.committedSettings = compensated;
+            markReceiverRollback(&outcome, batch, result);
+        } else {
+            outcome.globalResult = SettingsApplyGlobalResult{
+                SettingsApplyGlobalStatus::PersistenceFailed, compensation};
+            markReceiverCompensationFailure(&outcome, batch, result, compensation);
+        }
+        updateMayClose(&outcome);
         return outcome;
     }
 
@@ -308,5 +552,59 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
         SettingsApplyGlobalStatus::PersistenceFailed,
         persistenceResult,
     };
+    return outcome;
+}
+
+SettingsApplyOutcome SettingsApplyCoordinator::completeDeferredReceiverApply(
+    const ReceiverConfigurationBatchRequest &batch,
+    const AppSettings &currentlyCommitted) {
+    SettingsApplyOutcome outcome = makeDeferredCompletionOutcome(currentlyCommitted);
+    if (!hasReceiverChanges(batch)) {
+        updateMayClose(&outcome);
+        return outcome;
+    }
+
+    if (receiver_ == nullptr) {
+        ReceiverConfigurationBatchResult unavailable;
+        unavailable.applyError = QStringLiteral("AirPlay receiver is unavailable");
+        unavailable.recoveryError = QStringLiteral("No runtime receiver state is available");
+        unavailable.knownRuntimeReceiverName = QStringLiteral("unavailable");
+        unavailable.knownRuntimeVideoQuality = batch.rollbackVideoQuality;
+        markReceiverRecoveryFailure(&outcome, batch, unavailable,
+                                    describeRequestedConfiguration(batch));
+        updateMayClose(&outcome);
+        return outcome;
+    }
+
+    const ReceiverConfigurationBatchResult result = receiver_->applyConfigurationBatch(batch);
+    if (result.status == ReceiverConfigurationBatchStatus::Applied) {
+        for (SettingsFieldResult &fieldResult : outcome.fieldResults) {
+            if (batchChangesField(batch, fieldResult.field)) {
+                fieldResult.status = SettingsFieldStatus::Applied;
+            }
+        }
+        updateMayClose(&outcome);
+        return outcome;
+    }
+    if (result.status == ReceiverConfigurationBatchStatus::RecoveryFailed) {
+        markReceiverRecoveryFailure(&outcome, batch, result,
+                                    describeRequestedConfiguration(batch));
+        updateMayClose(&outcome);
+        return outcome;
+    }
+
+    AppSettings compensated = currentlyCommitted;
+    restoreBatchFields(batch, &compensated);
+    const AppSettingsSaveResult compensation = persistence_ == nullptr
+        ? AppSettingsSaveResult{true} : persistence_->save(compensated);
+    if (compensation.success) {
+        outcome.committedSettings = compensated;
+        markReceiverRollback(&outcome, batch, result);
+    } else {
+        outcome.globalResult = SettingsApplyGlobalResult{
+            SettingsApplyGlobalStatus::PersistenceFailed, compensation};
+        markReceiverCompensationFailure(&outcome, batch, result, compensation);
+    }
+    updateMayClose(&outcome);
     return outcome;
 }
