@@ -2,6 +2,7 @@
 
 #include "app/AppSettingsStore.h"
 #include "app/SettingsDialog.h"
+#include "app/SettingsApplyTypes.h"
 #include "app/ToolbarWidget.h"
 #include "app/VideoSurfaceWidget.h"
 #include "app/WindowStateStore.h"
@@ -23,6 +24,7 @@
 #include <QPushButton>
 #include <QResource>
 #include <QSignalBlocker>
+#include <QStringList>
 #include <QWidget>
 #include <cmath>
 #include <utility>
@@ -187,12 +189,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
 
     setVolume(settings_.volume());
 
-    const bool hotkeysOk = registerHotkeys();
+    const auto hotkeyFailures = registerHotkeys();
     if (hotkeys_ != nullptr) {
         connect(hotkeys_, &HotkeyService::activated, this, &MainWindow::handleShortcut);
     }
-    if (!hotkeysOk) {
-        statusLabel_->setText("Could not register one or more shortcuts");
+    if (!hotkeyFailures.isEmpty()) {
+        statusLabel_->setText(formatHotkeyRegistrationFailures(hotkeyFailures));
     }
 
     connect(&deferrer_, &SettingsChangeDeferrer::receiverNameReady, this, [this](const QString &name) {
@@ -311,17 +313,35 @@ void MainWindow::applyShortcutTooltips() {
     toolbar_->setRecordingShortcutTooltip(QString("Record: %1").arg(recordingShortcut));
 }
 
-bool MainWindow::registerHotkeys() {
+QVector<MainWindow::HotkeyRegistrationFailure> MainWindow::registerHotkeys() {
+    QVector<HotkeyRegistrationFailure> failures;
     if (hotkeys_ == nullptr) {
-        return true;
+        return failures;
     }
 
-    bool registeredAll = true;
     hotkeys_->unregisterAll();
     for (const auto &binding : settings_.shortcuts()) {
-        registeredAll = hotkeys_->registerShortcut(binding.action, binding.sequence) && registeredAll;
+        const HotkeyRegistrationResult result = hotkeys_->registerShortcut(binding.action, binding.sequence);
+        if (!result.registered) {
+            failures.append({binding.action, binding.sequence, result});
+        }
     }
-    return registeredAll;
+    return failures;
+}
+
+QString MainWindow::formatHotkeyRegistrationFailures(const QVector<HotkeyRegistrationFailure> &failures) {
+    QStringList details;
+    for (const auto &failure : failures) {
+        const HotkeyError error = failure.result.error.value_or(
+            HotkeyError{std::nullopt, QStringLiteral("Unknown error.")});
+        QString reason = error.message;
+        if (error.nativeCode.has_value()) {
+            reason += QStringLiteral(" [%1]").arg(*error.nativeCode);
+        }
+        details.append(QStringLiteral("%1 (%2)")
+                           .arg(settingsFieldDisplayName(SettingsFieldId::shortcut(failure.action)), reason));
+    }
+    return QStringLiteral("Could not register shortcuts: %1").arg(details.join(QStringLiteral("; ")));
 }
 
 bool MainWindow::saveSettings() const {
@@ -558,10 +578,11 @@ void MainWindow::showSettingsDialog() {
 
     const AppSettings previousSettings = settings_;
     settings_ = dialog.settings();
-    if (!registerHotkeys()) {
+    const auto hotkeyFailures = registerHotkeys();
+    if (!hotkeyFailures.isEmpty()) {
         settings_ = previousSettings;
         registerHotkeys();
-        statusLabel_->setText("Could not register one or more shortcuts");
+        statusLabel_->setText(formatHotkeyRegistrationFailures(hotkeyFailures));
         return;
     }
 

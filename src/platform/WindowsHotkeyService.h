@@ -4,9 +4,17 @@
 #include <QHash>
 #include <QKeySequence>
 
+#include <functional>
 #include <optional>
 
 #include "platform/HotkeyService.h"
+
+struct HotkeyNativeOperations {
+    std::function<bool(int, unsigned int, unsigned int)> registerHotkey;
+    std::function<void(int)> unregisterHotkey;
+    std::function<quint32()> lastError;
+    std::function<QString(quint32)> formatError;
+};
 
 class WindowsHotkeyService : public HotkeyService, public QAbstractNativeEventFilter {
     Q_OBJECT
@@ -18,9 +26,11 @@ public:
     };
 
     explicit WindowsHotkeyService(QObject *parent = nullptr);
+    WindowsHotkeyService(HotkeyNativeOperations operations, QObject *parent = nullptr);
     ~WindowsHotkeyService() override;
 
-    bool registerShortcut(ShortcutAction action, const QKeySequence &sequence) override;
+    HotkeyRegistrationResult registerShortcut(ShortcutAction action,
+                                              const QKeySequence &sequence) override;
     void unregisterAll() override;
     bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *result) override;
 
@@ -32,5 +42,6 @@ private:
         QKeySequence sequence;
     };
     QHash<int, HotkeyEntry> registrations_;
+    HotkeyNativeOperations operations_;
     friend class HotkeyServiceTest;
 };

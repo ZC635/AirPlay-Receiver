@@ -4,6 +4,8 @@
 #include "app/ShortcutBinding.h"
 #include "platform/WindowsHotkeyService.h"
 
+#include <QStringList>
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -64,18 +66,188 @@ private slots:
 
     void registerShortcutRejectsInvalidSequence() {
         WindowsHotkeyService service;
-        QVERIFY(!service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence()));
-        QVERIFY(!service.registerShortcut(ShortcutAction::VolumeUp, QKeySequence("F99")));
+        const auto empty = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence());
+        QVERIFY(!empty.registered);
+        QVERIFY(empty.error.has_value());
+        QVERIFY(!empty.error->nativeCode.has_value());
+
+        const auto unsupported = service.registerShortcut(ShortcutAction::VolumeUp, QKeySequence("F99"));
+        QVERIFY(!unsupported.registered);
+        QVERIFY(unsupported.error.has_value());
+        QVERIFY(!unsupported.error->nativeCode.has_value());
     }
 
     void registerShortcutPreservesExistingOnInvalidReregistration() {
         WindowsHotkeyService service;
-        service.registrations_.insert(1, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
-        QVERIFY(!service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence()));
+        const int id = static_cast<int>(ShortcutAction::ToggleToolbar) + 1;
+        service.registrations_.insert(id, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+        const auto result = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence());
+        QVERIFY(!result.registered);
+        QVERIFY(result.error.has_value());
         QCOMPARE(service.registrations_.size(), 1);
-        QVERIFY(service.registrations_.contains(1));
-        QCOMPARE(service.registrations_.value(1).action, ShortcutAction::ToggleToolbar);
-        QCOMPARE(service.registrations_.value(1).sequence, QKeySequence("Ctrl+Shift+Z"));
+        QVERIFY(service.registrations_.contains(id));
+        QCOMPARE(service.registrations_.value(id).action, ShortcutAction::ToggleToolbar);
+        QCOMPARE(service.registrations_.value(id).sequence, QKeySequence("Ctrl+Shift+Z"));
+    }
+
+    void failedReplacementRestoresPreviousBindingAndPreservesCandidateError() {
+        QStringList calls;
+        quint32 currentError = 0;
+        HotkeyNativeOperations operations{
+            [&calls, &currentError](int, unsigned int, unsigned int) {
+                calls.append("register");
+                if (calls.count("register") == 1) {
+                    currentError = 1409;
+                    return false;
+                }
+                return true;
+            },
+            [&calls](int) { calls.append("unregister"); },
+            [&calls, &currentError] {
+                calls.append(QString("lastError:%1").arg(currentError));
+                return currentError;
+            },
+            [&calls](quint32 error) {
+                calls.append(QString("format:%1").arg(error));
+                return error == 1409 ? QString("Hot key is already registered.") : QString();
+            },
+        };
+        WindowsHotkeyService service(operations);
+        const int id = static_cast<int>(ShortcutAction::ToggleToolbar) + 1;
+        service.registrations_.insert(id, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+
+        const auto result = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Alt+T"));
+
+        QVERIFY(!result.registered);
+        QVERIFY(result.previousRestored);
+        QVERIFY(result.error.has_value());
+        QCOMPARE(result.error->nativeCode, std::optional<quint32>(1409));
+        QCOMPARE(result.error->message, QString("Hot key is already registered."));
+        QVERIFY(!result.recoveryError.has_value());
+        QCOMPARE(service.registrations_.value(id).sequence, QKeySequence("Ctrl+Shift+Z"));
+        QCOMPARE(calls, QStringList({"unregister", "register", "lastError:1409", "format:1409", "register"}));
+    }
+
+    void failedReplacementReportsRecoveryErrorWhenPreviousBindingCannotBeRestored() {
+        QStringList calls;
+        quint32 currentError = 0;
+        int registerCalls = 0;
+        HotkeyNativeOperations operations{
+            [&calls, &currentError, &registerCalls](int, unsigned int, unsigned int) {
+                calls.append("register");
+                ++registerCalls;
+                currentError = registerCalls == 1 ? 1409 : 5;
+                return false;
+            },
+            [&calls](int) { calls.append("unregister"); },
+            [&calls, &currentError] {
+                calls.append(QString("lastError:%1").arg(currentError));
+                return currentError;
+            },
+            [&calls](quint32 error) {
+                calls.append(QString("format:%1").arg(error));
+                return error == 1409 ? QString("Hot key is already registered.")
+                                     : QString("Access is denied.");
+            },
+        };
+        WindowsHotkeyService service(operations);
+        const int id = static_cast<int>(ShortcutAction::ToggleToolbar) + 1;
+        service.registrations_.insert(id, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+
+        const auto result = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Alt+T"));
+
+        QVERIFY(!result.registered);
+        QVERIFY(!result.previousRestored);
+        QVERIFY(result.error.has_value());
+        QCOMPARE(result.error->nativeCode, std::optional<quint32>(1409));
+        QCOMPARE(result.error->message, QString("Hot key is already registered."));
+        QVERIFY(result.recoveryError.has_value());
+        QCOMPARE(result.recoveryError->nativeCode, std::optional<quint32>(5));
+        QCOMPARE(result.recoveryError->message, QString("Access is denied."));
+        QVERIFY(!service.registrations_.contains(id));
+        QCOMPARE(calls, QStringList({"unregister", "register", "lastError:1409", "format:1409", "register", "lastError:5", "format:5"}));
+    }
+
+    void reregisteringSameSequenceIsUnchangedWithoutNativeCalls() {
+        int registerCalls = 0;
+        int unregisterCalls = 0;
+        HotkeyNativeOperations operations{
+            [&registerCalls](int, unsigned int, unsigned int) { ++registerCalls; return true; },
+            [&unregisterCalls](int) { ++unregisterCalls; },
+            [] { return quint32(0); },
+            [](quint32) { return QString(); },
+        };
+        WindowsHotkeyService service(operations);
+        const int id = static_cast<int>(ShortcutAction::ToggleToolbar) + 1;
+        service.registrations_.insert(id, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+
+        const auto result = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z"));
+
+        QVERIFY(result.registered);
+        QVERIFY(result.unchanged);
+        QCOMPARE(registerCalls, 0);
+        QCOMPARE(unregisterCalls, 0);
+    }
+
+    void invalidCandidatePreservesExistingBindingWithoutNativeCalls() {
+        int registerCalls = 0;
+        int unregisterCalls = 0;
+        HotkeyNativeOperations operations{
+            [&registerCalls](int, unsigned int, unsigned int) { ++registerCalls; return true; },
+            [&unregisterCalls](int) { ++unregisterCalls; },
+            [] { return quint32(0); },
+            [](quint32) { return QString(); },
+        };
+        WindowsHotkeyService service(operations);
+        const int id = static_cast<int>(ShortcutAction::ToggleToolbar) + 1;
+        service.registrations_.insert(id, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+
+        const auto result = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence());
+
+        QVERIFY(!result.registered);
+        QVERIFY(result.error.has_value());
+        QCOMPARE(service.registrations_.value(id).sequence, QKeySequence("Ctrl+Shift+Z"));
+        QCOMPARE(registerCalls, 0);
+        QCOMPARE(unregisterCalls, 0);
+    }
+
+    void nativeFailureUsesStableFallbackWhenSystemMessageIsUnavailable() {
+        HotkeyNativeOperations operations{
+            [](int, unsigned int, unsigned int) { return false; },
+            [](int) {},
+            [] { return quint32(1234); },
+            [](quint32) { return QString(); },
+        };
+        WindowsHotkeyService service(operations);
+
+        const auto result = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Alt+T"));
+
+        QVERIFY(!result.registered);
+        QVERIFY(result.error.has_value());
+        QCOMPARE(result.error->nativeCode, std::optional<quint32>(1234));
+        QCOMPARE(result.error->message, QString("Windows hotkey registration failed."));
+    }
+
+    void successfulReplacementLeavesOtherActionsRegistered() {
+        int unregisterCalls = 0;
+        HotkeyNativeOperations operations{
+            [](int, unsigned int, unsigned int) { return true; },
+            [&unregisterCalls](int) { ++unregisterCalls; },
+            [] { return quint32(0); },
+            [](quint32) { return QString(); },
+        };
+        WindowsHotkeyService service(operations);
+        const int toolbarId = static_cast<int>(ShortcutAction::ToggleToolbar) + 1;
+        service.registrations_.insert(toolbarId, {ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Shift+Z")});
+        service.registrations_.insert(2, {ShortcutAction::VolumeUp, QKeySequence("Ctrl+Shift+U")});
+
+        const auto result = service.registerShortcut(ShortcutAction::ToggleToolbar, QKeySequence("Ctrl+Alt+T"));
+
+        QVERIFY(result.registered);
+        QVERIFY(!result.unchanged);
+        QCOMPARE(unregisterCalls, 1);
+        QCOMPARE(service.registrations_.value(toolbarId).sequence, QKeySequence("Ctrl+Alt+T"));
+        QCOMPARE(service.registrations_.value(2).sequence, QKeySequence("Ctrl+Shift+U"));
     }
 
     void nativeEventFilterSetsResultOnHandledHotkey() {

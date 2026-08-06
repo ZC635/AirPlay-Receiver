@@ -1077,11 +1077,13 @@ private slots:
 
     void failedInitialHotkeyRegistrationShowsError() {
         FakeHotkeyService hotkeys;
-        hotkeys.rejectedRegistrations.append({ShortcutAction::ToggleToolbar, AppSettings::defaults().shortcutFor(ShortcutAction::ToggleToolbar)});
+        hotkeys.reject(ShortcutAction::ToggleToolbar,
+                       AppSettings::defaults().shortcutFor(ShortcutAction::ToggleToolbar),
+                       1409, "Hot key is already registered.");
         MainWindow window(AppSettings::defaults(), &hotkeys);
         auto *label = window.findChild<QLabel *>("receiverStatusLabel");
         QVERIFY(label != nullptr);
-        QCOMPARE(label->text(), QString("Could not register one or more shortcuts"));
+        QCOMPARE(label->text(), QString("Could not register shortcuts: Toggle toolbar (Hot key is already registered. [1409])"));
     }
 
     void shortcutAlwaysOnTopSyncsToolbarButton() {

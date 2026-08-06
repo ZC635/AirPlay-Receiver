@@ -2,17 +2,18 @@
 
 #include "app/AppSettings.h"
 #include "app/SettingsChangeDeferrer.h"
+#include "platform/HotkeyService.h"
 
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
+#include <QVector>
 #include <memory>
 #include <optional>
 
 enum class ReceiverState;
 class AirPlayReceiver;
 class ToolbarWidget;
-class HotkeyService;
 class QLabel;
 class QImage;
 class QCloseEvent;
@@ -38,9 +39,16 @@ public:
     void setVolume(int value);
 
 private:
+    struct HotkeyRegistrationFailure {
+        ShortcutAction action;
+        QKeySequence sequence;
+        HotkeyRegistrationResult result;
+    };
+
     void handleShortcut(ShortcutAction action);
     void applyShortcutTooltips();
-    bool registerHotkeys();
+    QVector<HotkeyRegistrationFailure> registerHotkeys();
+    static QString formatHotkeyRegistrationFailures(const QVector<HotkeyRegistrationFailure> &failures);
     bool saveSettings() const;
     void restoreWindowState();
     bool saveWindowState() const;
