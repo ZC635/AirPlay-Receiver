@@ -602,16 +602,6 @@ ReceiverConfigurationBatchResult UxPlayReceiver::applyConfigurationBatch(
     const ReceiverConfigurationBatchRequest &request) {
     const bool qualityChanged = request.resolutionChanged || request.frameRateChanged;
     const bool anyChange = request.receiverNameChanged || qualityChanged;
-    const auto runtimeRequestedQuality = [&] {
-        VideoQualitySettings quality = request.rollbackVideoQuality;
-        if (request.resolutionChanged) {
-            quality.resolution = request.requestedVideoQuality.resolution;
-        }
-        if (request.frameRateChanged) {
-            quality.frameRate = request.requestedVideoQuality.frameRate;
-        }
-        return quality;
-    };
     const auto storeName = [&](const QString &requestedName) {
         m_config.serverName = requestedName;
 #if AIRPLAY_WITH_UXPLAY
@@ -649,12 +639,12 @@ ReceiverConfigurationBatchResult UxPlayReceiver::applyConfigurationBatch(
             storeName(request.requestedReceiverName);
         }
         if (qualityChanged) {
-            storeQuality(request.requestedVideoQuality);
+            storeQuality(mergedReceiverConfigurationVideoQuality(request));
         }
         ReceiverConfigurationBatchResult result;
         result.knownRuntimeReceiverName = request.receiverNameChanged
             ? request.requestedReceiverName : request.rollbackReceiverName;
-        result.knownRuntimeVideoQuality = runtimeRequestedQuality();
+        result.knownRuntimeVideoQuality = mergedReceiverConfigurationVideoQuality(request);
         return result;
     }
 
