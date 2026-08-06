@@ -4,6 +4,8 @@
 #include "backend/ReceiverConfigurationChange.h"
 #include "backend/RecordingTypes.h"
 
+#include <QPointer>
+
 class AirPlayReceiver;
 class HotkeyService;
 class SettingsChangeDeferrer;
@@ -29,8 +31,8 @@ public:
         const AppSettings &currentlyCommitted);
 
 private:
-    HotkeyService *hotkeys_ = nullptr;
+    QPointer<HotkeyService> hotkeys_;
     SettingsPersistence *persistence_ = nullptr;
-    AirPlayReceiver *receiver_ = nullptr;
+    QPointer<AirPlayReceiver> receiver_;
     SettingsChangeDeferrer *deferrer_ = nullptr;
 };
