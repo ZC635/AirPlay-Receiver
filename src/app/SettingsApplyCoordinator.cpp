@@ -83,9 +83,12 @@ SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
         if (sequence.count() > 1) {
             markValidationFailure(fieldResult,
                                   QStringLiteral("Shortcut must use a single key combination."));
-        } else if (!WindowsHotkeyService::toNativeHotkey(sequence).has_value()) {
+            continue;
+        }
+        if (!WindowsHotkeyService::toNativeHotkey(sequence).has_value()) {
             markValidationFailure(fieldResult,
                                   QStringLiteral("Shortcut is not supported as a Windows global hotkey."));
+            continue;
         }
 
         shortcutFieldsBySequence[sequence.toString(QKeySequence::PortableText)].append(field);
