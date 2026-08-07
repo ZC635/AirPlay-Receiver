@@ -100,6 +100,7 @@ private slots:
         QVERIFY(table != nullptr);
         QCOMPARE(table->columnCount(), 3);
         QCOMPARE(table->horizontalHeaderItem(2)->text(), QString("Status"));
+        QVERIFY(table->isColumnHidden(2));
 
         SettingsApplyOutcome outcome;
         outcome.committedSettings = AppSettings::defaults();
@@ -109,11 +110,46 @@ private slots:
                                  "already registered"}};
         dialog.presentApplyOutcome(outcome);
 
+        QVERIFY(!table->isColumnHidden(2));
         auto *status = qobject_cast<QLabel *>(table->cellWidget(3, 2));
         QVERIFY(status != nullptr);
         QVERIFY(status->wordWrap());
         QVERIFY(status->text().contains("Toggle toolbar"));
         QVERIFY(status->text().contains("Ctrl+Shift+T"));
+    }
+
+    void shortcutStatusColumnHidesWhenNoShortcutFailureRemains() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
+        auto *shortcut = dialog.findChild<QKeySequenceEdit *>("shortcutEdit_toggleToolbar");
+        QVERIFY(table != nullptr);
+        QVERIFY(shortcut != nullptr);
+
+        SettingsApplyOutcome nonShortcutAndSuccessfulShortcuts;
+        nonShortcutAndSuccessfulShortcuts.committedSettings = AppSettings::defaults();
+        nonShortcutAndSuccessfulShortcuts.fieldResults = {
+            {SettingsFieldId::receiverName(), QString("Invalid receiver"),
+             SettingsFieldStatus::ValidationFailed, "not allowed"},
+            {SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+T"),
+             SettingsFieldStatus::Applied, {}},
+            {SettingsFieldId::shortcut(ShortcutAction::ToggleRecording), QKeySequence("Ctrl+Shift+R"),
+             SettingsFieldStatus::Deferred, {}},
+        };
+        dialog.presentApplyOutcome(nonShortcutAndSuccessfulShortcuts);
+
+        QVERIFY(table->isColumnHidden(2));
+
+        SettingsApplyOutcome shortcutFailure;
+        shortcutFailure.committedSettings = AppSettings::defaults();
+        shortcutFailure.fieldResults = {{SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
+                                         QKeySequence("Ctrl+Shift+T"),
+                                         SettingsFieldStatus::ApplyFailedRolledBack,
+                                         "already registered"}};
+        dialog.presentApplyOutcome(shortcutFailure);
+
+        QVERIFY(!table->isColumnHidden(2));
+        shortcut->setKeySequence(QKeySequence("Ctrl+Alt+T"));
+        QVERIFY(table->isColumnHidden(2));
     }
 
     void failedDraftRemainsVisibleAfterPartialOutcome() {
