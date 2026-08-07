@@ -133,6 +133,21 @@ Replace the Boolean-only registration result with a structured result that conta
 
 Apply shortcut rows independently. Do not call `unregisterAll()` as the Settings Apply strategy. Registering a candidate for one action must leave other actions untouched. A failed candidate restores that action's previous binding while successful actions remain active.
 
+#### Shortcut permutations and cycles
+
+A candidate shortcut set may be unique while still depending on currently active bindings. For example, two actions may swap their shortcuts. Settings Apply must preserve this previously supported case without using `unregisterAll()` and without disturbing unrelated actions.
+
+The hotkey service accepts the complete stable-order set of valid shortcut requests and returns one structured result per action. It applies requests as follows:
+
+- unchanged and dependency-free actions use the ordinary single-action registration path;
+- acyclic dependencies are registered in dependency-safe topological order;
+- only a cyclic dependency component uses a component-scoped atomic replacement that unregisters and re-registers the actions in that component;
+- a cycle failure restores that component's prior active bindings and reports direct and recovery errors per affected action;
+- unrelated components remain committed when one component fails;
+- global persistence compensation submits the tracked baseline bindings through the same service operation, so cycles can be restored without `unregisterAll()`.
+
+The coordinator keeps field results in the stable settings-field order even when the service uses a dependency-safe native-call order. Automated tests must cover a successful two-action swap, a cycle registration failure with successful restoration, a cycle restoration failure, preservation of an unrelated successful shortcut, and persistence-failure compensation after a successful swap.
+
 Startup may still register every configured action, but it must report which actions failed rather than collapsing them into one Boolean.
 
 ### AppSettingsStore
