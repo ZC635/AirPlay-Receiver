@@ -442,6 +442,67 @@ private slots:
         QCOMPARE(persistence.saved.size(), 1);
     }
 
+    void failedAcyclicShortcutOwnerPropagatesFailureWithoutPersistingDependentCandidate() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleToolbar,
+                              baseline.shortcutFor(ShortcutAction::VolumeUp));
+        candidate.setShortcut(ShortcutAction::VolumeUp, QKeySequence("Ctrl+Alt+C"));
+        candidate.setShortcut(ShortcutAction::VolumeDown, QKeySequence("Ctrl+Alt+D"));
+        FakeHotkeyService hotkeys;
+        seed(&hotkeys, baseline);
+        hotkeys.reject(ShortcutAction::VolumeUp,
+                       candidate.shortcutFor(ShortcutAction::VolumeUp), 1409,
+                       "Volume Up candidate rejected");
+        hotkeys.reject(ShortcutAction::VolumeUp,
+                       baseline.shortcutFor(ShortcutAction::VolumeUp), 1409,
+                       "Volume Up restoration rejected");
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        const AppSettings &saved = persistence.saved.constFirst();
+        QCOMPARE(saved.shortcutFor(ShortcutAction::ToggleToolbar),
+                 baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(saved.shortcutFor(ShortcutAction::VolumeUp),
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(saved.shortcutFor(ShortcutAction::VolumeDown),
+                 candidate.shortcutFor(ShortcutAction::VolumeDown));
+        QVERIFY(saved.shortcutFor(ShortcutAction::ToggleToolbar)
+                != saved.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleToolbar),
+                 saved.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::VolumeUp),
+                 saved.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::VolumeDown),
+                 saved.shortcutFor(ShortcutAction::VolumeDown));
+
+        const SettingsFieldResult &dependent = requireResult(
+            outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar));
+        QCOMPARE(dependent.status, SettingsFieldStatus::ApplyFailedRolledBack);
+        QVERIFY(dependent.reason.contains("could not move"));
+        QVERIFY(dependent.reason.contains("previous shortcut was restored"));
+        const SettingsFieldResult &owner = requireResult(
+            outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp));
+        QCOMPARE(owner.status, SettingsFieldStatus::RecoveryFailed);
+        QVERIFY(owner.reason.contains("Volume Up candidate rejected"));
+        QVERIFY(owner.recoveryError.contains("Volume Up restoration rejected"));
+        QCOMPARE(owner.nativeErrorCode, std::optional<quint32>{1409});
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeDown),
+                     SettingsFieldStatus::Applied);
+
+        QCOMPARE(hotkeys.activeBindings.value(static_cast<int>(ShortcutAction::ToggleToolbar)),
+                 baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        QVERIFY(!hotkeys.activeBindings.contains(static_cast<int>(ShortcutAction::VolumeUp)));
+        QCOMPARE(hotkeys.activeBindings.value(static_cast<int>(ShortcutAction::VolumeDown)),
+                 candidate.shortcutFor(ShortcutAction::VolumeDown));
+        QVERIFY(!outcome.mayClose);
+    }
+
     void failedShortcutCycleRollsBackOnlyCycleFields() {
         const AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
