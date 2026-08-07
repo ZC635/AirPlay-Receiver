@@ -1636,6 +1636,43 @@ private slots:
         QCOMPARE(toggleToolbar->sequence, QKeySequence("Ctrl+Shift+H"));
     }
 
+    void shortcutSwapFromSettingsDialogPersistsAndUpdatesTooltips() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("settings.json");
+        const AppSettings baseline = AppSettings::defaults();
+        FakeHotkeyService hotkeys;
+        MainWindow window(baseline, &hotkeys, nullptr, path);
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        auto *volumeButton = window.findChild<QToolButton *>("volumeButton");
+        QVERIFY(settingsButton != nullptr);
+        QVERIFY(volumeButton != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *toolbarShortcut = dialog->findChild<QKeySequenceEdit *>(
+                "shortcutEdit_toggleToolbar");
+            auto *volumeUpShortcut = dialog->findChild<QKeySequenceEdit *>("shortcutEdit_volumeUp");
+            QVERIFY(toolbarShortcut != nullptr);
+            QVERIFY(volumeUpShortcut != nullptr);
+            toolbarShortcut->setKeySequence(baseline.shortcutFor(ShortcutAction::VolumeUp));
+            volumeUpShortcut->setKeySequence(baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+            dialog->accept();
+        });
+
+        settingsButton->click();
+
+        const AppSettings saved = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(saved.shortcutFor(ShortcutAction::ToggleToolbar),
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(saved.shortcutFor(ShortcutAction::VolumeUp),
+                 baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(volumeButton->toolTip(), QString("Volume: %1 / %2").arg(
+            baseline.shortcutFor(ShortcutAction::ToggleToolbar).toString(QKeySequence::NativeText),
+            baseline.shortcutFor(ShortcutAction::VolumeDown).toString(QKeySequence::NativeText)));
+    }
+
     void rejectedHotkeyRegistrationDoesNotSaveDialogSettings() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

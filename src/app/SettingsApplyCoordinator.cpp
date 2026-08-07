@@ -455,6 +455,8 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
     };
     QVector<SuccessfulChangedShortcut> changedShortcuts;
 
+    QVector<SettingsFieldId> validShortcutFields;
+    QVector<HotkeyRegistrationRequest> shortcutRequests;
     for (const SettingsFieldId &field : allSettingsFields()) {
         if (!isShortcutField(field)) {
             continue;
@@ -463,29 +465,43 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
         if (fieldResult == nullptr || fieldResult->status == SettingsFieldStatus::ValidationFailed) {
             continue;
         }
+        const ShortcutAction action = *field.shortcutAction;
+        validShortcutFields.append(field);
+        shortcutRequests.append({action, QKeySequence(plan.candidate.shortcutFor(action))});
+    }
 
-        const bool changed = fieldsDiffer(plan.baseline, plan.candidate, field);
-        if (hotkeys_ == nullptr) {
+    if (hotkeys_ == nullptr) {
+        for (const SettingsFieldId &field : validShortcutFields) {
+            SettingsFieldResult *fieldResult = mutableResultForField(&outcome.fieldResults, field);
+            const bool changed = fieldsDiffer(plan.baseline, plan.candidate, field);
             copySettingsField(changed ? plan.candidate : plan.baseline, field, &prospective);
             fieldResult->status = changed ? SettingsFieldStatus::Applied
                                           : SettingsFieldStatus::Unchanged;
-            continue;
         }
+    } else {
+        const QVector<HotkeyActionRegistrationResult> registrations =
+            hotkeys_->registerShortcuts(shortcutRequests);
+        for (qsizetype index = 0; index < validShortcutFields.size(); ++index) {
+            const SettingsFieldId &field = validShortcutFields.at(index);
+            SettingsFieldResult *fieldResult = mutableResultForField(&outcome.fieldResults, field);
+            const bool changed = fieldsDiffer(plan.baseline, plan.candidate, field);
+            const HotkeyRegistrationResult registration = index < registrations.size()
+                ? registrations.at(index).registration
+                : HotkeyRegistrationResult{false, false,
+                    HotkeyError{std::nullopt,
+                                QStringLiteral("The hotkey service did not return a result.")}};
+            if (!registration.registered) {
+                setHotkeyFailure(fieldResult, registration);
+                continue;
+            }
 
-        const ShortcutAction action = *field.shortcutAction;
-        const QKeySequence candidate(plan.candidate.shortcutFor(action));
-        const HotkeyRegistrationResult registration = hotkeys_->registerShortcut(action, candidate);
-        if (!registration.registered) {
-            setHotkeyFailure(fieldResult, registration);
-            continue;
-        }
-
-        copySettingsField(changed ? plan.candidate : plan.baseline, field, &prospective);
-        fieldResult->status = changed ? SettingsFieldStatus::Applied
-                                      : SettingsFieldStatus::Unchanged;
-        if (changed && !registration.unchanged) {
-            changedShortcuts.append({field, action,
-                                     QKeySequence(plan.baseline.shortcutFor(action))});
+            copySettingsField(changed ? plan.candidate : plan.baseline, field, &prospective);
+            fieldResult->status = changed ? SettingsFieldStatus::Applied
+                                          : SettingsFieldStatus::Unchanged;
+            if (changed && !registration.unchanged) {
+                changedShortcuts.append({field, *field.shortcutAction,
+                                         QKeySequence(plan.baseline.shortcutFor(*field.shortcutAction))});
+            }
         }
     }
 
@@ -592,14 +608,29 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
         return outcome;
     }
 
+    QVector<HotkeyRegistrationRequest> restorationRequests;
+    QVector<SuccessfulChangedShortcut> restoredShortcuts;
+    restorationRequests.reserve(changedShortcuts.size());
+    restoredShortcuts.reserve(changedShortcuts.size());
     for (auto shortcut = changedShortcuts.crbegin(); shortcut != changedShortcuts.crend(); ++shortcut) {
-        const HotkeyRegistrationResult restoration = hotkeys_->registerShortcut(shortcut->action,
-                                                                                 shortcut->baseline);
+        restorationRequests.append({shortcut->action, shortcut->baseline});
+        restoredShortcuts.append(*shortcut);
+    }
+    const QVector<HotkeyActionRegistrationResult> restorations =
+        restorationRequests.isEmpty() ? QVector<HotkeyActionRegistrationResult>{}
+                                      : hotkeys_->registerShortcuts(restorationRequests);
+    for (qsizetype index = 0; index < restoredShortcuts.size(); ++index) {
+        const SuccessfulChangedShortcut &shortcut = restoredShortcuts.at(index);
+        const HotkeyRegistrationResult restoration = index < restorations.size()
+            ? restorations.at(index).registration
+            : HotkeyRegistrationResult{false, false,
+                HotkeyError{std::nullopt,
+                            QStringLiteral("The hotkey service did not return a restoration result.")}};
         if (restoration.registered) {
             continue;
         }
 
-        SettingsFieldResult *fieldResult = mutableResultForField(&outcome.fieldResults, shortcut->field);
+        SettingsFieldResult *fieldResult = mutableResultForField(&outcome.fieldResults, shortcut.field);
         if (fieldResult == nullptr) {
             continue;
         }

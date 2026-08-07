@@ -31,6 +31,8 @@ public:
 
     HotkeyRegistrationResult registerShortcut(ShortcutAction action,
                                               const QKeySequence &sequence) override;
+    QVector<HotkeyActionRegistrationResult> registerShortcuts(
+        const QVector<HotkeyRegistrationRequest> &requests) override;
     void unregisterAll() override;
     bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *result) override;
 
