@@ -130,6 +130,18 @@ QVector<ShortcutAction> shortcutActionsInSettingsOrder() {
     return actions;
 }
 
+void seed(FakeHotkeyService *hotkeys, const AppSettings &settings) {
+    Q_ASSERT(hotkeys != nullptr);
+    for (ShortcutAction action : shortcutActionsInSettingsOrder()) {
+        const HotkeyRegistrationResult result = hotkeys->registerShortcut(action,
+                                                                           settings.shortcutFor(action));
+        Q_ASSERT(result.registered);
+    }
+    hotkeys->attempts.clear();
+    hotkeys->batchRequests.clear();
+    hotkeys->unregisteredActions.clear();
+}
+
 } // namespace
 
 class SettingsApplyCoordinatorTest : public QObject {
@@ -392,6 +404,115 @@ private slots:
                     .reason.contains("previous shortcut was restored"));
         QCOMPARE(hotkeys.active(ShortcutAction::ToggleAlwaysOnTop), alwaysOnTop);
         QVERIFY(!outcome.mayClose);
+    }
+
+    void successfulShortcutSwapCommitsBothFields() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleToolbar,
+                              baseline.shortcutFor(ShortcutAction::VolumeUp));
+        candidate.setShortcut(ShortcutAction::VolumeUp,
+                              baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        FakeHotkeyService hotkeys;
+        seed(&hotkeys, baseline);
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(outcome.fieldResults.size(), allSettingsFields().size());
+        for (qsizetype index = 0; index < outcome.fieldResults.size(); ++index) {
+            QCOMPARE(outcome.fieldResults.at(index).field, allSettingsFields().at(index));
+        }
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
+                     SettingsFieldStatus::Applied);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp),
+                     SettingsFieldStatus::Applied);
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleToolbar),
+                 candidate.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::VolumeUp),
+                 candidate.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(hotkeys.activeBindings.value(static_cast<int>(ShortcutAction::ToggleToolbar)),
+                 candidate.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(hotkeys.activeBindings.value(static_cast<int>(ShortcutAction::VolumeUp)),
+                 candidate.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(hotkeys.unregisterAllCount, 0);
+        QCOMPARE(persistence.saved.size(), 1);
+    }
+
+    void failedShortcutCycleRollsBackOnlyCycleFields() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleToolbar,
+                              baseline.shortcutFor(ShortcutAction::VolumeUp));
+        candidate.setShortcut(ShortcutAction::VolumeUp,
+                              baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        candidate.setShortcut(ShortcutAction::VolumeDown, QKeySequence("Ctrl+Alt+D"));
+        FakeHotkeyService hotkeys;
+        seed(&hotkeys, baseline);
+        hotkeys.reject(ShortcutAction::VolumeUp,
+                       candidate.shortcutFor(ShortcutAction::VolumeUp));
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeDown),
+                     SettingsFieldStatus::Applied);
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleToolbar),
+                 baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::VolumeUp),
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::VolumeDown),
+                 candidate.shortcutFor(ShortcutAction::VolumeDown));
+        QCOMPARE(hotkeys.activeBindings.value(static_cast<int>(ShortcutAction::VolumeDown)),
+                 candidate.shortcutFor(ShortcutAction::VolumeDown));
+    }
+
+    void persistenceFailureRestoresSuccessfulShortcutSwap() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleToolbar,
+                              baseline.shortcutFor(ShortcutAction::VolumeUp));
+        candidate.setShortcut(ShortcutAction::VolumeUp,
+                              baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        FakeHotkeyService hotkeys;
+        seed(&hotkeys, baseline);
+        RecordingSettingsPersistence persistence;
+        persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                                      QFileDevice::WriteError, "Disk full"});
+        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QVERIFY(outcome.globalResult.has_value());
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        QCOMPARE(hotkeys.batchRequests.size(), 2);
+        QCOMPARE(hotkeys.batchRequests.at(0).size(), shortcutActionsInSettingsOrder().size());
+        QCOMPARE(hotkeys.batchRequests.at(1).size(), 2);
+        QCOMPARE(hotkeys.batchRequests.at(1).at(0).action, ShortcutAction::ToggleToolbar);
+        QCOMPARE(hotkeys.batchRequests.at(1).at(0).sequence,
+                 baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(hotkeys.batchRequests.at(1).at(1).action, ShortcutAction::VolumeUp);
+        QCOMPARE(hotkeys.batchRequests.at(1).at(1).sequence,
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
+        QCOMPARE(hotkeys.activeBindings.value(static_cast<int>(ShortcutAction::ToggleToolbar)),
+                 baseline.shortcutFor(ShortcutAction::ToggleToolbar));
+        QCOMPARE(hotkeys.activeBindings.value(static_cast<int>(ShortcutAction::VolumeUp)),
+                 baseline.shortcutFor(ShortcutAction::VolumeUp));
     }
 
     void failedShortcutKeepsBaselineWhileRecordingFieldsCommit() {

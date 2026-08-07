@@ -137,6 +137,189 @@ HotkeyRegistrationResult WindowsHotkeyService::registerShortcut(ShortcutAction a
     return {true};
 }
 
+QVector<HotkeyActionRegistrationResult> WindowsHotkeyService::registerShortcuts(
+    const QVector<HotkeyRegistrationRequest> &requests) {
+    QVector<HotkeyActionRegistrationResult> results;
+    results.reserve(requests.size());
+    for (const HotkeyRegistrationRequest &request : requests) {
+        results.append({request.action, request.sequence, {}});
+    }
+
+    QVector<bool> changed(requests.size(), false);
+    QHash<int, int> changedRequestForAction;
+    QHash<QString, int> activeOwnerForSequence;
+    for (auto entry = registrations_.cbegin(); entry != registrations_.cend(); ++entry) {
+        activeOwnerForSequence.insert(entry->sequence.toString(QKeySequence::PortableText),
+                                      entry.key());
+    }
+
+    for (qsizetype index = 0; index < requests.size(); ++index) {
+        const HotkeyRegistrationRequest &request = requests.at(index);
+        const int id = idForAction(request.action);
+        const auto existing = registrations_.constFind(id);
+        if (!toNativeHotkey(request.sequence).has_value()
+            || (existing != registrations_.constEnd() && existing->sequence == request.sequence)) {
+            results[index].registration = registerShortcut(request.action, request.sequence);
+            continue;
+        }
+        changed[index] = true;
+        changedRequestForAction.insert(id, index);
+    }
+
+    QVector<int> dependency(requests.size(), -1);
+    for (qsizetype index = 0; index < requests.size(); ++index) {
+        if (!changed.at(index)) {
+            continue;
+        }
+        const auto owner = activeOwnerForSequence.constFind(
+            requests.at(index).sequence.toString(QKeySequence::PortableText));
+        if (owner == activeOwnerForSequence.constEnd()
+            || owner.value() == idForAction(requests.at(index).action)) {
+            continue;
+        }
+        const auto ownerRequest = changedRequestForAction.constFind(owner.value());
+        if (ownerRequest != changedRequestForAction.constEnd()) {
+            dependency[index] = ownerRequest.value();
+        }
+    }
+
+    QVector<int> visitState(requests.size(), 0);
+    QVector<int> visitStack;
+    QVector<QVector<int>> cycles;
+    std::function<void(int)> findCycles = [&](int index) {
+        visitState[index] = 1;
+        visitStack.append(index);
+        const int next = dependency.at(index);
+        if (next >= 0 && changed.at(next)) {
+            if (visitState.at(next) == 0) {
+                findCycles(next);
+            } else if (visitState.at(next) == 1) {
+                const qsizetype start = visitStack.indexOf(next);
+                QVector<int> cycle;
+                for (qsizetype member = start; member < visitStack.size(); ++member) {
+                    cycle.append(visitStack.at(member));
+                }
+                cycles.append(cycle);
+            }
+        }
+        visitStack.removeLast();
+        visitState[index] = 2;
+    };
+    for (qsizetype index = 0; index < requests.size(); ++index) {
+        if (changed.at(index) && visitState.at(index) == 0) {
+            findCycles(index);
+        }
+    }
+
+    QVector<bool> processed(requests.size(), false);
+    for (qsizetype index = 0; index < requests.size(); ++index) {
+        if (!changed.at(index)) {
+            processed[index] = true;
+        }
+    }
+    for (const QVector<int> &cycle : cycles) {
+        QVector<HotkeyEntry> previous;
+        previous.reserve(cycle.size());
+        for (int index : cycle) {
+            const int id = idForAction(requests.at(index).action);
+            const auto entry = registrations_.constFind(id);
+            if (entry != registrations_.constEnd()) {
+                previous.append(*entry);
+                operations_.unregisterHotkey(id);
+                registrations_.erase(entry);
+            }
+        }
+
+        QVector<int> registeredCandidates;
+        int failedIndex = -1;
+        for (int index : cycle) {
+            const auto native = toNativeHotkey(requests.at(index).sequence);
+            const int id = idForAction(requests.at(index).action);
+            if (!native.has_value() || !operations_.registerHotkey(id, native->modifiers, native->virtualKey)) {
+                failedIndex = index;
+                results[index].registration.error = native.has_value()
+                    ? std::optional<HotkeyError>(nativeError(operations_))
+                    : std::optional<HotkeyError>(HotkeyError{std::nullopt,
+                        QStringLiteral("Shortcut is empty or unsupported.")});
+                break;
+            }
+            registrations_.insert(id, {requests.at(index).action, requests.at(index).sequence});
+            registeredCandidates.append(index);
+        }
+
+        if (failedIndex < 0) {
+            for (int index : cycle) {
+                results[index].registration = {true};
+                processed[index] = true;
+            }
+            continue;
+        }
+
+        for (int index : registeredCandidates) {
+            const int id = idForAction(requests.at(index).action);
+            operations_.unregisterHotkey(id);
+            registrations_.remove(id);
+        }
+        QHash<int, HotkeyError> recoveryErrors;
+        QHash<int, bool> restored;
+        for (const HotkeyEntry &entry : previous) {
+            const int id = idForAction(entry.action);
+            const auto native = toNativeHotkey(entry.sequence);
+            if (native.has_value() && operations_.registerHotkey(id, native->modifiers, native->virtualKey)) {
+                registrations_.insert(id, entry);
+                restored.insert(id, true);
+            } else {
+                recoveryErrors.insert(id, native.has_value()
+                    ? nativeError(operations_)
+                    : HotkeyError{std::nullopt,
+                                   QStringLiteral("Previous shortcut is empty or unsupported.")});
+            }
+        }
+        for (int index : cycle) {
+            HotkeyRegistrationResult &result = results[index].registration;
+            result.registered = false;
+            result.unchanged = false;
+            const int id = idForAction(requests.at(index).action);
+            if (!result.error.has_value()) {
+                result.error = HotkeyError{std::nullopt,
+                    QStringLiteral("Shortcut replacement was rolled back because another shortcut in this cycle could not be registered.")};
+            }
+            result.previousRestored = restored.value(id, false);
+            if (recoveryErrors.contains(id)) {
+                result.recoveryError = recoveryErrors.value(id);
+            }
+            processed[index] = true;
+        }
+    }
+
+    std::function<void(int)> processAcyclic = [&](int index) {
+        if (processed.at(index)) {
+            return;
+        }
+        const int owner = dependency.at(index);
+        if (owner >= 0) {
+            processAcyclic(owner);
+            if (!results.at(owner).registration.registered) {
+                results[index].registration = {
+                    false, false,
+                    HotkeyError{std::nullopt,
+                        QStringLiteral("Shortcut could not move because the action that owns its requested shortcut did not move.")},
+                    true};
+                processed[index] = true;
+                return;
+            }
+        }
+        results[index].registration = registerShortcut(requests.at(index).action, requests.at(index).sequence);
+        processed[index] = true;
+    };
+    for (qsizetype index = 0; index < requests.size(); ++index) {
+        if (changed.at(index)) {
+            processAcyclic(index);
+        }
+    }
+    return results;
+}
+
 void WindowsHotkeyService::unregisterAll() {
     for (const int id : registrations_.keys()) {
         operations_.unregisterHotkey(id);
