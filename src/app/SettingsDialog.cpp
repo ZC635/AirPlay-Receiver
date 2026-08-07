@@ -137,6 +137,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     table_->setObjectName("shortcutTable");
     table_->setColumnCount(3);
     table_->setHorizontalHeaderLabels({"Action", "Shortcut", "Status"});
+    table_->setColumnHidden(2, true);
     table_->setRowCount(static_cast<int>(std::size(kShortcutRows)));
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table_->setSelectionMode(QAbstractItemView::NoSelection);
@@ -314,6 +315,7 @@ void SettingsDialog::refreshFieldErrors() {
         label->clear();
         label->hide();
     }
+    bool showShortcutStatus = false;
     for (const SettingsFieldResult &result : fieldResults_) {
         if (!isFailureStatus(result.status)
             || (globalResult_.has_value() && result.status != SettingsFieldStatus::RecoveryFailed)) {
@@ -334,8 +336,10 @@ void SettingsDialog::refreshFieldErrors() {
         if (label != nullptr) {
             label->setText(fieldFailureMessage(result));
             label->show();
+            showShortcutStatus = showShortcutStatus || result.field.kind == SettingsFieldKind::Shortcut;
         }
     }
+    table_->setColumnHidden(2, !showShortcutStatus);
 }
 
 void SettingsDialog::refreshPresentation() {
