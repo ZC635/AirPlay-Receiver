@@ -29,6 +29,13 @@ void ThirdPartyDiagnosticTranslatorTest::translatesReviewedSafePatterns() {
     QCOMPARE(remote->fields.value("address_family"), QString("ipv4"));
     QVERIFY(!remote->fields.value("prefix").contains(".88"));
 
+    const auto upstreamLocal = ThirdPartyDiagnosticTranslator::translate(6, "Local : 192.168.1.10");
+    QVERIFY(upstreamLocal.has_value());
+    QCOMPARE(upstreamLocal->name, QString("connection_source"));
+    QCOMPARE(upstreamLocal->fields.value("endpoint"), QString("local"));
+    QCOMPARE(upstreamLocal->fields.value("address_family"), QString("ipv4"));
+    QVERIFY(!upstreamLocal->fields.value("prefix").contains(".10"));
+
     const auto pairing = ThirdPartyDiagnosticTranslator::translate(6, "Client authentication success");
     QVERIFY(pairing.has_value());
     QCOMPARE(pairing->fields.value("result"), QString("success"));
