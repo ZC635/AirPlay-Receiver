@@ -119,7 +119,7 @@ DiagnosticValue<QVector<WindowsRouteOperation>> readRoutes(QDeadlineTimer deadli
             row.InterfaceLuid.Value,
             row.DestinationPrefix.Prefix.si_family == AF_INET
                 ? QAbstractSocket::IPv4Protocol : QAbstractSocket::IPv6Protocol,
-            true, static_cast<int>(row.Metric)});
+            true, windowsRouteMetricFromNative(row.Metric)});
     }
     FreeMibTable(table);
     return DiagnosticValue<QVector<WindowsRouteOperation>>::available(std::move(result));
@@ -243,6 +243,10 @@ QString windowsSystemPowerShellPath(QString systemDirectory) {
     while (systemDirectory.endsWith(QLatin1Char('\\')) || systemDirectory.endsWith(QLatin1Char('/')))
         systemDirectory.chop(1);
     return systemDirectory + QStringLiteral("\\WindowsPowerShell\\v1.0\\powershell.exe");
+}
+
+qint64 windowsRouteMetricFromNative(quint32 metric) {
+    return static_cast<qint64>(metric);
 }
 
 EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvironmentOperations operations) {

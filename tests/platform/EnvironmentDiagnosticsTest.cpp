@@ -321,6 +321,10 @@ private slots:
         QVERIFY(windowsSystemPowerShellPath({}).isEmpty());
     }
 
+    void preservesNativeUnsignedRouteMetricWidth() {
+        QCOMPARE(windowsRouteMetricFromNative(3000000000U), 3000000000LL);
+    }
+
     void timedOutFirewallPreservesCollectedNetworkDetails() {
         WindowsEnvironmentOperations operations;
         WindowsAdapterOperation adapter;
