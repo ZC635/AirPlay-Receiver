@@ -30,7 +30,9 @@ bool isPrivateIpv4(quint32 address) {
 }
 
 bool isPrivateIpv6(const Q_IPV6ADDR &address) {
-    return (address.c[0] & 0xfeU) == 0xfcU;
+    const bool uniqueLocal = (address.c[0] & 0xfeU) == 0xfcU;
+    const bool linkLocal = address.c[0] == 0xfeU && (address.c[1] & 0xc0U) == 0x80U;
+    return uniqueLocal || linkLocal;
 }
 
 QString replaceAddresses(QString text, const QRegularExpression &expression, int prefixLength) {
@@ -83,7 +85,7 @@ QString DiagnosticSanitizer::sanitizeFieldName(QStringView name) {
 QString DiagnosticSanitizer::sanitizeText(QStringView value) {
     QString text = value.toString();
     static const QRegularExpression sensitiveMultiline(
-        QStringLiteral("(?:authorization|cookie|session|token|key|header)"),
+        QStringLiteral(R"(\b(?:eiv|ekey|aesiv|aeskey|iv|ecdh(?:[_-]?secret)?|password|ssid|authorization|cookie|session(?:[_-]?id)?|token|(?:public|private)?[_-]?key|header|auth(?:entication)?|pairing|secret)\b)"),
         QRegularExpression::CaseInsensitiveOption);
     if ((text.contains(QLatin1Char('\n')) || text.contains(QLatin1Char('\r'))) &&
         sensitiveMultiline.match(text).hasMatch()) {

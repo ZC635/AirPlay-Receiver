@@ -57,7 +57,7 @@ std::optional<DiagnosticEvent> ThirdPartyDiagnosticTranslator::translate(int ups
     }
 
     static const QRegularExpression endpoint(
-        QStringLiteral(R"(\A(Local|Remote): ([0-9A-Fa-f:.]+)\z)"));
+        QStringLiteral(R"(\A(Local:|Local :|Remote:) ([0-9A-Fa-f:.]+)\z)"));
     if (completeMatch(endpoint, text, &match)) {
         const QHostAddress address(match.captured(2));
         const bool ipv4 = address.protocol() == QAbstractSocket::IPv4Protocol;
@@ -67,7 +67,9 @@ std::optional<DiagnosticEvent> ThirdPartyDiagnosticTranslator::translate(int ups
         return eventFor(upstreamLevel, QStringLiteral("connection_source"),
                         {{QStringLiteral("address_family"), ipv4 ? QStringLiteral("ipv4")
                                                                   : QStringLiteral("ipv6")},
-                         {QStringLiteral("endpoint"), match.captured(1).toLower()},
+                         {QStringLiteral("endpoint"), match.captured(1).startsWith(QStringLiteral("Local"))
+                                                              ? QStringLiteral("local")
+                                                              : QStringLiteral("remote")},
                          {QStringLiteral("prefix"),
                           DiagnosticSanitizer::maskedAddress(address, ipv4 ? 24 : 64)}});
     }
