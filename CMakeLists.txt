@@ -137,6 +137,8 @@ target_compile_definitions(airplay_app_lib PUBLIC
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::Network)
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE
+        src/platform/MdnsServerAdapter.cpp
+        src/platform/MdnsServerAdapter.h
         src/backend/RecordingController.cpp
         src/backend/RecordingController.h
         src/backend/GstRecordingPipeline.cpp

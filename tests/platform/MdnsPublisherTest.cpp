@@ -4,6 +4,18 @@
 
 #include "platform/MdnsPublishing.h"
 #include "platform/MdnsPublisher.h"
+#include "support/CollectingDiagnosticLogSink.h"
+
+#if AIRPLAY_WITH_UXPLAY
+#include <qmdnsengine/abstractserver.h>
+
+class PublisherFakeServer final : public QMdnsEngine::AbstractServer {
+public:
+    void sendMessage(const QMdnsEngine::Message &) override {}
+    void sendMessageToAll(const QMdnsEngine::Message &) override {}
+    void fail(const QString &message) { emit error(message); }
+};
+#endif
 
 class MdnsPublisherTest : public QObject {
     Q_OBJECT
@@ -160,6 +172,53 @@ private slots:
 
         QVERIFY(publishing != nullptr);
     }
+
+#if AIRPLAY_WITH_UXPLAY
+    void publishRecordsLifecycleWithoutHostnameOrTxt() {
+        CollectingSink sink;
+        PublisherFakeServer *server = nullptr;
+        MdnsPublisher publisher(&sink, [&server](QObject *parent) {
+            server = new PublisherFakeServer;
+            server->setParent(parent);
+            return server;
+        });
+        const QByteArray hwAddr = QByteArray::fromHex("020000000001");
+        const unsigned char raw[] = {9, 't', 'x', 't', 'v', 'e', 'r', 's', '=', '1'};
+
+        QVERIFY(publisher.publish(QStringLiteral("Private Receiver"), hwAddr, 5000,
+                                  reinterpret_cast<const char *>(raw), sizeof(raw),
+                                  reinterpret_cast<const char *>(raw), sizeof(raw)));
+        QCOMPARE(sink.events.at(0).name, QString("server_created"));
+        QTRY_COMPARE(countEvents(sink, "hostname_registered"), 1);
+        QCOMPARE(countEvents(sink, "service_configured"), 2);
+        const DiagnosticEvent hostname = findEvent(sink, "hostname_registered");
+        QVERIFY(!hostname.fields.contains("hostname"));
+        QVERIFY(!joinedFields(sink).contains("Private Receiver"));
+        QVERIFY(!joinedFields(sink).contains("txtvers"));
+        QVERIFY(!joinedFields(sink).contains("txtvers=1"));
+        QVERIFY(joinedFields(sink).contains("_raop._tcp"));
+        QVERIFY(joinedFields(sink).contains("_airplay._tcp"));
+        QVERIFY(joinedFields(sink).contains("5000"));
+    }
+
+    void stopDisconnectsLateDelegateSignals() {
+        CollectingSink sink;
+        PublisherFakeServer *server = nullptr;
+        MdnsPublisher publisher(&sink, [&server](QObject *parent) {
+            server = new PublisherFakeServer;
+            server->setParent(parent);
+            return server;
+        });
+        const unsigned char raw[] = {9, 't', 'x', 't', 'v', 'e', 'r', 's', '=', '1'};
+        QVERIFY(publisher.publish(QStringLiteral("Receiver"), QByteArray::fromHex("020000000001"), 5000,
+                                  reinterpret_cast<const char *>(raw), sizeof(raw),
+                                  reinterpret_cast<const char *>(raw), sizeof(raw)));
+        publisher.stop();
+        const int eventCount = sink.events.size();
+        QCoreApplication::sendPostedEvents();
+        QCOMPARE(sink.events.size(), eventCount);
+    }
+#endif
 
 #if !AIRPLAY_WITH_UXPLAY
     void publishReturnsFalseInNonUxPlayBuild() {

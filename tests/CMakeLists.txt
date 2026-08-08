@@ -113,7 +113,20 @@ add_test(NAME NetworkDiagnosticsMonitorTest COMMAND NetworkDiagnosticsMonitorTes
 
 add_executable(MdnsPublisherTest platform/MdnsPublisherTest.cpp)
 target_link_libraries(MdnsPublisherTest PRIVATE airplay_app_lib Qt6::Test)
+target_include_directories(MdnsPublisherTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
+
+add_executable(MdnsServerAdapterTest platform/MdnsServerAdapterTest.cpp)
+target_link_libraries(MdnsServerAdapterTest PRIVATE airplay_app_lib Qt6::Test)
+target_include_directories(MdnsServerAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(AIRPLAY_WITH_UXPLAY)
+    get_target_property(_qmdns_test_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
+    if(_qmdns_test_inc)
+        target_include_directories(MdnsServerAdapterTest PRIVATE ${_qmdns_test_inc})
+    endif()
+    target_link_libraries(MdnsServerAdapterTest PRIVATE qmdnsengine)
+endif()
+add_test(NAME MdnsServerAdapterTest COMMAND MdnsServerAdapterTest)
 
 add_executable(DiscoveryRestartControllerTest backend/DiscoveryRestartControllerTest.cpp)
 target_link_libraries(DiscoveryRestartControllerTest PRIVATE airplay_app_lib Qt6::Test)
@@ -293,6 +306,7 @@ set(AIRPLAY_QT_TESTS
     EnvironmentDiagnosticsTest
     NetworkDiagnosticsMonitorTest
     MdnsPublisherTest
+    MdnsServerAdapterTest
     DiscoveryRestartControllerTest
     ReceiverStatePolicyTest
     ReceiverConfigurationChangeTest
