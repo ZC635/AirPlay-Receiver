@@ -6,6 +6,14 @@ add_executable(DiagnosticLogSinkTest diagnostics/DiagnosticLogSinkTest.cpp)
 target_link_libraries(DiagnosticLogSinkTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME DiagnosticLogSinkTest COMMAND DiagnosticLogSinkTest)
 
+add_executable(DiagnosticActivationTest app/DiagnosticActivationTest.cpp)
+target_link_libraries(DiagnosticActivationTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticActivationTest COMMAND DiagnosticActivationTest)
+
+add_executable(QtDiagnosticMessageBridgeTest diagnostics/QtDiagnosticMessageBridgeTest.cpp)
+target_link_libraries(QtDiagnosticMessageBridgeTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME QtDiagnosticMessageBridgeTest COMMAND QtDiagnosticMessageBridgeTest)
+
 add_executable(DiagnosticSanitizerTest diagnostics/DiagnosticSanitizerTest.cpp)
 target_link_libraries(DiagnosticSanitizerTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME DiagnosticSanitizerTest COMMAND DiagnosticSanitizerTest)
@@ -253,6 +261,8 @@ execute_process(
 
 set(AIRPLAY_QT_TESTS
     DiagnosticLogSinkTest
+    DiagnosticActivationTest
+    QtDiagnosticMessageBridgeTest
     DiagnosticSanitizerTest
     DiagnosticSessionTest
     ThirdPartyDiagnosticTranslatorTest

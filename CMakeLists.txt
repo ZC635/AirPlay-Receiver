@@ -22,9 +22,13 @@ add_library(airplay_app_lib
     src/diagnostics/DiagnosticSanitizer.cpp
     src/diagnostics/DiagnosticSession.h
     src/diagnostics/DiagnosticSession.cpp
+    src/diagnostics/QtDiagnosticMessageBridge.h
+    src/diagnostics/QtDiagnosticMessageBridge.cpp
     src/diagnostics/ThirdPartyDiagnosticTranslator.h
     src/diagnostics/ThirdPartyDiagnosticTranslator.cpp
     src/app/AppSettings.cpp
+    src/app/DiagnosticActivation.cpp
+    src/app/DiagnosticActivation.h
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
     src/app/AppSettingsStore.h
