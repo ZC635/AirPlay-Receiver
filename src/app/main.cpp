@@ -28,6 +28,7 @@
 #include "diagnostics/QtDiagnosticMessageBridge.h"
 #include "platform/DependencyDiagnostics.h"
 #include "platform/EnvironmentDiagnostics.h"
+#include "platform/NetworkDiagnosticsMonitor.h"
 #include "platform/WindowsEnvironmentDiagnostics.h"
 #include "platform/WindowsHotkeyService.h"
 
@@ -116,6 +117,7 @@ bool settingsFileContainsObject(const QString &settingsPath) {
 void closeDiagnosticSession(DiagnosticLogSink *sink,
                             std::optional<QtDiagnosticMessageBridge> &qtBridge,
                             std::unique_ptr<DiagnosticSession> &session,
+                            std::unique_ptr<NetworkDiagnosticsMonitor> &networkMonitor,
                             AirPlayReceiver *receiver) {
     const DiagnosticShutdownDecision decision = diagnosticShutdownDecision(true);
     if (decision.recordShutdownStarted) {
@@ -123,6 +125,10 @@ void closeDiagnosticSession(DiagnosticLogSink *sink,
     }
     if (receiver != nullptr) {
         receiver->stop();
+    }
+    if (networkMonitor) {
+        networkMonitor->stop();
+        networkMonitor.reset();
     }
     qtBridge.reset();
     if (decision.closeNormally && session) {
@@ -132,11 +138,16 @@ void closeDiagnosticSession(DiagnosticLogSink *sink,
 
 void abortDiagnosticSession(DiagnosticLogSink *sink,
                             std::optional<QtDiagnosticMessageBridge> &qtBridge,
-                            std::unique_ptr<DiagnosticSession> &session) {
+                            std::unique_ptr<DiagnosticSession> &session,
+                            std::unique_ptr<NetworkDiagnosticsMonitor> &networkMonitor) {
     const DiagnosticShutdownDecision decision = diagnosticShutdownDecision(false);
     if (decision.recordStartupAborted) {
         recordStartup(sink, QStringLiteral("startup_aborted"),
                       {{QStringLiteral("reason"), QStringLiteral("missing_runtime")}}, true);
+    }
+    if (networkMonitor) {
+        networkMonitor->stop();
+        networkMonitor.reset();
     }
     qtBridge.reset();
     session.reset();
@@ -228,11 +239,19 @@ int main(int argc, char *argv[]) {
                    {QStringLiteral("executable_name"), QFileInfo(QCoreApplication::applicationFilePath()).fileName()},
                    {QStringLiteral("version"), QString::fromUtf16(AirPlayBuildIdentity::version)}}, true);
 
+    std::unique_ptr<NetworkDiagnosticsMonitor> networkMonitor;
     if (shouldCollectEnvironmentDiagnostics(session && session->isActive())) {
         const EnvironmentSnapshot environmentSnapshot = EnvironmentDiagnostics::collect(
             windowsEnvironmentDiagnosticProviders(), 3000);
         for (const DiagnosticEvent &event : EnvironmentDiagnostics::events(environmentSnapshot)) {
             sink->record(event);
+        }
+        networkMonitor = std::make_unique<NetworkDiagnosticsMonitor>(
+            sink, windowsNetworkMonitorOperations());
+        if (!networkMonitor->start()) {
+            recordStartup(sink, QStringLiteral("network_monitor"),
+                          {{QStringLiteral("result"), QStringLiteral("unavailable")}}, true);
+            networkMonitor.reset();
         }
     }
 
@@ -264,7 +283,7 @@ int main(int argc, char *argv[]) {
                 QStringLiteral("AirPlay Receiver dependencies missing"),
                 QString("This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again.")
                     .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
-            abortDiagnosticSession(sink, qtBridge, session);
+            abortDiagnosticSession(sink, qtBridge, session, networkMonitor);
             return 1;
         }
     }
@@ -325,7 +344,7 @@ int main(int argc, char *argv[]) {
     receiver.start();
     window.show();
     const int exitCode = app.exec();
-    closeDiagnosticSession(sink, qtBridge, session, &receiver);
+    closeDiagnosticSession(sink, qtBridge, session, networkMonitor, &receiver);
     return exitCode;
 #else
     MainWindow window(settings, &hotkeys, nullptr, settingsPath);
@@ -341,7 +360,7 @@ int main(int argc, char *argv[]) {
                   {{QStringLiteral("result"), QStringLiteral("not_built")}}, true);
     window.show();
     const int exitCode = app.exec();
-    closeDiagnosticSession(sink, qtBridge, session, nullptr);
+    closeDiagnosticSession(sink, qtBridge, session, networkMonitor, nullptr);
     return exitCode;
 #endif
 }
