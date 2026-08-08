@@ -147,6 +147,16 @@ private slots:
         QCOMPARE(findEvent(sink, "http_server_started").fields.value("port"),
                  QString::number(mdns.lastPort));
         QVERIFY(hasEvent(sink, "services_registered"));
+        const auto dnsSdInitialized = findEvent(sink, "dns_sd_initialized");
+        const auto httpServerStarted = findEvent(sink, "http_server_started");
+        const auto servicesRegistered = findEvent(sink, "services_registered");
+        for (const auto &event : {dnsSdInitialized, httpServerStarted, servicesRegistered}) {
+            QCOMPARE(event.component, QStringLiteral("discovery"));
+            QCOMPARE(event.severity, DiagnosticSeverity::Info);
+            QVERIFY(event.flushImmediately);
+        }
+        QVERIFY(eventIndex(sink, "dns_sd_initialized") < eventIndex(sink, "http_server_started"));
+        QVERIFY(eventIndex(sink, "http_server_started") < eventIndex(sink, "services_registered"));
         QVERIFY(!joinedFields(sink).contains("Private Receiver Name"));
 #else
         QSKIP("UxPlay support is not enabled in this build");
@@ -184,6 +194,11 @@ private slots:
         QCOMPARE(failure.fields.value("stage"), stage);
         QCOMPARE(failure.fields.value("result"), QStringLiteral("failed"));
         QVERIFY(failure.flushImmediately);
+        if (stage == QStringLiteral("dns_sd_init")) {
+            QCOMPARE(failure.fields.value("classification"), QStringLiteral("injected_failure"));
+            QVERIFY(!failure.fields.contains("code"));
+            QVERIFY(!discovery.lastError().contains(QStringLiteral(": 0")));
+        }
         QVERIFY(!joinedFields(sink).contains("Private Receiver Name"));
         QVERIFY(!joinedFields(sink).contains("private hook error"));
         QVERIFY(!raop_is_running(static_cast<raop_t *>(raop.get())));
