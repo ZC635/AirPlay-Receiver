@@ -42,6 +42,11 @@ public:
     bool isAlwaysOnTopEnabled() const;
     void setAlwaysOnTopEnabled(bool enabled);
     void setVolume(int value);
+    void setDiagnosticLoggingActive(bool active);
+    void handleDiagnosticWriteFailure(QString error);
+
+signals:
+    void diagnosticLoggingStopped(QString error);
 
 private:
     struct HotkeyRegistrationFailure {
@@ -107,6 +112,8 @@ private:
     bool suppressRecordingCompletion_ = false;
     bool recordingReturnedIdlePendingResult_ = false;
     bool exitConfirmationActive_ = false;
+    bool diagnosticLoggingActive_ = false;
+    bool diagnosticLoggingStopped_ = false;
     std::optional<RecordingResult> exitPendingRecordingResult_;
     std::optional<QString> exitPendingRecordingError_;
 };

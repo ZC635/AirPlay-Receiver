@@ -18,6 +18,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QSignalSpy>
 #include <QImage>
 #include <QIcon>
 #include <QFileInfo>
@@ -189,6 +190,21 @@ private slots:
     void constructsWithExpectedTitle() {
         MainWindow window;
         QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
+    }
+
+    void diagnosticLoggingTitleAndFailureAreIdempotent() {
+        MainWindow window;
+        QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
+
+        window.setDiagnosticLoggingActive(true);
+        QCOMPARE(window.windowTitle(), QString("AirPlay Receiver [Diagnostic Logging]"));
+
+        QSignalSpy stopped(&window, &MainWindow::diagnosticLoggingStopped);
+        window.handleDiagnosticWriteFailure("disk full");
+        window.handleDiagnosticWriteFailure("disk full");
+
+        QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
+        QCOMPARE(stopped.count(), 1);
     }
 
     void constructsWithApplicationIcon() {

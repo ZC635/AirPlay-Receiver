@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX RC)
 
+set(AIRPLAY_BUILD_ID "" CACHE STRING "Optional build identity for diagnostic logs")
+
 if(NOT WIN32)
     message(FATAL_ERROR "This project requires Windows")
 endif()
@@ -99,7 +101,11 @@ add_library(airplay_app_lib
     src/platform/WindowsHotkeyService.h
 )
 target_include_directories(airplay_app_lib PUBLIC src)
-target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>)
+target_compile_definitions(airplay_app_lib PUBLIC
+    AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>
+    AIRPLAY_VERSION=\"${PROJECT_VERSION}\"
+    AIRPLAY_BUILD_ID=\"${AIRPLAY_BUILD_ID}\"
+)
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::Network)
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE

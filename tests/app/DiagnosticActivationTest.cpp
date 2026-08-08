@@ -2,6 +2,10 @@
 
 #include "app/DiagnosticActivation.h"
 
+#define main diagnosticActivationTestMain
+#include "app/main.cpp"
+#undef main
+
 class DiagnosticActivationTest final : public QObject {
     Q_OBJECT
 
@@ -15,6 +19,8 @@ private slots:
     void rejectsInvalidAndDuplicateParentPids();
     void repeatedDiagnosticFlagIsIdempotent();
     void ignoresOrdinaryStartupArguments();
+    void directCreationFailureFallsBackToNullMode();
+    void successfulCreationEnablesTitleSuffix();
 };
 
 void DiagnosticActivationTest::normalLaunchIsDisabled() {
@@ -91,6 +97,23 @@ void DiagnosticActivationTest::ignoresOrdinaryStartupArguments() {
     const auto activation = DiagnosticActivation::parse({"app", "--fullscreen", "--other=value"}, {});
     QVERIFY(activation.argumentError.isEmpty());
     QVERIFY(!activation.enabled);
+}
+
+void DiagnosticActivationTest::directCreationFailureFallsBackToNullMode() {
+    const auto decision = diagnosticStartupDecision(
+        DiagnosticActivation{true, DiagnosticActivationSource::CommandArgument},
+        false, "access denied");
+    QVERIFY(!decision.loggingActive);
+    QVERIFY(decision.continueApplication);
+    QCOMPARE(decision.userError, QString("access denied"));
+}
+
+void DiagnosticActivationTest::successfulCreationEnablesTitleSuffix() {
+    const auto decision = diagnosticStartupDecision(
+        DiagnosticActivation{true, DiagnosticActivationSource::CommandArgument}, true, {});
+    QVERIFY(decision.loggingActive);
+    QVERIFY(decision.continueApplication);
+    QVERIFY(decision.userError.isEmpty());
 }
 
 QTEST_GUILESS_MAIN(DiagnosticActivationTest)
