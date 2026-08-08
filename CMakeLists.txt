@@ -107,6 +107,10 @@ add_library(airplay_app_lib
     src/backend/VideoQualitySettings.h
     src/platform/DependencyDiagnostics.cpp
     src/platform/DependencyDiagnostics.h
+    src/platform/EnvironmentDiagnostics.cpp
+    src/platform/EnvironmentDiagnostics.h
+    src/platform/WindowsEnvironmentDiagnostics.cpp
+    src/platform/WindowsEnvironmentDiagnostics.h
     src/platform/AspectRatioSizing.cpp
     src/platform/AspectRatioSizing.h
     src/platform/FakeHotkeyService.h
@@ -147,7 +151,7 @@ if(AIRPLAY_WITH_UXPLAY)
     endif()
 endif()
 if(WIN32)
-    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi)
+    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi iphlpapi advapi32)
 endif()
 
 add_executable(airplay_receiver src/app/main.cpp src/app/app-icon.rc)

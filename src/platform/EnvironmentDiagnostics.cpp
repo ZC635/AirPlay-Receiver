@@ -1,0 +1,145 @@
+#include "platform/EnvironmentDiagnostics.h"
+
+#include "diagnostics/DiagnosticSanitizer.h"
+
+#include <QHostAddress>
+#include <QRegularExpression>
+
+namespace {
+
+QString statusText(DiagnosticFactStatus status) {
+    switch (status) {
+    case DiagnosticFactStatus::Available: return QStringLiteral("available");
+    case DiagnosticFactStatus::TimedOut: return QStringLiteral("timed_out");
+    case DiagnosticFactStatus::Unavailable: return QStringLiteral("unavailable");
+    }
+    return QStringLiteral("unavailable");
+}
+
+bool ascii(const QString &value) {
+    for (const QChar character : value) {
+        if (character.unicode() < 0x20 || character.unicode() > 0x7e)
+            return false;
+    }
+    return true;
+}
+
+QString enumValue(const DiagnosticFact &fact, const QStringList &allowed) {
+    if (fact.status != DiagnosticFactStatus::Available)
+        return statusText(fact.status);
+    return allowed.contains(fact.value) ? fact.value : QStringLiteral("unavailable");
+}
+
+QString systemValue(const DiagnosticFact &fact) {
+    if (fact.status != DiagnosticFactStatus::Available)
+        return statusText(fact.status);
+    const QString sanitized = DiagnosticSanitizer::sanitizeText(fact.value);
+    return ascii(sanitized) && !sanitized.isEmpty() ? sanitized : QStringLiteral("unavailable");
+}
+
+QString profileValue(const DiagnosticFact &fact) {
+    if (fact.status != DiagnosticFactStatus::Available)
+        return statusText(fact.status);
+    static const QRegularExpression allowed(
+        QStringLiteral("\\A(?:domain|private|public)=(?:on|off)(?:,(?:domain|private|public)=(?:on|off))*\\z"));
+    return allowed.match(fact.value).hasMatch() ? fact.value : QStringLiteral("unavailable");
+}
+
+QString safePrefix(QString prefix) {
+    const QStringList parts = prefix.split(QLatin1Char('/'));
+    bool validLength = false;
+    const int length = parts.size() == 2 ? parts.at(1).toInt(&validLength) : 0;
+    const QHostAddress address(parts.value(0));
+    if (!validLength || address.isNull())
+        return QStringLiteral("unavailable");
+    return DiagnosticSanitizer::maskedAddress(address, length);
+}
+
+DiagnosticFact timedOutIfExpired(QDeadlineTimer deadline, DiagnosticFact value) {
+    return deadline.hasExpired() ? DiagnosticFact::timedOut() : value;
+}
+
+template<typename T>
+DiagnosticValue<T> timedOutIfExpired(QDeadlineTimer deadline, DiagnosticValue<T> value) {
+    return deadline.hasExpired() ? DiagnosticValue<T>::timedOut() : value;
+}
+
+} // namespace
+
+DiagnosticFact DiagnosticFact::available(QString value) {
+    return {DiagnosticFactStatus::Available, std::move(value)};
+}
+
+DiagnosticFact DiagnosticFact::unavailable() { return {}; }
+
+DiagnosticFact DiagnosticFact::timedOut() { return {DiagnosticFactStatus::TimedOut, {}}; }
+
+EnvironmentSnapshot EnvironmentDiagnostics::collect(const EnvironmentDiagnosticProviders &providers,
+                                                    int totalTimeoutMs) {
+    QDeadlineTimer deadline(qMax(0, totalTimeoutMs));
+    EnvironmentSnapshot snapshot;
+    const auto fact = [&deadline](const auto &provider) {
+        if (deadline.hasExpired() || !provider)
+            return DiagnosticFact::timedOut();
+        return timedOutIfExpired(deadline, provider(deadline));
+    };
+    snapshot.operatingSystem = fact(providers.operatingSystem);
+    snapshot.cpuArchitecture = fact(providers.cpuArchitecture);
+    snapshot.processElevation = fact(providers.processElevation);
+    if (deadline.hasExpired() || !providers.network) {
+        snapshot.network = DiagnosticValue<NetworkEnvironmentFact>::timedOut();
+    } else {
+        snapshot.network = timedOutIfExpired(deadline, providers.network(deadline));
+    }
+    return snapshot;
+}
+
+QList<DiagnosticEvent> EnvironmentDiagnostics::events(const EnvironmentSnapshot &snapshot) {
+    QMap<QString, QString> snapshotFields{
+        {QStringLiteral("operating_system"), systemValue(snapshot.operatingSystem)},
+        {QStringLiteral("cpu_architecture"), systemValue(snapshot.cpuArchitecture)},
+        {QStringLiteral("process_elevation"), enumValue(snapshot.processElevation,
+            {QStringLiteral("elevated"), QStringLiteral("not_elevated")})},
+        {QStringLiteral("network"), statusText(snapshot.network.status)},
+    };
+    if (snapshot.network.status == DiagnosticFactStatus::Available) {
+        snapshotFields.insert(QStringLiteral("network_category"), enumValue(
+            snapshot.network.value.category,
+            {QStringLiteral("domain"), QStringLiteral("private"), QStringLiteral("public")}));
+        snapshotFields.insert(QStringLiteral("firewall_profiles"),
+                              profileValue(snapshot.network.value.firewallProfiles));
+        snapshotFields.insert(QStringLiteral("firewall_rule"), enumValue(
+            snapshot.network.value.executableFirewallRule,
+            {QStringLiteral("confirmed"), QStringLiteral("denied"), QStringLiteral("absent"),
+             QStringLiteral("not_read")}));
+    }
+    QList<DiagnosticEvent> result;
+    result.append(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("environment"),
+                                      QStringLiteral("environment_snapshot"), snapshotFields, true));
+    if (snapshot.network.status != DiagnosticFactStatus::Available)
+        return result;
+
+    for (const NetworkAdapterFact &adapter : snapshot.network.value.adapters) {
+        QStringList prefixes;
+        for (const QString &prefix : adapter.prefixes)
+            prefixes.append(safePrefix(prefix));
+        const QString type = QStringList{QStringLiteral("ethernet"), QStringLiteral("wifi"),
+                                         QStringLiteral("tunnel"), QStringLiteral("loopback"),
+                                         QStringLiteral("other")}.contains(adapter.type)
+            ? adapter.type : QStringLiteral("other");
+        const QString physical = QStringList{QStringLiteral("physical"), QStringLiteral("virtual"),
+                                             QStringLiteral("unavailable")}.contains(adapter.physicalClassification)
+            ? adapter.physicalClassification : QStringLiteral("unavailable");
+        result.append(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("environment"),
+                                          QStringLiteral("environment_adapter"),
+                                          {{QStringLiteral("index"), QString::number(adapter.sessionIndex)},
+                                           {QStringLiteral("type"), type},
+                                           {QStringLiteral("enabled"), adapter.enabled ? QStringLiteral("yes") : QStringLiteral("no")},
+                                           {QStringLiteral("up"), adapter.up ? QStringLiteral("yes") : QStringLiteral("no")},
+                                           {QStringLiteral("physical_class"), physical},
+                                           {QStringLiteral("route_metric"), QString::number(adapter.routeMetric)},
+                                           {QStringLiteral("default_route"), adapter.ownsDefaultRoute ? QStringLiteral("yes") : QStringLiteral("no")},
+                                           {QStringLiteral("prefixes"), prefixes.join(QLatin1Char(','))}}, true));
+    }
+    return result;
+}

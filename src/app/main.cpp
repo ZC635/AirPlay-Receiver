@@ -27,6 +27,8 @@
 #include "diagnostics/DiagnosticSession.h"
 #include "diagnostics/QtDiagnosticMessageBridge.h"
 #include "platform/DependencyDiagnostics.h"
+#include "platform/EnvironmentDiagnostics.h"
+#include "platform/WindowsEnvironmentDiagnostics.h"
 #include "platform/WindowsHotkeyService.h"
 
 struct DiagnosticStartupDecision {
@@ -216,6 +218,12 @@ int main(int argc, char *argv[]) {
     std::optional<QtDiagnosticMessageBridge> qtBridge;
     if (session) {
         qtBridge.emplace(sink);
+    }
+
+    const EnvironmentSnapshot environmentSnapshot = EnvironmentDiagnostics::collect(
+        windowsEnvironmentDiagnosticProviders(), 3000);
+    for (const DiagnosticEvent &event : EnvironmentDiagnostics::events(environmentSnapshot)) {
+        sink->record(event);
     }
 
     recordStartup(sink, QStringLiteral("session_activation"),

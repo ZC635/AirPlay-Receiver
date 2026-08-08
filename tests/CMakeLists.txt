@@ -103,6 +103,10 @@ add_executable(DependencyDiagnosticsTest platform/DependencyDiagnosticsTest.cpp)
 target_link_libraries(DependencyDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME DependencyDiagnosticsTest COMMAND DependencyDiagnosticsTest)
 
+add_executable(EnvironmentDiagnosticsTest platform/EnvironmentDiagnosticsTest.cpp)
+target_link_libraries(EnvironmentDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME EnvironmentDiagnosticsTest COMMAND EnvironmentDiagnosticsTest)
+
 add_executable(MdnsPublisherTest platform/MdnsPublisherTest.cpp)
 target_link_libraries(MdnsPublisherTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
@@ -282,6 +286,7 @@ set(AIRPLAY_QT_TESTS
     AspectRatioSizingTest
     WindowsWindowBehaviorTest
     DependencyDiagnosticsTest
+    EnvironmentDiagnosticsTest
     MdnsPublisherTest
     DiscoveryRestartControllerTest
     ReceiverStatePolicyTest
