@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <functional>
+#include <optional>
 
 class DiagnosticLogSink;
 class QTimer;
@@ -29,6 +30,11 @@ public:
                                        NetworkMonitorOperations operations,
                                        int debounceMs = 500,
                                        QObject *parent = nullptr);
+    NetworkDiagnosticsMonitor(DiagnosticLogSink *sink,
+                              NetworkMonitorOperations operations,
+                              std::optional<DiagnosticValue<NetworkEnvironmentFact>> initialBaseline,
+                              int debounceMs = 500,
+                              QObject *parent = nullptr);
     ~NetworkDiagnosticsMonitor() override;
 
     bool start();
@@ -48,6 +54,7 @@ private:
     void *interfaceHandle_ = nullptr;
     void *routeHandle_ = nullptr;
     QString lastKey_;
+    std::optional<DiagnosticValue<NetworkEnvironmentFact>> initialBaseline_;
     std::atomic_bool accepting_{false};
     int debounceMs_ = 500;
 };

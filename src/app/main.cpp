@@ -246,12 +246,14 @@ int main(int argc, char *argv[]) {
         for (const DiagnosticEvent &event : EnvironmentDiagnostics::events(environmentSnapshot)) {
             sink->record(event);
         }
-        networkMonitor = std::make_unique<NetworkDiagnosticsMonitor>(
-            sink, windowsNetworkMonitorOperations());
-        if (!networkMonitor->start()) {
-            recordStartup(sink, QStringLiteral("network_monitor"),
-                          {{QStringLiteral("result"), QStringLiteral("unavailable")}}, true);
-            networkMonitor.reset();
+        if (shouldCollectEnvironmentDiagnostics(session && session->isActive())) {
+            networkMonitor = std::make_unique<NetworkDiagnosticsMonitor>(
+                sink, windowsNetworkMonitorOperations(), environmentSnapshot.network);
+            if (!networkMonitor->start()) {
+                recordStartup(sink, QStringLiteral("network_monitor"),
+                              {{QStringLiteral("result"), QStringLiteral("unavailable")}}, true);
+                networkMonitor.reset();
+            }
         }
     }
 

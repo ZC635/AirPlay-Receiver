@@ -8,7 +8,7 @@
 
 namespace {
 
-NetworkEnvironmentFact networkFact(const QString &prefix) {
+NetworkEnvironmentFact networkFact(const QStringList &prefixes) {
     NetworkAdapterFact adapter;
     adapter.sessionIndex = 1;
     adapter.type = QStringLiteral("ethernet");
@@ -18,13 +18,17 @@ NetworkEnvironmentFact networkFact(const QString &prefix) {
     adapter.physicalClassification = QStringLiteral("physical");
     adapter.routeMetric = 10;
     adapter.ownsDefaultRoute = true;
-    adapter.prefixes = {prefix};
+    adapter.prefixes = prefixes;
     NetworkEnvironmentFact network;
     network.adapters = {adapter};
     network.category = DiagnosticFact::available(QStringLiteral("private"));
     network.firewallProfiles = DiagnosticFact::available(QStringLiteral("private=on"));
     network.executableFirewallRule = DiagnosticFact::available(QStringLiteral("confirmed"));
     return network;
+}
+
+NetworkEnvironmentFact networkFact(const QString &prefix) {
+    return networkFact(QStringList{prefix});
 }
 
 class FakeNetworkMonitorOperations {
@@ -42,10 +46,14 @@ public:
                 return registerRouteResult;
             },
             [this](void *handle) {
-                if (handle == &interfaceHandle)
+                if (handle == &interfaceHandle) {
                     cancelInterfaceCalled = true;
-                if (handle == &routeHandle)
+                    ++cancelInterfaceCount;
+                }
+                if (handle == &routeHandle) {
                     cancelRouteCalled = true;
+                    ++cancelRouteCount;
+                }
             },
             [this](QDeadlineTimer) {
                 ++recollectCalls;
@@ -64,6 +72,8 @@ public:
     bool registerRouteResult = true;
     bool cancelInterfaceCalled = false;
     bool cancelRouteCalled = false;
+    int cancelInterfaceCount = 0;
+    int cancelRouteCount = 0;
     int recollectCalls = 0;
 
 private:
@@ -100,6 +110,71 @@ private slots:
         QCOMPARE(countEvents(sink, QStringLiteral("network_changed")), 1);
         monitor.stop();
         QVERIFY(ops.cancelInterfaceCalled); QVERIFY(ops.cancelRouteCalled);
+    }
+
+    void startsFromProvidedBaselineWithoutASecondStartupRecollection() {
+        CollectingSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.snapshots = {DiagnosticValue<NetworkEnvironmentFact>::available(
+            networkFact("192.168.2.xxx/24"))};
+        const auto initial = DiagnosticValue<NetworkEnvironmentFact>::available(
+            networkFact("192.168.1.xxx/24"));
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), initial, 0);
+        QVERIFY(monitor.start());
+        QCOMPARE(ops.recollectCalls, 0);
+        ops.fireInterfaceChanged();
+        QCoreApplication::processEvents();
+        QCOMPARE(ops.recollectCalls, 1);
+        QCOMPARE(countEvents(sink, QStringLiteral("network_changed")), 1);
+    }
+
+    void ignoresReorderedPrivacyFilteredPrefixesButRecordsActualPrefixChanges() {
+        CollectingSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.snapshots = {
+            DiagnosticValue<NetworkEnvironmentFact>::available(networkFact(
+                {QStringLiteral("10.xxx.xxx.xxx/8"), QStringLiteral("192.168.1.xxx/24")})),
+            DiagnosticValue<NetworkEnvironmentFact>::available(networkFact(
+                {QStringLiteral("192.168.1.xxx/24"), QStringLiteral("10.xxx.xxx.xxx/8")})),
+            DiagnosticValue<NetworkEnvironmentFact>::available(networkFact(
+                {QStringLiteral("10.xxx.xxx.xxx/8"), QStringLiteral("192.168.2.xxx/24")}))
+        };
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 0);
+        QVERIFY(monitor.start());
+        ops.fireInterfaceChanged();
+        QCoreApplication::processEvents();
+        QCOMPARE(countEvents(sink, QStringLiteral("network_changed")), 0);
+        ops.fireRouteChanged();
+        QCoreApplication::processEvents();
+        QCOMPARE(countEvents(sink, QStringLiteral("network_changed")), 1);
+    }
+
+    void cancelsHandleWrittenByFailedInterfaceRegistration() {
+        CollectingSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.registerInterfaceResult = false;
+        {
+            NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 0);
+            QVERIFY(!monitor.start());
+            QCOMPARE(ops.cancelInterfaceCount, 1);
+            QCOMPARE(ops.cancelRouteCount, 0);
+        }
+        QCOMPARE(ops.cancelInterfaceCount, 1);
+        QCOMPARE(ops.cancelRouteCount, 0);
+    }
+
+    void cancelsHandlesWrittenByFailedRouteRegistration() {
+        CollectingSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.registerRouteResult = false;
+        {
+            NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 0);
+            QVERIFY(!monitor.start());
+            QCOMPARE(ops.cancelInterfaceCount, 1);
+            QCOMPARE(ops.cancelRouteCount, 1);
+        }
+        QCOMPARE(ops.cancelInterfaceCount, 1);
+        QCOMPARE(ops.cancelRouteCount, 1);
     }
 
     void coalescesCallbackBurstsIntoOneDebouncedRecollection() {
