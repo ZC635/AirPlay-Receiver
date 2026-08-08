@@ -1,6 +1,8 @@
 #include <QApplication>
 #include <QCoreApplication>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QMessageBox>
 #include <QTextStream>
 
@@ -60,6 +62,12 @@ bool processIsElevated() {
         elevation.TokenIsElevated != 0;
     CloseHandle(token);
     return elevated;
+}
+
+bool settingsFileContainsObject(const QString &settingsPath) {
+    QFile file(settingsPath);
+    return file.open(QIODevice::ReadOnly) &&
+        QJsonDocument::fromJson(file.readAll()).isObject();
 }
 
 void closeDiagnosticSession(DiagnosticLogSink *sink,
@@ -191,10 +199,10 @@ int main(int argc, char *argv[]) {
 
     WindowsHotkeyService hotkeys;
     const QString settingsPath = QCoreApplication::applicationDirPath() + "/airplay-settings.json";
-    const bool settingsFilePresent = QFileInfo::exists(settingsPath);
+    const bool settingsLoaded = settingsFileContainsObject(settingsPath);
     const AppSettings settings = AppSettingsStore(settingsPath).loadOrDefaults();
-    recordStartup(sink, settingsFilePresent ? QStringLiteral("settings_loaded")
-                                            : QStringLiteral("settings_defaulted"), {}, true);
+    recordStartup(sink, settingsLoaded ? QStringLiteral("settings_loaded")
+                                       : QStringLiteral("settings_defaulted"), {}, true);
     const QStringList cleanupResult = cleanupRecordingDirectoryAtStartup(settings);
     recordStartup(sink, QStringLiteral("recording_startup_cleanup"),
                   {{QStringLiteral("count"), QString::number(cleanupResult.size())},
