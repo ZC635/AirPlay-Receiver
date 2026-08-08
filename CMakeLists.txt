@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test Network)
 
 include(cmake/UxPlayDependency.cmake)
 
@@ -18,6 +18,10 @@ add_library(airplay_app_lib
     src/diagnostics/DiagnosticEvent.h
     src/diagnostics/DiagnosticLogSink.cpp
     src/diagnostics/DiagnosticLogSink.h
+    src/diagnostics/DiagnosticSanitizer.h
+    src/diagnostics/DiagnosticSanitizer.cpp
+    src/diagnostics/ThirdPartyDiagnosticTranslator.h
+    src/diagnostics/ThirdPartyDiagnosticTranslator.cpp
     src/app/AppSettings.cpp
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
@@ -90,7 +94,7 @@ add_library(airplay_app_lib
 )
 target_include_directories(airplay_app_lib PUBLIC src)
 target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>)
-target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
+target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::Network)
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE
         src/backend/RecordingController.cpp
