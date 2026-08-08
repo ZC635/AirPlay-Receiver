@@ -25,34 +25,51 @@
 
 namespace {
 
-QVector<WindowsAdapterOperation> readAdapters(QDeadlineTimer) {
+DiagnosticValue<QVector<WindowsAdapterOperation>> readAdapters(QDeadlineTimer deadline) {
+    if (deadline.hasExpired())
+        return DiagnosticValue<QVector<WindowsAdapterOperation>>::timedOut();
     ULONG size = 0;
     if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, nullptr, nullptr, &size) != ERROR_BUFFER_OVERFLOW)
-        return {};
+        return DiagnosticValue<QVector<WindowsAdapterOperation>>::unavailable();
+    if (deadline.hasExpired())
+        return DiagnosticValue<QVector<WindowsAdapterOperation>>::timedOut();
     QByteArray buffer(static_cast<int>(size), Qt::Uninitialized);
     auto *addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
     if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, nullptr, addresses, &size) != NO_ERROR)
-        return {};
+        return DiagnosticValue<QVector<WindowsAdapterOperation>>::unavailable();
+    if (deadline.hasExpired())
+        return DiagnosticValue<QVector<WindowsAdapterOperation>>::timedOut();
     QVector<WindowsAdapterOperation> result;
     for (IP_ADAPTER_ADDRESSES *entry = addresses; entry; entry = entry->Next) {
+        if (deadline.hasExpired())
+            return DiagnosticValue<QVector<WindowsAdapterOperation>>::timedOut();
         WindowsAdapterOperation adapter;
         adapter.luid = entry->Luid.Value;
         adapter.ifType = entry->IfType;
-        adapter.enabled = entry->OperStatus != IfOperStatusDown;
         adapter.up = entry->OperStatus == IfOperStatusUp;
         adapter.tunnel = entry->TunnelType != TUNNEL_TYPE_NONE || entry->IfType == IF_TYPE_TUNNEL;
         adapter.loopback = entry->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
-        adapter.description = QString::fromWCharArray(entry->Description);
-        MIB_IPINTERFACE_ROW row{};
-        InitializeIpInterfaceEntry(&row);
-        row.Family = AF_INET;
-        row.InterfaceLuid = entry->Luid;
-        if (GetIpInterfaceEntry(&row) != NO_ERROR) {
-            row.Family = AF_INET6;
-            GetIpInterfaceEntry(&row);
+        MIB_IF_ROW2 ifRow{};
+        ifRow.InterfaceLuid = entry->Luid;
+        if (GetIfEntry2(&ifRow) == NO_ERROR) {
+            adapter.enabled = ifRow.AdminStatus == NET_IF_ADMIN_STATUS_UP;
+            adapter.physicalKnown = true;
+            adapter.physical = ifRow.InterfaceAndOperStatusFlags.HardwareInterface != 0;
         }
-        if (row.Metric > 0)
-            adapter.interfaceMetric = static_cast<int>(row.Metric);
+        for (ADDRESS_FAMILY family : {AF_INET, AF_INET6}) {
+            if (deadline.hasExpired())
+                return DiagnosticValue<QVector<WindowsAdapterOperation>>::timedOut();
+            MIB_IPINTERFACE_ROW row{};
+            InitializeIpInterfaceEntry(&row);
+            row.Family = family;
+            row.InterfaceLuid = entry->Luid;
+            if (GetIpInterfaceEntry(&row) == NO_ERROR) {
+                if (family == AF_INET)
+                    adapter.ipv4InterfaceMetric = static_cast<int>(row.Metric);
+                else
+                    adapter.ipv6InterfaceMetric = static_cast<int>(row.Metric);
+            }
+        }
         for (IP_ADAPTER_UNICAST_ADDRESS *address = entry->FirstUnicastAddress; address;
              address = address->Next) {
             const sockaddr *socketAddress = address->Address.lpSockaddr;
@@ -73,15 +90,25 @@ QVector<WindowsAdapterOperation> readAdapters(QDeadlineTimer) {
         }
         result.append(std::move(adapter));
     }
-    return result;
+    return DiagnosticValue<QVector<WindowsAdapterOperation>>::available(std::move(result));
 }
 
-QVector<WindowsRouteOperation> readRoutes(QDeadlineTimer) {
+DiagnosticValue<QVector<WindowsRouteOperation>> readRoutes(QDeadlineTimer deadline) {
+    if (deadline.hasExpired())
+        return DiagnosticValue<QVector<WindowsRouteOperation>>::timedOut();
     PMIB_IPFORWARD_TABLE2 table = nullptr;
     if (GetIpForwardTable2(AF_UNSPEC, &table) != NO_ERROR || !table)
-        return {};
+        return DiagnosticValue<QVector<WindowsRouteOperation>>::unavailable();
+    if (deadline.hasExpired()) {
+        FreeMibTable(table);
+        return DiagnosticValue<QVector<WindowsRouteOperation>>::timedOut();
+    }
     QVector<WindowsRouteOperation> result;
     for (ULONG index = 0; index < table->NumEntries; ++index) {
+        if (deadline.hasExpired()) {
+            FreeMibTable(table);
+            return DiagnosticValue<QVector<WindowsRouteOperation>>::timedOut();
+        }
         const MIB_IPFORWARD_ROW2 &row = table->Table[index];
         const bool defaultRoute = row.DestinationPrefix.PrefixLength == 0;
         if (!defaultRoute)
@@ -93,7 +120,7 @@ QVector<WindowsRouteOperation> readRoutes(QDeadlineTimer) {
             true, static_cast<int>(row.Metric)});
     }
     FreeMibTable(table);
-    return result;
+    return DiagnosticValue<QVector<WindowsRouteOperation>>::available(std::move(result));
 }
 
 DiagnosticFact factFromJson(const QJsonObject &object, const char *name) {
@@ -106,18 +133,8 @@ WindowsFirewallOperation readFirewall(QDeadlineTimer deadline) {
     const int remaining = deadline.remainingTime();
     if (remaining <= 0)
         return {DiagnosticFact::timedOut(), DiagnosticFact::timedOut(), DiagnosticFact::timedOut()};
-    const QString executable = QCoreApplication::applicationFilePath();
-    QString quotedExecutable = executable;
-    quotedExecutable.replace(QLatin1Char('\''), QStringLiteral("''"));
-    const QString command = QStringLiteral(
-        "$ErrorActionPreference='Stop';$target='%1';"
-        "$category=(Get-NetConnectionProfile|ForEach-Object{$_.NetworkCategory}|Select-Object -First 1);"
-        "$category=switch($category){'DomainAuthenticated'{'domain'};'Private'{'private'};'Public'{'public'};default{$null}};"
-        "$profiles=(Get-NetFirewallProfile|ForEach-Object{$n=$_.Name.ToLowerInvariant();$v=if($_.Enabled){'on'}else{'off'};$n+'='+$v}) -join ',';"
-        "$rule='absent';$matches=@();Get-NetFirewallRule -PolicyStore ActiveStore|ForEach-Object{$r=$_;Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r|ForEach-Object{if($_.Program -ieq $target){$matches+=$r}}};"
-        "if($matches.Count -gt 0){$rule=if(($matches|ForEach-Object{$_.Action}) -contains 'Allow'){'confirmed'}else{'denied'}};"
-        "[pscustomobject]@{category=$category;profiles=$profiles;rule=$rule}|ConvertTo-Json -Compress")
-        .arg(quotedExecutable);
+    const QString command = windowsEnvironmentFirewallScript(
+        QCoreApplication::applicationFilePath());
     QProcess process;
     process.start(QStringLiteral("powershell.exe"),
                   {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
@@ -152,13 +169,11 @@ QString adapterType(const WindowsAdapterOperation &adapter) {
 }
 
 QString physicalClass(const WindowsAdapterOperation &adapter) {
-    if (adapter.ifType == 0)
-        return QStringLiteral("unavailable");
-    const QString description = adapter.description.toLower();
-    if (adapter.tunnel || adapter.loopback || description.contains(QStringLiteral("virtual")) ||
-        description.contains(QStringLiteral("tunnel")))
+    if (adapter.physicalKnown)
+        return adapter.physical ? QStringLiteral("physical") : QStringLiteral("virtual");
+    if (adapter.tunnel || adapter.loopback)
         return QStringLiteral("virtual");
-    return QStringLiteral("physical");
+    return QStringLiteral("unavailable");
 }
 
 EnvironmentDiagnosticProviders defaultProviders() {
@@ -197,6 +212,33 @@ EnvironmentDiagnosticProviders defaultProviders() {
 
 } // namespace
 
+QString classifyWindowsFirewallRules(const QVector<WindowsFirewallRuleCandidate> &rules) {
+    bool allowed = false;
+    for (const WindowsFirewallRuleCandidate &rule : rules) {
+        if (!rule.enabled || !rule.inbound || !rule.activeProfile || !rule.executableMatches)
+            continue;
+        if (rule.action == QStringLiteral("block"))
+            return QStringLiteral("denied");
+        if (rule.action == QStringLiteral("allow"))
+            allowed = true;
+    }
+    return allowed ? QStringLiteral("confirmed") : QStringLiteral("absent");
+}
+
+QString windowsEnvironmentFirewallScript(QString executable) {
+    executable.replace(QLatin1Char('\''), QStringLiteral("''"));
+    return QStringLiteral(
+        "$ErrorActionPreference='Stop';$target='%1';"
+        "$categories=@(Get-NetConnectionProfile|ForEach-Object{switch($_.NetworkCategory){'DomainAuthenticated'{'domain'};'Private'{'private'};'Public'{'public'}}}|Where-Object{$_}|Select-Object -Unique);"
+        "$category=$categories|Select-Object -First 1;"
+        "$activeProfiles=@($categories|ForEach-Object{switch($_){'domain'{'Domain'};'private'{'Private'};'public'{'Public'}}});"
+        "$profiles=(Get-NetFirewallProfile|ForEach-Object{$n=$_.Name.ToLowerInvariant();$v=if($_.Enabled){'on'}else{'off'};$n+'='+$v}) -join ',';"
+        "$rule='not_read';try{$candidateRules=@();Get-NetFirewallRule -PolicyStore ActiveStore|ForEach-Object{$r=$_;$ruleProfiles=@($r.Profile.ToString().Split(','));$profileApplies=($ruleProfiles -contains 'Any') -or (($ruleProfiles|Where-Object{$activeProfiles -contains $_}).Count -gt 0);if($r.Enabled.ToString() -eq 'True' -and $r.Direction.ToString() -eq 'Inbound' -and $profileApplies){Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r|ForEach-Object{if($_.Program -ieq $target){$candidateRules+=$r}}}};"
+        "if($candidateRules.Count -eq 0){$rule='absent'}elseif(($candidateRules|ForEach-Object{$_.Action}) -contains 'Block'){$rule='denied'}else{$rule='confirmed'}}catch{$rule='not_read'};"
+        "[pscustomobject]@{category=$category;profiles=$profiles;rule=$rule}|ConvertTo-Json -Compress")
+        .arg(executable);
+}
+
 EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvironmentOperations operations) {
     EnvironmentDiagnosticProviders providers = defaultProviders();
     if (!operations.adapters)
@@ -208,17 +250,21 @@ EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvi
     providers.network = [operations = std::move(operations)](QDeadlineTimer deadline) {
         if (deadline.hasExpired())
             return DiagnosticValue<NetworkEnvironmentFact>::timedOut();
-        const QVector<WindowsAdapterOperation> inputAdapters = operations.adapters(deadline);
+        const auto inputAdapters = operations.adapters(deadline);
         if (deadline.hasExpired())
             return DiagnosticValue<NetworkEnvironmentFact>::timedOut();
-        const QVector<WindowsRouteOperation> routes = operations.routes(deadline);
+        if (inputAdapters.status != DiagnosticFactStatus::Available)
+            return DiagnosticValue<NetworkEnvironmentFact>{inputAdapters.status, {}};
+        const auto routes = operations.routes(deadline);
         if (deadline.hasExpired())
             return DiagnosticValue<NetworkEnvironmentFact>::timedOut();
+        if (routes.status != DiagnosticFactStatus::Available)
+            return DiagnosticValue<NetworkEnvironmentFact>{routes.status, {}};
         const WindowsFirewallOperation firewall = operations.firewall(deadline);
         if (deadline.hasExpired())
             return DiagnosticValue<NetworkEnvironmentFact>::timedOut();
 
-        QVector<WindowsAdapterOperation> sorted = inputAdapters;
+        QVector<WindowsAdapterOperation> sorted = inputAdapters.value;
         std::sort(sorted.begin(), sorted.end(), [](const auto &left, const auto &right) {
             return left.luid < right.luid;
         });
@@ -234,11 +280,13 @@ EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvi
             adapter.enabled = source.enabled;
             adapter.up = source.up;
             adapter.physicalClassification = physicalClass(source);
-            for (const WindowsRouteOperation &route : routes) {
+            for (const WindowsRouteOperation &route : routes.value) {
                 if (route.defaultRoute && route.luid == source.luid) {
                     adapter.ownsDefaultRoute = true;
-                    if (source.interfaceMetric >= 0 && route.routeMetric >= 0) {
-                        const int metric = source.interfaceMetric + route.routeMetric;
+                    const int interfaceMetric = route.family == QAbstractSocket::IPv4Protocol
+                        ? source.ipv4InterfaceMetric : source.ipv6InterfaceMetric;
+                    if (interfaceMetric >= 0 && route.routeMetric >= 0) {
+                        const int metric = interfaceMetric + route.routeMetric;
                         adapter.routeMetric = adapter.routeMetric < 0
                             ? metric : qMin(adapter.routeMetric, metric);
                     }

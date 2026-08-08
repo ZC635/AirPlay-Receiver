@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 
 #include <QHostAddress>
+#include <QThread>
 
 #include <algorithm>
 
@@ -58,6 +59,11 @@ class EnvironmentDiagnosticsTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void collectionPolicyRequiresActiveDiagnosticSession() {
+        QVERIFY(!shouldCollectEnvironmentDiagnostics(false));
+        QVERIFY(shouldCollectEnvironmentDiagnostics(true));
+    }
+
     void collectsFakeProviderSnapshot() {
         const EnvironmentSnapshot snapshot = EnvironmentDiagnostics::collect(fakeProviders(), 3000);
 
@@ -103,23 +109,70 @@ private slots:
             EnvironmentDiagnostics::collect(providers, 3000))));
     }
 
+    void eventsPreserveAlreadyMaskedPrefixesAndPublicFamilies() {
+        const QList<DiagnosticEvent> events = EnvironmentDiagnostics::events(
+            EnvironmentDiagnostics::collect(fakeProviders(), 3000));
+        const DiagnosticEvent adapter = events.constLast();
+
+        QCOMPARE(adapter.fields.value(QStringLiteral("prefixes")),
+                 QStringLiteral("192.168.10.xxx/24,fd12:3456:789a:bcde:xxxx/64"));
+
+        EnvironmentSnapshot publicSnapshot = EnvironmentDiagnostics::collect(fakeProviders(), 3000);
+        publicSnapshot.network.value.adapters.first().prefixes = {
+            QStringLiteral("public_ipv4"), QStringLiteral("public_ipv6")};
+        const DiagnosticEvent publicAdapter = EnvironmentDiagnostics::events(publicSnapshot).constLast();
+        QCOMPARE(publicAdapter.fields.value(QStringLiteral("prefixes")),
+                 QStringLiteral("public_ipv4,public_ipv6"));
+
+        EnvironmentSnapshot rawSnapshot = EnvironmentDiagnostics::collect(fakeProviders(), 3000);
+        rawSnapshot.network.value.adapters.first().prefixes = {
+            QStringLiteral("192.168.10.22/24"), QStringLiteral("fd12:3456:789a:bcde::42/64"),
+            QStringLiteral("not_an_address")};
+        const DiagnosticEvent rawAdapter = EnvironmentDiagnostics::events(rawSnapshot).constLast();
+        QCOMPARE(rawAdapter.fields.value(QStringLiteral("prefixes")),
+                 QStringLiteral("192.168.10.xxx/24,fd12:3456:789a:bcde:xxxx/64,unavailable"));
+
+        EnvironmentSnapshot invalidSnapshot = EnvironmentDiagnostics::collect(fakeProviders(), 3000);
+        invalidSnapshot.network.value.adapters.first().prefixes = {
+            QStringLiteral("999.xxx.xxx.xxx/8"), QStringLiteral("203.0.113.xxx/24"),
+            QStringLiteral("10.xxx.xxx/8"), QStringLiteral("10.0.xxx.xxx/8"),
+            QStringLiteral("fd12:3456:xxxx/64"),
+            QStringLiteral("fd12:3456:789a:bcde:0000:xxxx/64")};
+        const DiagnosticEvent invalidAdapter = EnvironmentDiagnostics::events(invalidSnapshot).constLast();
+        QCOMPARE(invalidAdapter.fields.value(QStringLiteral("prefixes")),
+                 QStringLiteral("unavailable,unavailable,unavailable,unavailable,unavailable,unavailable"));
+
+        EnvironmentSnapshot legitimateSnapshot = EnvironmentDiagnostics::collect(fakeProviders(), 3000);
+        legitimateSnapshot.network.value.adapters.first().prefixes = {
+            QStringLiteral("10.xxx.xxx.xxx/8"), QStringLiteral("172.16.xxx.xxx/16"),
+            QStringLiteral("192.168.10.xxx/24"), QStringLiteral("fd12:3456:789a:bcde:xxxx/64"),
+            QStringLiteral("fe80:0000:0000:0000:xxxx/64"), QStringLiteral("public_ipv4"),
+            QStringLiteral("public_ipv6")};
+        const DiagnosticEvent legitimateAdapter = EnvironmentDiagnostics::events(legitimateSnapshot).constLast();
+        QCOMPARE(legitimateAdapter.fields.value(QStringLiteral("prefixes")),
+                 QStringLiteral("10.xxx.xxx.xxx/8,172.16.xxx.xxx/16,192.168.10.xxx/24,"
+                                "fd12:3456:789a:bcde:xxxx/64,fe80:0000:0000:0000:xxxx/64,"
+                                "public_ipv4,public_ipv6"));
+    }
+
     void mapsInjectedWindowsOperationsWithoutSystemCalls() {
         WindowsEnvironmentOperations operations;
         operations.adapters = [](QDeadlineTimer) {
-            return QVector<WindowsAdapterOperation>{
-                {90, 71, true, true, false, false, QStringLiteral("virtual tunnel"), 5,
-                 {{QHostAddress(QStringLiteral("203.0.113.9")), 24}}},
-                {20, 6, true, true, false, false, QStringLiteral("ethernet"), 10,
-                 {{QHostAddress(QStringLiteral("192.168.10.22")), 24}}},
-                {40, 71, true, false, false, false, QStringLiteral("wifi"), 30,
-                 {{QHostAddress(QStringLiteral("fd12:3456:789a:bcde::42")), 64}}},
-                {60, 24, true, true, true, false, QStringLiteral("tunnel"), 20, {}},
-                {70, 24, true, true, false, true, QStringLiteral("loopback"), 1, {}}};
+            WindowsAdapterOperation ethernet{20, 6, true, true, false, false, true, true, 10, 10,
+                                              {{QHostAddress(QStringLiteral("192.168.10.22")), 24}}};
+            WindowsAdapterOperation wifi{40, 71, true, false, false, false, true, true, 30, 30,
+                                          {{QHostAddress(QStringLiteral("fd12:3456:789a:bcde::42")), 64}}};
+            WindowsAdapterOperation tunnel{60, 24, true, true, true, false, false, false, 20, 20, {}};
+            WindowsAdapterOperation loopback{70, 24, true, true, false, true, false, false, 1, 1, {}};
+            WindowsAdapterOperation virtualAdapter{90, 71, true, true, true, false, true, false, 5, 5,
+                                                    {{QHostAddress(QStringLiteral("203.0.113.9")), 24}}};
+            return DiagnosticValue<QVector<WindowsAdapterOperation>>::available(
+                {virtualAdapter, ethernet, wifi, tunnel, loopback});
         };
         operations.routes = [](QDeadlineTimer) {
-            return QVector<WindowsRouteOperation>{
+            return DiagnosticValue<QVector<WindowsRouteOperation>>::available({
                 {20, QAbstractSocket::IPv4Protocol, true, 15},
-                {40, QAbstractSocket::IPv6Protocol, true, 20}};
+                {40, QAbstractSocket::IPv6Protocol, true, 20}});
         };
         operations.firewall = [](QDeadlineTimer) {
             return WindowsFirewallOperation{DiagnosticFact::available(QStringLiteral("private")),
@@ -148,6 +201,123 @@ private slots:
         QVERIFY(std::any_of(events.cbegin(), events.cend(), [](const DiagnosticEvent &event) {
             return event.fields.value(QStringLiteral("firewall_rule")) == QStringLiteral("timed_out");
         }));
+    }
+
+    void windowsOperationsPreserveFailuresAndFamilySpecificMetrics() {
+        WindowsEnvironmentOperations operations;
+        operations.adapters = [](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsAdapterOperation>>::unavailable();
+        };
+        operations.routes = [](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsRouteOperation>>::available({});
+        };
+        operations.firewall = [](QDeadlineTimer) { return WindowsFirewallOperation{}; };
+        QCOMPARE(EnvironmentDiagnostics::collect(windowsEnvironmentDiagnosticProviders(operations), 3000)
+                     .network.status, DiagnosticFactStatus::Unavailable);
+
+        WindowsAdapterOperation adapter;
+        adapter.luid = 1;
+        adapter.ifType = 6;
+        adapter.enabled = false;
+        adapter.up = true;
+        adapter.ipv4InterfaceMetric = 10;
+        adapter.ipv6InterfaceMetric = 50;
+        operations.adapters = [adapter](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsAdapterOperation>>::available({adapter});
+        };
+        operations.routes = [](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsRouteOperation>>::available({
+                {1, QAbstractSocket::IPv4Protocol, true, 5},
+                {1, QAbstractSocket::IPv6Protocol, true, 2}});
+        };
+        const EnvironmentSnapshot snapshot = EnvironmentDiagnostics::collect(
+            windowsEnvironmentDiagnosticProviders(operations), 3000);
+        QCOMPARE(snapshot.network.status, DiagnosticFactStatus::Available);
+        QCOMPARE(snapshot.network.value.adapters.constFirst().routeMetric, 15);
+        QVERIFY(!snapshot.network.value.adapters.constFirst().enabled);
+        QVERIFY(snapshot.network.value.adapters.constFirst().up);
+
+        operations.routes = [](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsRouteOperation>>::timedOut();
+        };
+        QCOMPARE(EnvironmentDiagnostics::collect(windowsEnvironmentDiagnosticProviders(operations), 3000)
+                     .network.status, DiagnosticFactStatus::TimedOut);
+    }
+
+    void firewallClassificationPrefersBlockAndIgnoresInapplicableRules() {
+        const QVector<WindowsFirewallRuleCandidate> rules{
+            {true, true, true, true, QStringLiteral("allow")},
+            {true, true, true, true, QStringLiteral("block")},
+            {false, true, true, true, QStringLiteral("block")},
+            {true, false, true, true, QStringLiteral("block")},
+            {true, true, false, true, QStringLiteral("block")},
+            {true, true, true, false, QStringLiteral("block")}};
+        QCOMPARE(classifyWindowsFirewallRules(rules), QStringLiteral("denied"));
+        QCOMPARE(classifyWindowsFirewallRules({{true, true, true, true,
+                                                 QStringLiteral("allow")}}),
+                 QStringLiteral("confirmed"));
+        QCOMPARE(classifyWindowsFirewallRules({}), QStringLiteral("absent"));
+    }
+
+    void firewallScriptUsesExplicitCandidatesAndEnabledRules() {
+        const QString script = windowsEnvironmentFirewallScript(
+            QStringLiteral("C:\\Program Files\\AirPlay\\receiver.exe"));
+
+        QVERIFY(script.contains(QStringLiteral("$candidateRules")));
+        QVERIFY(!script.contains(QStringLiteral("$matches"), Qt::CaseInsensitive));
+        QVERIFY(script.contains(QStringLiteral("$r.Enabled.ToString() -eq 'True'")));
+        QVERIFY(!script.contains(QStringLiteral("-match $profile")));
+        QVERIFY(script.contains(QStringLiteral("-contains 'Block'")));
+        QVERIFY(script.contains(QStringLiteral("$activeProfiles")));
+    }
+
+    void collectionSharesDeadlineAndSkipsProvidersAfterExpiry() {
+        QList<qint64> endpoints;
+        QList<qint64> remaining;
+        EnvironmentDiagnosticProviders providers;
+        providers.operatingSystem = [&](QDeadlineTimer deadline) {
+            endpoints.append(deadline.deadline());
+            remaining.append(deadline.remainingTime());
+            return DiagnosticFact::available(QStringLiteral("Windows 11 build 26100"));
+        };
+        providers.cpuArchitecture = [&](QDeadlineTimer deadline) {
+            endpoints.append(deadline.deadline());
+            remaining.append(deadline.remainingTime());
+            return DiagnosticFact::available(QStringLiteral("x86_64"));
+        };
+        providers.processElevation = [&](QDeadlineTimer deadline) {
+            endpoints.append(deadline.deadline());
+            remaining.append(deadline.remainingTime());
+            return DiagnosticFact::available(QStringLiteral("not_elevated"));
+        };
+        providers.network = [&](QDeadlineTimer deadline) {
+            endpoints.append(deadline.deadline());
+            remaining.append(deadline.remainingTime());
+            return DiagnosticValue<NetworkEnvironmentFact>::available({});
+        };
+        EnvironmentDiagnostics::collect(providers, 100);
+        QCOMPARE(endpoints.size(), 4);
+        QCOMPARE(endpoints.at(0), endpoints.at(1));
+        QCOMPARE(endpoints.at(1), endpoints.at(2));
+        QCOMPARE(endpoints.at(2), endpoints.at(3));
+        QVERIFY(remaining.at(0) >= remaining.at(1));
+        QVERIFY(remaining.at(1) >= remaining.at(2));
+        QVERIFY(remaining.at(2) >= remaining.at(3));
+
+        int laterCalls = 0;
+        providers.operatingSystem = [](QDeadlineTimer) {
+            QThread::msleep(20);
+            return DiagnosticFact::available(QStringLiteral("Windows 11 build 26100"));
+        };
+        providers.cpuArchitecture = [&](QDeadlineTimer) { ++laterCalls; return DiagnosticFact::available({}); };
+        providers.processElevation = [&](QDeadlineTimer) { ++laterCalls; return DiagnosticFact::available({}); };
+        providers.network = [&](QDeadlineTimer) { ++laterCalls; return DiagnosticValue<NetworkEnvironmentFact>::available({}); };
+        const EnvironmentSnapshot expired = EnvironmentDiagnostics::collect(providers, 5);
+        QCOMPARE(expired.operatingSystem.status, DiagnosticFactStatus::TimedOut);
+        QCOMPARE(expired.cpuArchitecture.status, DiagnosticFactStatus::TimedOut);
+        QCOMPARE(expired.processElevation.status, DiagnosticFactStatus::TimedOut);
+        QCOMPARE(expired.network.status, DiagnosticFactStatus::TimedOut);
+        QCOMPARE(laterCalls, 0);
     }
 };
 

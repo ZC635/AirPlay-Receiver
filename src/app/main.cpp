@@ -220,12 +220,6 @@ int main(int argc, char *argv[]) {
         qtBridge.emplace(sink);
     }
 
-    const EnvironmentSnapshot environmentSnapshot = EnvironmentDiagnostics::collect(
-        windowsEnvironmentDiagnosticProviders(), 3000);
-    for (const DiagnosticEvent &event : EnvironmentDiagnostics::events(environmentSnapshot)) {
-        sink->record(event);
-    }
-
     recordStartup(sink, QStringLiteral("session_activation"),
                   {{QStringLiteral("activation_source"), activation.sourceName()}}, true);
     recordStartup(sink, QStringLiteral("application_identity"),
@@ -233,6 +227,14 @@ int main(int argc, char *argv[]) {
                    {QStringLiteral("elevated"), processIsElevated() ? QStringLiteral("yes") : QStringLiteral("no")},
                    {QStringLiteral("executable_name"), QFileInfo(QCoreApplication::applicationFilePath()).fileName()},
                    {QStringLiteral("version"), QString::fromUtf16(AirPlayBuildIdentity::version)}}, true);
+
+    if (shouldCollectEnvironmentDiagnostics(session && session->isActive())) {
+        const EnvironmentSnapshot environmentSnapshot = EnvironmentDiagnostics::collect(
+            windowsEnvironmentDiagnosticProviders(), 3000);
+        for (const DiagnosticEvent &event : EnvironmentDiagnostics::events(environmentSnapshot)) {
+            sink->record(event);
+        }
+    }
 
 #if AIRPLAY_WITH_UXPLAY
     const bool gstreamerEnvironmentConfigured =

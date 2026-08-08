@@ -16,8 +16,10 @@ struct WindowsAdapterOperation {
     bool up = false;
     bool tunnel = false;
     bool loopback = false;
-    QString description;
-    int interfaceMetric = -1;
+    bool physicalKnown = false;
+    bool physical = false;
+    int ipv4InterfaceMetric = -1;
+    int ipv6InterfaceMetric = -1;
     QVector<WindowsAddressOperation> addresses;
 };
 
@@ -34,9 +36,20 @@ struct WindowsFirewallOperation {
     DiagnosticFact executableRule;
 };
 
+struct WindowsFirewallRuleCandidate {
+    bool enabled = false;
+    bool inbound = false;
+    bool activeProfile = false;
+    bool executableMatches = false;
+    QString action;
+};
+
+QString classifyWindowsFirewallRules(const QVector<WindowsFirewallRuleCandidate> &rules);
+QString windowsEnvironmentFirewallScript(QString executable);
+
 struct WindowsEnvironmentOperations {
-    std::function<QVector<WindowsAdapterOperation>(QDeadlineTimer)> adapters;
-    std::function<QVector<WindowsRouteOperation>(QDeadlineTimer)> routes;
+    std::function<DiagnosticValue<QVector<WindowsAdapterOperation>>(QDeadlineTimer)> adapters;
+    std::function<DiagnosticValue<QVector<WindowsRouteOperation>>(QDeadlineTimer)> routes;
     std::function<WindowsFirewallOperation(QDeadlineTimer)> firewall;
 };
 
