@@ -46,11 +46,61 @@ QString profileValue(const DiagnosticFact &fact) {
 }
 
 QString safePrefix(QString prefix) {
+    if (prefix == QStringLiteral("public_ipv4") || prefix == QStringLiteral("public_ipv6"))
+        return prefix;
     const QStringList parts = prefix.split(QLatin1Char('/'));
     bool validLength = false;
     const int length = parts.size() == 2 ? parts.at(1).toInt(&validLength) : 0;
+    if (!validLength || parts.size() != 2 || QString::number(length) != parts.at(1))
+        return QStringLiteral("unavailable");
+
+    const QStringList ipv4 = parts.at(0).split(QLatin1Char('.'));
+    if (ipv4.contains(QStringLiteral("xxx"))) {
+        if (length < 0 || length > 32 || ipv4.size() != 4)
+            return QStringLiteral("unavailable");
+        QStringList reconstructed;
+        for (const QString &part : ipv4) {
+            if (part == QStringLiteral("xxx")) {
+                reconstructed.append(QStringLiteral("0"));
+                continue;
+            }
+            bool numeric = false;
+            const int value = part.toInt(&numeric);
+            if (!numeric || value < 0 || value > 255 || QString::number(value) != part)
+                return QStringLiteral("unavailable");
+            reconstructed.append(part);
+        }
+        const QHostAddress address(reconstructed.join(QLatin1Char('.')));
+        if (!address.isNull() && DiagnosticSanitizer::maskedAddress(address, length).compare(
+                prefix, Qt::CaseInsensitive) == 0)
+            return prefix;
+        return QStringLiteral("unavailable");
+    }
+
+    const QStringList ipv6 = parts.at(0).split(QLatin1Char(':'));
+    if (ipv6.contains(QStringLiteral("xxxx"))) {
+        if (length < 0 || length > 64 || ipv6.size() != length / 16 + 1 ||
+            ipv6.constLast().compare(QStringLiteral("xxxx"), Qt::CaseInsensitive) != 0)
+            return QStringLiteral("unavailable");
+        QStringList reconstructed;
+        for (qsizetype index = 0; index + 1 < ipv6.size(); ++index) {
+            static const QRegularExpression hex(QStringLiteral("\\A[0-9a-f]{4}\\z"),
+                                                QRegularExpression::CaseInsensitiveOption);
+            if (!hex.match(ipv6.at(index)).hasMatch())
+                return QStringLiteral("unavailable");
+            reconstructed.append(ipv6.at(index));
+        }
+        while (reconstructed.size() < 8)
+            reconstructed.append(QStringLiteral("0000"));
+        const QHostAddress address(reconstructed.join(QLatin1Char(':')));
+        if (!address.isNull() && DiagnosticSanitizer::maskedAddress(address, length).compare(
+                prefix, Qt::CaseInsensitive) == 0)
+            return prefix;
+        return QStringLiteral("unavailable");
+    }
+
     const QHostAddress address(parts.value(0));
-    if (!validLength || address.isNull())
+    if (address.isNull())
         return QStringLiteral("unavailable");
     return DiagnosticSanitizer::maskedAddress(address, length);
 }
@@ -73,6 +123,10 @@ DiagnosticFact DiagnosticFact::available(QString value) {
 DiagnosticFact DiagnosticFact::unavailable() { return {}; }
 
 DiagnosticFact DiagnosticFact::timedOut() { return {DiagnosticFactStatus::TimedOut, {}}; }
+
+bool shouldCollectEnvironmentDiagnostics(bool diagnosticSessionActive) {
+    return diagnosticSessionActive;
+}
 
 EnvironmentSnapshot EnvironmentDiagnostics::collect(const EnvironmentDiagnosticProviders &providers,
                                                     int totalTimeoutMs) {

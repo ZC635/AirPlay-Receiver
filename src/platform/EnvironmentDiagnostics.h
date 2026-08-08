@@ -63,6 +63,8 @@ struct EnvironmentDiagnosticProviders {
     std::function<DiagnosticValue<NetworkEnvironmentFact>(QDeadlineTimer)> network;
 };
 
+bool shouldCollectEnvironmentDiagnostics(bool diagnosticSessionActive);
+
 class EnvironmentDiagnostics {
 public:
     static EnvironmentSnapshot collect(const EnvironmentDiagnosticProviders &providers,
