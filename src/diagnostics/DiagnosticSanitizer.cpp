@@ -173,6 +173,8 @@ bool DiagnosticSanitizer::isSensitiveField(QStringView fieldName) {
     const QString field = normalizedFieldName(fieldName);
     if (field == QStringLiteral("address_family"))
         return false;
+    if (field == QStringLiteral("send_requests") || field == QStringLiteral("client_requests"))
+        return false;
     static const QStringList exact = {
         QStringLiteral("ssid"), QStringLiteral("username"), QStringLiteral("user"),
         QStringLiteral("computer"), QStringLiteral("hostname"), QStringLiteral("path"),

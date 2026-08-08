@@ -162,11 +162,11 @@ public:
     qint64 safeMessageSuppressed = 0;
     qint64 warnings = 0;
     qint64 errors = 0;
-    qint64 criticals = 0;
     qint64 startupCompleted = 0;
     qint64 receiverDiscoverable = 0;
     qint64 receiverConnected = 0;
-    qint64 serviceTypes = 0;
+    qint64 airplayProviders = 0;
+    qint64 raopProviders = 0;
     qint64 searchReceived = 0;
     qint64 sendRequested = 0;
     qint64 clientRequest = 0;
@@ -284,22 +284,23 @@ void DiagnosticSession::record(DiagnosticEvent event) {
 
         if (event.severity == DiagnosticSeverity::Warning)
             ++d->warnings;
-        else if (event.severity == DiagnosticSeverity::Error)
+        else if (event.severity == DiagnosticSeverity::Error || event.severity == DiagnosticSeverity::Critical)
             ++d->errors;
-        else if (event.severity == DiagnosticSeverity::Critical)
-            ++d->criticals;
         if (event.name == QStringLiteral("startup_completed") && event.fields.value(QStringLiteral("result")) == QStringLiteral("yes"))
             ++d->startupCompleted;
         if (event.name == QStringLiteral("state_changed")) {
-            if (event.fields.value(QStringLiteral("state")) == QStringLiteral("discoverable"))
+            if (event.fields.value(QStringLiteral("to")) == QStringLiteral("discoverable"))
                 ++d->receiverDiscoverable;
-            if (event.fields.value(QStringLiteral("state")) == QStringLiteral("connected"))
+            if (event.fields.value(QStringLiteral("to")) == QStringLiteral("connected"))
                 ++d->receiverConnected;
         }
         const QString serviceType = event.fields.value(QStringLiteral("type"));
-        if (event.name == QStringLiteral("service_configured") &&
-            (serviceType == QStringLiteral("_airplay._tcp") || serviceType == QStringLiteral("_raop._tcp")))
-            ++d->serviceTypes;
+        if (event.name == QStringLiteral("service_configured")) {
+            if (serviceType == QStringLiteral("_airplay._tcp"))
+                ++d->airplayProviders;
+            else if (serviceType == QStringLiteral("_raop._tcp"))
+                ++d->raopProviders;
+        }
         if (event.name == QStringLiteral("search_received")) ++d->searchReceived;
         if (event.name == QStringLiteral("send_requested")) ++d->sendRequested;
         if (event.name == QStringLiteral("client_request")) ++d->clientRequest;
@@ -345,11 +346,11 @@ void DiagnosticSession::record(DiagnosticEvent event) {
                 return;
             DiagnosticEvent notice = makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("session"),
                 QStringLiteral("duplicate_events_suppressed"),
-                {{QStringLiteral("duplicates_suppressed"), QString::number(d->pendingDuplicates)},
+                {{QStringLiteral("count"), QString::number(d->pendingDuplicates)},
                  {QStringLiteral("component"), d->duplicateComponent},
                  {QStringLiteral("event"), d->duplicateEvent}}, true, event.timeUtc);
             const QByteArray noticeLine = formattedLine(notice, sanitizedFields(notice.fields)).toUtf8();
-            if (d->bytesWritten + noticeLine.size() <= d->options.maxBytes)
+            if (d->bytesWritten + noticeLine.size() <= d->options.maxBytes - d->options.finalReserveBytes)
                 writeLine(noticeLine, true);
             else
                 d->compactOrSizeSuppressed += d->pendingDuplicates;
@@ -420,11 +421,11 @@ void DiagnosticSession::closeNormally() {
         if (d->pendingDuplicates > 0) {
             DiagnosticEvent notice = makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("session"),
                 QStringLiteral("duplicate_events_suppressed"),
-                {{QStringLiteral("duplicates_suppressed"), QString::number(d->pendingDuplicates)},
+                {{QStringLiteral("count"), QString::number(d->pendingDuplicates)},
                  {QStringLiteral("component"), d->duplicateComponent},
                  {QStringLiteral("event"), d->duplicateEvent}}, true, d->options.now().toUTC());
             const QByteArray line = formattedLine(notice, sanitizedFields(notice.fields)).toUtf8();
-            if (d->bytesWritten + line.size() <= d->options.maxBytes)
+            if (d->bytesWritten + line.size() <= d->options.maxBytes - d->options.finalReserveBytes)
                 writeLine(line);
             else
                 d->compactOrSizeSuppressed += d->pendingDuplicates;
@@ -434,30 +435,25 @@ void DiagnosticSession::closeNormally() {
             return;
         DiagnosticEvent summary = makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("session"),
             QStringLiteral("session_summary"),
-            {{QStringLiteral("client_requests"), QString::number(d->clientRequest)},
-             {QStringLiteral("critical_events"), QString::number(d->criticals)},
+            {{QStringLiteral("airplay_providers"), QString::number(d->airplayProviders)},
+             {QStringLiteral("client_requests"), QString::number(d->clientRequest)},
+             {QStringLiteral("compact_mode"), d->compact ? QStringLiteral("yes") : QStringLiteral("no")},
+             {QStringLiteral("connections"), QString::number(d->receiverConnected)},
+             {QStringLiteral("discoverable"), d->receiverDiscoverable > 0 ? QStringLiteral("yes") : QStringLiteral("no")},
              {QStringLiteral("disconnects"), QString::number(d->disconnects)},
              {QStringLiteral("duplicates_suppressed"), QString::number(d->duplicateSuppressed)},
              {QStringLiteral("errors"), QString::number(d->errors)},
              {QStringLiteral("events_suppressed"), QString::number(d->compactOrSizeSuppressed + d->safeMessageSuppressed)},
-             {QStringLiteral("network_changed"), QString::number(d->networkChanged)},
+             {QStringLiteral("network_changes"), QString::number(d->networkChanged)},
              {QStringLiteral("normal_exit"), QStringLiteral("yes")},
-             {QStringLiteral("receiver_connected"), QString::number(d->receiverConnected)},
-             {QStringLiteral("receiver_discoverable"), QString::number(d->receiverDiscoverable)},
+             {QStringLiteral("raop_providers"), QString::number(d->raopProviders)},
              {QStringLiteral("resets"), QString::number(d->resets)},
-             {QStringLiteral("search_received"), QString::number(d->searchReceived)},
-             {QStringLiteral("send_requested"), QString::number(d->sendRequested)},
-             {QStringLiteral("service_types"), QString::number(d->serviceTypes)},
-             {QStringLiteral("startup_completed"), QString::number(d->startupCompleted)},
+             {QStringLiteral("searches"), QString::number(d->searchReceived)},
+             {QStringLiteral("send_requests"), QString::number(d->sendRequested)},
+             {QStringLiteral("startup_completed"), d->startupCompleted > 0 ? QStringLiteral("yes") : QStringLiteral("no")},
              {QStringLiteral("warnings"), QString::number(d->warnings)}}, true, d->options.now().toUTC());
-        QByteArray line = formattedLine(summary, sanitizedFields(summary.fields)).toUtf8();
-        const qint64 available = d->options.maxBytes - d->bytesWritten;
-        if (line.size() > available) {
-            summary.fields = {{QStringLiteral("events_suppressed"), QString::number(d->compactOrSizeSuppressed + d->safeMessageSuppressed)},
-                              {QStringLiteral("normal_exit"), QStringLiteral("yes")}};
-            line = formattedLine(summary, sanitizedFields(summary.fields)).toUtf8();
-        }
-        if (line.size() <= d->options.maxBytes - d->bytesWritten)
+        const QByteArray line = formattedLine(summary, sanitizedFields(summary.fields)).toUtf8();
+        if (line.size() <= d->options.finalReserveBytes && line.size() <= d->options.maxBytes - d->bytesWritten)
             writeLine(line);
         else
             fail();
