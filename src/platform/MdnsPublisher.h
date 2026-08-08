@@ -7,7 +7,17 @@
 #include <QScopedPointer>
 #include <QString>
 
+#if AIRPLAY_WITH_UXPLAY
+#include <functional>
+
+namespace QMdnsEngine {
+class AbstractServer;
+}
+#endif
+
 #include "platform/MdnsPublishing.h"
+
+class DiagnosticLogSink;
 
 class MdnsPublisher : public QObject, public MdnsPublishing {
     Q_OBJECT
@@ -21,6 +31,10 @@ public:
     };
 
     explicit MdnsPublisher(QObject *parent = nullptr);
+#if AIRPLAY_WITH_UXPLAY
+    using ServerFactory = std::function<QMdnsEngine::AbstractServer *(QObject *parent)>;
+    MdnsPublisher(DiagnosticLogSink *sink, ServerFactory serverFactory, QObject *parent = nullptr);
+#endif
     ~MdnsPublisher() override;
 
     bool publish(const QString &receiverName, const QByteArray &hardwareAddress, quint16 port,
