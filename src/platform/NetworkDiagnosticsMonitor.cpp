@@ -274,6 +274,10 @@ void NetworkDiagnosticsMonitor::recordChanged(
                                        {QStringLiteral("category"), category},
                                        {QStringLiteral("firewall"), firewall},
                                        {QStringLiteral("result"), statusText(network.status)}}, true));
+    if (sink_ == nullptr || !sink_->isActive()) {
+        stop();
+        return;
+    }
     if (network.status == DiagnosticFactStatus::TimedOut)
         return;
     for (qsizetype index = 1; index < events.size(); ++index)
