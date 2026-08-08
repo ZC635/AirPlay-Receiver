@@ -39,6 +39,7 @@ struct WindowsFirewallOperation {
 
 QString windowsEnvironmentFirewallScript(QString executable);
 QString windowsSystemPowerShellPath(QString systemDirectory);
+qint64 windowsRouteMetricFromNative(quint32 metric);
 
 struct WindowsEnvironmentOperations {
     std::function<DiagnosticValue<QVector<WindowsAdapterOperation>>(QDeadlineTimer)> adapters;
