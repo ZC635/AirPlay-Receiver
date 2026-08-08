@@ -11,6 +11,7 @@ private slots:
     void maskedAddressPreservesOnlyPrivatePrefixes();
     void controlCharactersAreEscaped();
     void sensitiveFieldNamesAreRejected();
+    void safeAggregateRequestCountersRemainAllowed();
     void safeClientModelAcceptsOnlyRestrictedCharacters();
     void safeProductVersionRequiresOneCompleteToken();
 };
@@ -88,6 +89,17 @@ void DiagnosticSanitizerTest::sensitiveFieldNamesAreRejected() {
     QVERIFY(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("device_id")).isEmpty());
     QCOMPARE(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("Renderer Count")),
              QString("renderer_count"));
+}
+
+void DiagnosticSanitizerTest::safeAggregateRequestCountersRemainAllowed() {
+    QCOMPARE(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("send_requests")),
+             QStringLiteral("send_requests"));
+    QCOMPARE(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("client_requests")),
+             QStringLiteral("client_requests"));
+    QVERIFY(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("request_header")).isEmpty());
+    QVERIFY(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("request_body")).isEmpty());
+    QVERIFY(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("authorization")).isEmpty());
+    QVERIFY(DiagnosticSanitizer::sanitizeFieldName(QStringLiteral("session_token")).isEmpty());
 }
 
 void DiagnosticSanitizerTest::safeClientModelAcceptsOnlyRestrictedCharacters() {

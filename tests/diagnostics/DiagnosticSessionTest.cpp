@@ -125,6 +125,8 @@ private slots:
     void reportsStorageAndHeaderFailuresWithoutFallback();
     void retentionFailureDeletesTheCurrentSession();
     void writeFailureEmitsOnceAndDisablesTheSession();
+    void summaryUsesTheFixedFactContract();
+    void reserveKeepsFullSummaryAndBoundsDuplicateNotices();
 };
 
 void DiagnosticSessionTest::formatsOneUtcUtf8PhysicalLine() {
@@ -359,6 +361,114 @@ void DiagnosticSessionTest::writeFailureEmitsOnceAndDisablesTheSession() {
         QStringLiteral("receiver"), QStringLiteral("second")));
     QCOMPARE(failures.count(), 1);
     QCOMPARE(storage->file->writes, 2);
+}
+
+void DiagnosticSessionTest::summaryUsesTheFixedFactContract() {
+    QTemporaryDir dir;
+    auto created = DiagnosticSession::create(testOptions(dir.path()));
+    QVERIFY2(created.session, qPrintable(created.error));
+    const auto record = [&](DiagnosticSeverity severity, const QString &component, const QString &name,
+                            QMap<QString, QString> fields = {}) {
+        created.session->record(makeDiagnosticEvent(severity, component, name, std::move(fields), true));
+    };
+    record(DiagnosticSeverity::Info, QStringLiteral("app"), QStringLiteral("startup_completed"),
+           {{QStringLiteral("result"), QStringLiteral("yes")}});
+    record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("state_changed"),
+           {{QStringLiteral("to"), QStringLiteral("discoverable")}});
+    record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("state_changed"),
+           {{QStringLiteral("to"), QStringLiteral("connected")}});
+    record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("state_changed"),
+           {{QStringLiteral("to"), QStringLiteral("connected")}});
+    for (int i = 0; i != 2; ++i)
+        record(DiagnosticSeverity::Info, QStringLiteral("discovery"), QStringLiteral("service_configured"),
+               {{QStringLiteral("type"), QStringLiteral("_airplay._tcp")}});
+    record(DiagnosticSeverity::Info, QStringLiteral("discovery"), QStringLiteral("service_configured"),
+           {{QStringLiteral("type"), QStringLiteral("_raop._tcp")}});
+    for (int i = 0; i != 3; ++i)
+        record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("search_received"));
+    for (int i = 0; i != 2; ++i)
+        record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("send_requested"));
+    for (int i = 0; i != 4; ++i)
+        record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("client_request"));
+    for (int i = 0; i != 2; ++i)
+        record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("disconnect"));
+    record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("reset"));
+    for (int i = 0; i != 3; ++i)
+        record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("network_changed"));
+    record(DiagnosticSeverity::Warning, QStringLiteral("receiver"), QStringLiteral("warning"));
+    record(DiagnosticSeverity::Error, QStringLiteral("receiver"), QStringLiteral("error"));
+    record(DiagnosticSeverity::Critical, QStringLiteral("receiver"), QStringLiteral("critical"));
+    record(DiagnosticSeverity::Info, QStringLiteral("third_party"), QStringLiteral("message_suppressed"));
+    record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("duplicate"));
+    record(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("duplicate"));
+    created.session->closeNormally();
+
+    const QByteArray log = readAll(created.session->filePath());
+    const QList<QByteArray> lines = log.split('\n');
+    QByteArray summary;
+    for (const QByteArray &line : lines) {
+        if (line.contains("session session_summary"))
+            summary = line;
+    }
+    QVERIFY(!summary.isEmpty());
+    for (const QByteArray &field : {"startup_completed=yes", "discoverable=yes", "airplay_providers=2",
+                                    "raop_providers=1", "searches=3", "send_requests=2",
+                                    "client_requests=4", "connections=2", "disconnects=2", "resets=1",
+                                    "network_changes=3", "warnings=1", "errors=2",
+                                    "duplicates_suppressed=1", "events_suppressed=1", "compact_mode=no",
+                                    "normal_exit=yes"})
+        QVERIFY2(summary.contains(field), field.constData());
+    QVERIFY(!summary.contains("cause="));
+    QVERIFY(!summary.contains("recommend"));
+    QVERIFY(!summary.contains("solution="));
+    QVERIFY(log.contains("duplicate_events_suppressed"));
+    QVERIFY(log.contains("count=1"));
+    QVERIFY(log.contains("component=receiver"));
+    QVERIFY(log.contains("event=duplicate"));
+}
+
+void DiagnosticSessionTest::reserveKeepsFullSummaryAndBoundsDuplicateNotices() {
+    QTemporaryDir dir;
+    auto options = testOptions(dir.path());
+    options.maxBytes = 2048;
+    options.compactThresholdBytes = 1000;
+    options.finalReserveBytes = 600;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY2(created.session, qPrintable(created.error));
+    for (int i = 0; i != 30; ++i) {
+        created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Warning,
+            QStringLiteral("load"), QStringLiteral("fill"),
+            {{QStringLiteral("i"), QString::number(i)}, {QStringLiteral("value"), QString(70, QLatin1Char('x'))}}));
+    }
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Warning,
+        QStringLiteral("receiver"), QStringLiteral("duplicate"), {{QStringLiteral("reason"), QStringLiteral("socket")}}));
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Warning,
+        QStringLiteral("receiver"), QStringLiteral("duplicate"), {{QStringLiteral("reason"), QStringLiteral("socket")}}));
+    created.session->closeNormally();
+
+    const QByteArray log = readAll(created.session->filePath());
+    QVERIFY(QFileInfo(created.session->filePath()).size() <= options.maxBytes);
+    qint64 endingOffset = 0;
+    for (const QByteArray &line : log.split('\n')) {
+        endingOffset += line.size() + 1;
+        if (line.contains("duplicate_events_suppressed")) {
+            QVERIFY(line.contains("count=1"));
+            QVERIFY(endingOffset <= options.maxBytes - options.finalReserveBytes);
+        }
+    }
+    const QByteArray required[] = {"startup_completed=", "discoverable=", "airplay_providers=",
+                                   "raop_providers=", "searches=", "send_requests=", "client_requests=",
+                                   "connections=", "disconnects=", "resets=", "network_changes=", "warnings=",
+                                   "errors=", "duplicates_suppressed=", "events_suppressed=", "compact_mode=",
+                                   "normal_exit=yes"};
+    QByteArray summary;
+    for (const QByteArray &line : log.split('\n')) {
+        if (line.contains("session session_summary"))
+            summary = line;
+    }
+    QVERIFY(!summary.isEmpty());
+    for (const QByteArray &field : required)
+        QVERIFY2(summary.contains(field), field.constData());
 }
 
 } // namespace
