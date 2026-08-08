@@ -34,12 +34,22 @@ constexpr bool kVideoSync = false;
 constexpr unsigned int kPlaybinVersion = 3;
 
 std::optional<qsizetype> boundedCStringLength(const char *value, qsizetype maximumLength) {
-    for (qsizetype index = 0; index <= maximumLength; ++index) {
+    for (qsizetype index = 0; index < maximumLength; ++index) {
         if (value[index] == '\0') {
             return index;
         }
     }
     return std::nullopt;
+}
+
+DiagnosticSeverity severityForUpstreamLevel(int upstreamLevel) {
+    if (upstreamLevel <= 3)
+        return DiagnosticSeverity::Error;
+    if (upstreamLevel == 4)
+        return DiagnosticSeverity::Warning;
+    if (upstreamLevel <= 6)
+        return DiagnosticSeverity::Info;
+    return DiagnosticSeverity::Debug;
 }
 
 QByteArray defaultDeviceId() {
@@ -181,6 +191,7 @@ void connInit(void *cls) {
     auto *receiver = callback.receiver();
     if (!receiver) return;
     const auto generation = callback.generation();
+    receiver->handleConnectionInitializedFromUxPlayCallback(generation);
     QPointer<UxPlayReceiver> guardedReceiver(receiver);
     QMetaObject::invokeMethod(receiver, [guardedReceiver, generation] {
         if (guardedReceiver) {
@@ -255,16 +266,6 @@ void audioSetProgress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end)
     }
 }
 
-void reportClientRequest(void *cls, char *deviceId, char *model, char *name, bool *admit) {
-    Q_UNUSED(deviceId);
-    Q_UNUSED(name);
-    *admit = true;
-    CallbackScope callback(cls);
-    if (auto *receiver = callback.receiver()) {
-        receiver->handleClientRequestFromUxPlayCallback(model, callback.generation());
-    }
-}
-
 int videoSetCodec(void *cls, video_codec_t codec) {
     CallbackScope callback(cls);
     auto *receiver = callback.receiver();
@@ -273,6 +274,17 @@ int videoSetCodec(void *cls, video_codec_t codec) {
     return receiver->chooseVideoCodecFromCallback(video_is_h265, callback.generation());
 }
 } // namespace
+
+void UxPlayReceiver::reportClientRequestFromUxPlayCallback(
+    void *cls, char *deviceId, char *model, char *name, bool *admit) {
+    Q_UNUSED(deviceId);
+    Q_UNUSED(name);
+    *admit = true;
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->handleClientRequestFromUxPlayCallback(model, callback.generation());
+    }
+}
 #endif
 
 UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
@@ -399,6 +411,7 @@ void UxPlayReceiver::start() {
 
     setState(ReceiverState::Starting);
     const auto generation = m_callbackGeneration.fetch_add(1) + 1;
+    m_connectionResetReported.store(false);
     m_callbackContexts.push_back(std::make_unique<CallbackContext>(this, generation));
     m_callbackContext = m_callbackContexts.back().get();
     m_acceptingCallbacks.store(true);
@@ -517,7 +530,7 @@ void UxPlayReceiver::start() {
     callbacks.audio_set_progress = audioSetProgress;
     callbacks.audio_get_format = audioGetFormat;
     callbacks.video_report_size = videoReportSize;
-    callbacks.report_client_request = reportClientRequest;
+    callbacks.report_client_request = UxPlayReceiver::reportClientRequestFromUxPlayCallback;
     callbacks.video_set_codec = videoSetCodec;
 
     auto *raop = raop_init(&callbacks);
@@ -804,10 +817,15 @@ void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compres
             recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
                 QStringLiteral("codec_selected"), {{QStringLiteral("codec"), codec},
                     {QStringLiteral("stream_type"), QStringLiteral("audio")}}, true));
+            recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+                QStringLiteral("renderer_started"), {{QStringLiteral("renderer"), QStringLiteral("audio")},
+                                                       {QStringLiteral("result"), QStringLiteral("success")}}, true));
+            return;
         }
-        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
-            QStringLiteral("renderer_started"), {{QStringLiteral("renderer"), QStringLiteral("audio")},
-                                                   {QStringLiteral("result"), QStringLiteral("success")}}, true));
+        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("receiver"),
+            QStringLiteral("failure"), {{QStringLiteral("stage"), QStringLiteral("audio_renderer_start")},
+                                         {QStringLiteral("result"), QStringLiteral("failed")},
+                                         {QStringLiteral("reason"), QStringLiteral("unknown_codec")}}, true));
     });
 }
 
@@ -840,7 +858,7 @@ void UxPlayReceiver::handleLogMessageFromUxPlayCallback(int level, const char *m
     const auto messageLength = boundedCStringLength(message, 512);
     if (!messageLength) {
         m_callbackDispatch.runIfCurrent(generation, [&] {
-            recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("third_party"),
+            recordDiagnostic(makeDiagnosticEvent(severityForUpstreamLevel(level), QStringLiteral("third_party"),
                 QStringLiteral("message_suppressed"), {{QStringLiteral("reason"), QStringLiteral("not_allowlisted")}}, true));
         });
         return;
@@ -860,7 +878,7 @@ void UxPlayReceiver::handleLogMessageFromUxPlayCallback(int level, const char *m
             recordDiagnostic(std::move(*translated));
             return;
         }
-        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("third_party"),
+        recordDiagnostic(makeDiagnosticEvent(severityForUpstreamLevel(level), QStringLiteral("third_party"),
             QStringLiteral("message_suppressed"), {{QStringLiteral("reason"), QStringLiteral("not_allowlisted")}}, true));
     });
 }
@@ -878,6 +896,12 @@ void UxPlayReceiver::handleClientRequestFromUxPlayCallback(const char *model, qu
         }
         recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
             QStringLiteral("client_request"), std::move(fields), true));
+    });
+}
+
+void UxPlayReceiver::handleConnectionInitializedFromUxPlayCallback(quint64 generation) {
+    m_callbackDispatch.runIfCurrent(generation, [&] {
+        m_connectionResetReported.store(false);
     });
 }
 
@@ -1365,9 +1389,6 @@ void UxPlayReceiver::setState(ReceiverState state) {
 
     const ReceiverState previous = m_state;
     m_state = state;
-    if (state == ReceiverState::Connected) {
-        m_connectionResetReported.store(false);
-    }
     recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
         QStringLiteral("state_changed"), {{QStringLiteral("from"), receiverStateName(previous)},
                                              {QStringLiteral("to"), receiverStateName(state)}}, true));

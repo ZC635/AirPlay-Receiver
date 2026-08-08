@@ -92,7 +92,10 @@ public:
     void setVolumeFromUxPlayCallback(double volume, quint64 generation);
     void handleLogMessageFromUxPlayCallback(int level, const char *message);
     void handleLogMessageFromUxPlayCallback(int level, const char *message, quint64 generation);
+    static void reportClientRequestFromUxPlayCallback(void *cls, char *deviceId, char *model,
+                                                       char *name, bool *admit);
     void handleClientRequestFromUxPlayCallback(const char *model, quint64 generation);
+    void handleConnectionInitializedFromUxPlayCallback(quint64 generation);
     void handleConnectionResetFromUxPlayCallback(int reason, quint64 generation);
     void setMetadataFromUxPlayCallback(const void *buffer, int buflen);
     void setMetadataFromUxPlayCallback(const void *buffer, int buflen, quint64 generation);
