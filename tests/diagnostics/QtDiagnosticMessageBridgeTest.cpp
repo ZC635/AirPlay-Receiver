@@ -6,23 +6,57 @@
 #include <QMutex>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
-
-void setQtDiagnosticMessageBridgeInstallObserverForTests(void (*observer)(QtMessageHandler));
-void forwardQtDiagnosticMessageBridgeNullPreviousForTests();
 
 namespace {
 
 int previousHandlerCalls = 0;
-std::atomic<int> installObserverCalls = 0;
+
+class ScopedQtMessageHandler final {
+public:
+    explicit ScopedQtMessageHandler(QtMessageHandler handler) : m_previous(qInstallMessageHandler(handler)) {}
+    ~ScopedQtMessageHandler() { qInstallMessageHandler(m_previous); }
+
+private:
+    QtMessageHandler m_previous;
+};
 
 void observingPreviousHandler(QtMsgType, const QMessageLogContext &, const QString &) {
     ++previousHandlerCalls;
 }
 
-void countInstalledMessageHandler(QtMessageHandler) {
-    ++installObserverCalls;
+struct BlockingPreviousState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool released = false;
+    int calls = 0;
+
+    bool waitForEntry() {
+        std::unique_lock lock(mutex);
+        return changed.wait_for(lock, std::chrono::seconds(2), [&] { return entered; });
+    }
+
+    void release() {
+        std::lock_guard lock(mutex);
+        released = true;
+        changed.notify_all();
+    }
+};
+
+BlockingPreviousState *blockingPreviousState = nullptr;
+
+void blockingPreviousHandler(QtMsgType, const QMessageLogContext &, const QString &) {
+    std::unique_lock lock(blockingPreviousState->mutex);
+    ++blockingPreviousState->calls;
+    blockingPreviousState->entered = true;
+    blockingPreviousState->changed.notify_all();
+    blockingPreviousState->changed.wait(lock, [] { return blockingPreviousState->released; });
 }
 
 class ThreadSafeSink final : public DiagnosticLogSink {
@@ -49,8 +83,8 @@ class QtDiagnosticMessageBridgeTest final : public QObject {
 
 private slots:
     void bridgeSanitizesAndRestoresPreviousHandler();
-    void nullPreviousDefaultForwardingDoesNotInstallHandler();
     void concurrentDefaultForwardingKeepsEveryEligibleMessage();
+    void teardownWaitsForForwardedHandler();
     void qtMessageOutputUsesInstalledHandler();
     void routesAllowedQtMessagesAndFlushesBoundaries();
     void eventForMessageMapsFatalWithoutTerminating();
@@ -74,14 +108,6 @@ void QtDiagnosticMessageBridgeTest::bridgeSanitizesAndRestoresPreviousHandler() 
     QVERIFY(sink.events.first().flushImmediately);
     QVERIFY(!sink.events.first().fields.value("message").contains("192.168.1.55"));
     QVERIFY(!sink.events.first().fields.value("message").contains("secret"));
-}
-
-void QtDiagnosticMessageBridgeTest::nullPreviousDefaultForwardingDoesNotInstallHandler() {
-    installObserverCalls = 0;
-    setQtDiagnosticMessageBridgeInstallObserverForTests(&countInstalledMessageHandler);
-    forwardQtDiagnosticMessageBridgeNullPreviousForTests();
-    setQtDiagnosticMessageBridgeInstallObserverForTests(nullptr);
-    QCOMPARE(installObserverCalls.load(), 0);
 }
 
 void QtDiagnosticMessageBridgeTest::concurrentDefaultForwardingKeepsEveryEligibleMessage() {
@@ -112,6 +138,34 @@ void QtDiagnosticMessageBridgeTest::concurrentDefaultForwardingKeepsEveryEligibl
     }
     qInstallMessageHandler(original);
     QCOMPARE(sink.size(), workerCount * messagesPerWorker);
+}
+
+void QtDiagnosticMessageBridgeTest::teardownWaitsForForwardedHandler() {
+    BlockingPreviousState state;
+    blockingPreviousState = &state;
+    ScopedQtMessageHandler previous(&blockingPreviousHandler);
+    auto bridge = std::make_unique<QtDiagnosticMessageBridge>(&nullDiagnosticLogSink());
+    std::thread logging([] { qWarning().noquote() << "blocked previous handler"; });
+    const bool entered = state.waitForEntry();
+    std::atomic<bool> teardownStarted = false;
+    std::atomic<bool> destroyed = false;
+    std::thread teardown([&] {
+        teardownStarted = true;
+        bridge.reset();
+        destroyed = true;
+    });
+    while (!teardownStarted.load())
+        std::this_thread::yield();
+    QTest::qWait(25);
+    const bool completedBeforeRelease = destroyed.load();
+    state.release();
+    logging.join();
+    teardown.join();
+    blockingPreviousState = nullptr;
+
+    QVERIFY(entered);
+    QVERIFY(!completedBeforeRelease);
+    QCOMPARE(state.calls, 1);
 }
 
 void QtDiagnosticMessageBridgeTest::qtMessageOutputUsesInstalledHandler() {

@@ -11,6 +11,9 @@ private slots:
     void nonEmptyEnvironmentActivatesUnifiedMode();
     void parsesPrivateParentGateWithoutLoggingToken();
     void rejectsInvalidOrIncompletePrivateArguments();
+    void rejectsPrivateCoordinationWithoutActivation();
+    void rejectsInvalidAndDuplicateParentPids();
+    void repeatedDiagnosticFlagIsIdempotent();
     void ignoresOrdinaryStartupArguments();
 };
 
@@ -51,6 +54,37 @@ void DiagnosticActivationTest::rejectsInvalidOrIncompletePrivateArguments() {
              QString("duplicate_diagnostic_ready_token"));
     QCOMPARE(DiagnosticActivation::parse({"app", "--diagnostic-parent-pid=42"}, {}).argumentError,
              QString("incomplete_diagnostic_coordination"));
+}
+
+void DiagnosticActivationTest::rejectsPrivateCoordinationWithoutActivation() {
+    const auto activation = DiagnosticActivation::parse(
+        {"app", "--diagnostic-parent-pid=42", "--diagnostic-ready-token=private"}, {});
+    QCOMPARE(activation.argumentError, QString("diagnostic_coordination_requires_activation"));
+    QVERIFY(!activation.enabled);
+    QVERIFY(!activation.isCoordinatedChild());
+    QCOMPARE(activation.parentPid, qint64(0));
+    QVERIFY(activation.readyToken.isEmpty());
+}
+
+void DiagnosticActivationTest::rejectsInvalidAndDuplicateParentPids() {
+    for (const QString &argument : {QStringLiteral("--diagnostic-parent-pid=0"),
+                                    QStringLiteral("--diagnostic-parent-pid=-1"),
+                                    QStringLiteral("--diagnostic-parent-pid=9223372036854775808")}) {
+        QCOMPARE(DiagnosticActivation::parse({"app", argument}, {}).argumentError,
+                 QString("invalid_diagnostic_parent_pid"));
+    }
+    QCOMPARE(DiagnosticActivation::parse(
+                 {"app", "--diagnostic-parent-pid=1", "--diagnostic-parent-pid=2"}, {})
+                 .argumentError,
+             QString("duplicate_diagnostic_parent_pid"));
+}
+
+void DiagnosticActivationTest::repeatedDiagnosticFlagIsIdempotent() {
+    const auto activation = DiagnosticActivation::parse(
+        {"app", "--diagnostic-log", "--diagnostic-log"}, {});
+    QVERIFY(activation.enabled);
+    QCOMPARE(activation.source, DiagnosticActivationSource::CommandArgument);
+    QVERIFY(activation.argumentError.isEmpty());
 }
 
 void DiagnosticActivationTest::ignoresOrdinaryStartupArguments() {

@@ -9,16 +9,18 @@
 #include <atomic>
 #include <cstdio>
 
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
+
 namespace {
 
 QMutex bridgeMutex;
 QWaitCondition bridgeIdle;
 DiagnosticLogSink *activeSink = nullptr;
 QtMessageHandler previousHandler = nullptr;
-int inFlightHandlers = 0;
+std::atomic_uint handlerEntries = 0;
 bool tearingDown = false;
-using InstallObserver = void (*)(QtMessageHandler);
-std::atomic<InstallObserver> installObserver = nullptr;
 
 QString asciiSanitizedText(QStringView value) {
     const QString sanitized = DiagnosticSanitizer::sanitizeText(value);
@@ -30,12 +32,6 @@ QString asciiSanitizedText(QStringView value) {
     return ascii;
 }
 
-QtMessageHandler installMessageHandler(QtMessageHandler handler) {
-    if (const InstallObserver observer = installObserver.load(std::memory_order_relaxed))
-        observer(handler);
-    return qInstallMessageHandler(handler);
-}
-
 void forwardToPrevious(QtMessageHandler handler, QtMsgType type,
                        const QMessageLogContext &context, const QString &message) {
     if (handler) {
@@ -43,39 +39,33 @@ void forwardToPrevious(QtMessageHandler handler, QtMsgType type,
         return;
     }
 
-    const QByteArray formatted = qFormatLogMessage(type, context, message).toLocal8Bit();
-    std::fputs(formatted.constData(), stderr);
+    // Qt performs fatal termination after this message handler returns.
+    const QString formatted = qFormatLogMessage(type, context, message);
+#if defined(Q_OS_WIN)
+    if (!GetConsoleWindow()) {
+        OutputDebugStringW(reinterpret_cast<LPCWSTR>((formatted + QLatin1Char('\n')).utf16()));
+        return;
+    }
+#endif
+    const QByteArray output = formatted.toLocal8Bit();
+    std::fputs(output.constData(), stderr);
     std::fputc('\n', stderr);
     std::fflush(stderr);
 }
 
 } // namespace
 
-void setQtDiagnosticMessageBridgeInstallObserverForTests(void (*observer)(QtMessageHandler)) {
-    installObserver.store(observer, std::memory_order_relaxed);
-}
-
-void forwardQtDiagnosticMessageBridgeNullPreviousForTests() {
-    forwardToPrevious(nullptr, QtWarningMsg, QMessageLogContext(),
-                      QStringLiteral("default forwarding test"));
-}
-
 namespace {
 
-class HandlerFlight final {
+class HandlerEntry final {
 public:
-    explicit HandlerFlight(bool active) : m_active(active) {}
-    ~HandlerFlight() {
-        if (!m_active)
-            return;
-        QMutexLocker locker(&bridgeMutex);
-        --inFlightHandlers;
-        if (inFlightHandlers == 0)
+    HandlerEntry() { handlerEntries.fetch_add(1, std::memory_order_acq_rel); }
+    ~HandlerEntry() {
+        if (handlerEntries.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            QMutexLocker locker(&bridgeMutex);
             bridgeIdle.wakeAll();
+        }
     }
-
-private:
-    bool m_active;
 };
 
 } // namespace
@@ -85,7 +75,7 @@ QtDiagnosticMessageBridge::QtDiagnosticMessageBridge(DiagnosticLogSink *sink) {
     if (activeSink || tearingDown)
         return;
     activeSink = sink ? sink : &nullDiagnosticLogSink();
-    previousHandler = installMessageHandler(&QtDiagnosticMessageBridge::messageHandler);
+    previousHandler = qInstallMessageHandler(&QtDiagnosticMessageBridge::messageHandler);
     m_installed = true;
 }
 
@@ -93,10 +83,10 @@ QtDiagnosticMessageBridge::~QtDiagnosticMessageBridge() {
     QMutexLocker locker(&bridgeMutex);
     if (!m_installed)
         return;
-    installMessageHandler(previousHandler);
+    qInstallMessageHandler(previousHandler);
     activeSink = nullptr;
     tearingDown = true;
-    while (inFlightHandlers != 0)
+    while (handlerEntries.load(std::memory_order_acquire) != 0)
         bridgeIdle.wait(&bridgeMutex);
     previousHandler = nullptr;
     tearingDown = false;
@@ -137,18 +127,16 @@ std::optional<DiagnosticEvent> QtDiagnosticMessageBridge::eventForMessage(
 
 void QtDiagnosticMessageBridge::messageHandler(
     QtMsgType type, const QMessageLogContext &context, const QString &message) {
+    HandlerEntry entry;
     DiagnosticLogSink *sink = nullptr;
     QtMessageHandler handler = nullptr;
     {
         QMutexLocker locker(&bridgeMutex);
         if (activeSink) {
-            ++inFlightHandlers;
             sink = activeSink;
         }
         handler = previousHandler;
     }
-    HandlerFlight flight(sink != nullptr);
-
     if (sink) {
         try {
             if (const auto event = eventForMessage(type, context, message))
