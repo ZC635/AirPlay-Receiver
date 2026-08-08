@@ -27,6 +27,10 @@ private slots:
     void missingSettingsFileIsDefaulted();
     void invalidSettingsFileIsDefaulted();
     void validSettingsObjectIsLoaded();
+    void missingRuntimeAbortsWithoutNormalDiagnosticClose();
+    void skippedStandaloneRuntimeAvoidsManifestEntries();
+    void inactiveCreatedSessionDoesNotEnableDiagnosticTitle();
+    void queuedPreWindowFailureReachesOneConfiguredHandler();
 };
 
 void DiagnosticActivationTest::normalLaunchIsDisabled() {
@@ -149,6 +153,36 @@ void DiagnosticActivationTest::validSettingsObjectIsLoaded() {
     file.close();
 
     QVERIFY(settingsFileContainsObject(file.fileName()));
+}
+
+void DiagnosticActivationTest::missingRuntimeAbortsWithoutNormalDiagnosticClose() {
+    const auto decision = diagnosticShutdownDecision(false);
+
+    QVERIFY(decision.recordStartupAborted);
+    QVERIFY(!decision.recordShutdownStarted);
+    QVERIFY(!decision.closeNormally);
+}
+
+void DiagnosticActivationTest::skippedStandaloneRuntimeAvoidsManifestEntries() {
+    const auto decision = diagnosticStandaloneRuntimeDecision(false);
+
+    QVERIFY(!decision.emitManifestEntries);
+    QCOMPARE(decision.result, QString("skipped"));
+}
+
+void DiagnosticActivationTest::inactiveCreatedSessionDoesNotEnableDiagnosticTitle() {
+    QVERIFY(!diagnosticLoggingActiveForSession(true, false));
+}
+
+void DiagnosticActivationTest::queuedPreWindowFailureReachesOneConfiguredHandler() {
+    DiagnosticWriteFailureRelay relay;
+    int handled = 0;
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [&relay] {
+        relay.deliver("disk full");
+    }, Qt::QueuedConnection);
+    relay.setHandler([&handled](QString) { ++handled; });
+
+    QTRY_COMPARE(handled, 1);
 }
 
 QTEST_GUILESS_MAIN(DiagnosticActivationTest)

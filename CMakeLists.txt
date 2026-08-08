@@ -3,6 +3,27 @@ project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX RC)
 
 set(AIRPLAY_BUILD_ID "" CACHE STRING "Optional build identity for diagnostic logs")
 
+function(airplay_escape_cpp_string output input)
+    set(escaped "${input}")
+    string(REPLACE "\\" "\\\\" escaped "${escaped}")
+    string(REPLACE "\"" "\\\"" escaped "${escaped}")
+    string(REPLACE "\r" "\\r" escaped "${escaped}")
+    string(REPLACE "\n" "\\n" escaped "${escaped}")
+    string(REPLACE "\t" "\\t" escaped "${escaped}")
+    set(${output} "${escaped}" PARENT_SCOPE)
+endfunction()
+
+airplay_escape_cpp_string(_airplay_version_cpp "${PROJECT_VERSION}")
+airplay_escape_cpp_string(_airplay_build_id_cpp "${AIRPLAY_BUILD_ID}")
+# Keep identity strings out of compiler command lines, which can split or warn on cache values.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/app")
+file(CONFIGURE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/app/BuildIdentity.h"
+    CONTENT "#pragma once\n\nnamespace AirPlayBuildIdentity {\ninline constexpr char16_t version[] = u\"@_airplay_version_cpp@\";\ninline constexpr char16_t buildId[] = u\"@_airplay_build_id_cpp@\";\n}\n"
+    @ONLY
+    NEWLINE_STYLE LF
+)
+
 if(NOT WIN32)
     message(FATAL_ERROR "This project requires Windows")
 endif()
@@ -100,11 +121,12 @@ add_library(airplay_app_lib
     src/platform/WindowsHotkeyService.cpp
     src/platform/WindowsHotkeyService.h
 )
-target_include_directories(airplay_app_lib PUBLIC src)
+target_include_directories(airplay_app_lib PUBLIC
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
 target_compile_definitions(airplay_app_lib PUBLIC
     AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>
-    AIRPLAY_VERSION=\"${PROJECT_VERSION}\"
-    AIRPLAY_BUILD_ID=\"${AIRPLAY_BUILD_ID}\"
 )
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::Network)
 if(AIRPLAY_WITH_UXPLAY)
