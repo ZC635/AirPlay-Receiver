@@ -1,5 +1,4 @@
 #include <QtTest/QtTest>
-#include <QFile>
 #include <QElapsedTimer>
 #include <QTemporaryDir>
 
@@ -8,6 +7,7 @@
 #include <type_traits>
 
 #include "backend/FakeAirPlayReceiver.h"
+#include "../support/CollectingDiagnosticLogSink.h"
 
 #if AIRPLAY_WITH_UXPLAY
 #define private public
@@ -1427,11 +1427,9 @@ private slots:
 
     void lateVideoResetAfterDisconnectDoesNotRecreateRenderer() {
 #if AIRPLAY_WITH_UXPLAY
-        qputenv("AIRPLAY_DEBUG_LOG", "1");
-        const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/airplay_receiver_debug.log");
-        QFile::remove(logPath);
-
+        CollectingSink sink;
         UxPlayReceiverConfig config;
+        config.diagnosticSink = &sink;
         config.serverName = "AirPlay Receiver Late Reset After Disconnect Test";
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
@@ -1447,21 +1445,95 @@ private slots:
         receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
         receiver.stop();
 
-        QFile logFile(logPath);
-        QVERIFY(logFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QString log = QString::fromUtf8(logFile.readAll());
-        qunsetenv("AIRPLAY_DEBUG_LOG");
-        QVERIFY(log.count(QStringLiteral("GStreamer video pipeline")) > 0);
+        QCOMPARE(countEvents(sink, QStringLiteral("reset")), 0);
+#endif
+    }
+
+    void clientRequestRecordsOnlySafeModel() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        CollectingSink sink;
+        config.diagnosticSink = &sink;
+        UxPlayReceiver receiver(config);
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(1);
+
+        receiver.handleClientRequestFromUxPlayCallback("iPhone15,2", 1);
+
+        const auto event = findEvent(sink, QStringLiteral("client_request"));
+        QCOMPARE(event.component, QStringLiteral("receiver"));
+        QCOMPARE(event.fields.value(QStringLiteral("model")), QStringLiteral("iPhone15,2"));
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("device_id")));
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("client_name")));
+        QVERIFY(event.flushImmediately);
+#endif
+    }
+
+    void unsafeClientModelAndMediaPayloadsNeverReachDiagnosticSink() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        CollectingSink sink;
+        config.diagnosticSink = &sink;
+        UxPlayReceiver receiver(config);
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(1);
+
+        receiver.handleClientRequestFromUxPlayCallback("Alice iPhone/../private", 1);
+        const QByteArray metadata("mlit\0\0\0\0", 8);
+        QByteArray coverArt("cover-art-private-bytes");
+        int length = coverArt.size();
+        unsigned short sequence = 1;
+        uint64_t time = 1;
+        int nalCount = 1;
+        receiver.setMetadataFromUxPlayCallback(metadata.constData(), metadata.size(), 1);
+        receiver.setCoverArtFromUxPlayCallback(coverArt.constData(), coverArt.size(), 1);
+        receiver.renderAudioBufferFromCallback(coverArt.data(), &length, &sequence, &time, 1);
+        receiver.renderVideoBufferFromCallback(coverArt.data(), &length, &nalCount, &time, 1);
+
+        const auto event = findEvent(sink, QStringLiteral("client_request"));
+        QVERIFY(!event.fields.contains(QStringLiteral("model")));
+        QVERIFY(!joinedFields(sink).contains(coverArt));
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("Alice")));
+#endif
+    }
+
+    void uxPlayLogsTranslateReviewedFactsAndSuppressAllOtherMessages() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        CollectingSink sink;
+        config.diagnosticSink = &sink;
+        UxPlayReceiver receiver(config);
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(1);
+
+        receiver.handleLogMessageFromUxPlayCallback(
+            LOGGER_INFO, "Client identified as User-Agent: AirPlay/1.0", 1);
+        receiver.handleLogMessageFromUxPlayCallback(LOGGER_INFO, "Remote: 192.168.1.88", 1);
+        receiver.handleLogMessageFromUxPlayCallback(LOGGER_INFO, "Pairing setup success", 1);
+        receiver.handleLogMessageFromUxPlayCallback(
+            LOGGER_ERR, "eiv=secret ekey=secret aeskey=secret header=private", 1);
+        receiver.handleLogMessageFromUxPlayCallback(LOGGER_WARNING, "unsafe\nraw message", 1);
+
+        const auto software = findEvent(sink, QStringLiteral("client_software"));
+        QCOMPARE(software.component, QStringLiteral("third_party"));
+        QCOMPARE(software.fields.value(QStringLiteral("product")), QStringLiteral("AirPlay"));
+        QCOMPARE(software.fields.value(QStringLiteral("version")), QStringLiteral("1.0"));
+        QVERIFY(hasEvent(sink, QStringLiteral("connection_source")));
+        QVERIFY(hasEvent(sink, QStringLiteral("pairing_result")));
+        QCOMPARE(countEvents(sink, QStringLiteral("message_suppressed")), 2);
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("secret")));
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("unsafe")));
+        for (const auto &event : sink.events) {
+            QVERIFY(event.flushImmediately);
+        }
 #endif
     }
 
     void coverArtCallbacksDoNotRestartVideoRenderer() {
 #if AIRPLAY_WITH_UXPLAY
-        qputenv("AIRPLAY_DEBUG_LOG", "1");
-        const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/airplay_receiver_debug.log");
-        QFile::remove(logPath);
-
+        CollectingSink sink;
         UxPlayReceiverConfig config;
+        config.diagnosticSink = &sink;
         config.serverName = "AirPlay Receiver Cover Art Callback Test";
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
@@ -1480,11 +1552,7 @@ private slots:
         receiver.stop();
 
         QCOMPARE(coverArtSpy.at(0).at(0).toByteArray(), coverArt);
-        QFile logFile(logPath);
-        QVERIFY(logFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QString log = QString::fromUtf8(logFile.readAll());
-        qunsetenv("AIRPLAY_DEBUG_LOG");
-        QVERIFY(log.count(QStringLiteral("GStreamer video pipeline")) > 0);
+        QVERIFY(!joinedFields(sink).contains(coverArt));
 #endif
     }
 
@@ -1562,11 +1630,9 @@ private slots:
 
     void rtpShutdownRecreatesVideoRenderer() {
 #if AIRPLAY_WITH_UXPLAY
-        qputenv("AIRPLAY_DEBUG_LOG", "1");
-        const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/airplay_receiver_debug.log");
-        QFile::remove(logPath);
-
+        CollectingSink sink;
         UxPlayReceiverConfig config;
+        config.diagnosticSink = &sink;
         config.serverName = "AirPlay Receiver RTP Reset Test";
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
@@ -1578,20 +1644,11 @@ private slots:
 
         QCOMPARE(video_renderer_choose_codec(false, false), 0);
 
-        QFile logFile(logPath);
-        QVERIFY(logFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const int initialPipelineCount = QString::fromUtf8(logFile.readAll()).count(QStringLiteral("GStreamer video pipeline"));
-        logFile.close();
-
         receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
         receiver.stop();
 
-        QVERIFY(logFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QString log = QString::fromUtf8(logFile.readAll());
-        qunsetenv("AIRPLAY_DEBUG_LOG");
-        const int finalPipelineCount = log.count(QStringLiteral("GStreamer video pipeline"));
-        QVERIFY(finalPipelineCount > initialPipelineCount);
-        QVERIFY(log.count(QStringLiteral("video_pipeline state change")) > 0);
+        QVERIFY(hasEvent(sink, QStringLiteral("renderer_started")));
+        QVERIFY(hasEvent(sink, QStringLiteral("reset")));
 #endif
     }
 

@@ -320,6 +320,7 @@ int main(int argc, char *argv[]) {
     config.videoQuality = settings.videoQuality();
     config.videoSink = "appsink";
     config.audioSink = "wasapisink";
+    config.diagnosticSink = sink;
     UxPlayReceiver receiver(config);
     bool startupCompletedRecorded = false;
     QObject::connect(&receiver, &AirPlayReceiver::stateChanged, &app,
