@@ -11,6 +11,7 @@
 
 class PublisherFakeServer final : public QMdnsEngine::AbstractServer {
 public:
+    ~PublisherFakeServer() override { emit error(QStringLiteral("late teardown error")); }
     void sendMessage(const QMdnsEngine::Message &) override {}
     void sendMessageToAll(const QMdnsEngine::Message &) override {}
     void fail(const QString &message) { emit error(message); }
@@ -203,9 +204,8 @@ private slots:
 
     void stopDisconnectsLateDelegateSignals() {
         CollectingSink sink;
-        PublisherFakeServer *server = nullptr;
-        MdnsPublisher publisher(&sink, [&server](QObject *parent) {
-            server = new PublisherFakeServer;
+        MdnsPublisher publisher(&sink, [](QObject *parent) {
+            auto *server = new PublisherFakeServer;
             server->setParent(parent);
             return server;
         });
@@ -214,9 +214,7 @@ private slots:
                                   reinterpret_cast<const char *>(raw), sizeof(raw),
                                   reinterpret_cast<const char *>(raw), sizeof(raw)));
         publisher.stop();
-        const int eventCount = sink.events.size();
-        QCoreApplication::sendPostedEvents();
-        QCOMPARE(sink.events.size(), eventCount);
+        QCOMPARE(countEvents(sink, "error"), 0);
     }
 #endif
 
