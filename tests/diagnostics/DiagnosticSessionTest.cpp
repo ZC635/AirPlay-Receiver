@@ -45,6 +45,8 @@ struct FakeFileState {
     int closes = 0;
     int failWriteAt = 0;
     int shortWriteAt = 0;
+    int partialBytesAttempted = 0;
+    int rollbacks = 0;
     bool flushSucceeds = true;
     bool clearErrorOnClose = false;
     QString error;
@@ -63,7 +65,13 @@ public:
         }
         if (m_state->shortWriteAt != 0 && m_state->writes >= m_state->shortWriteAt) {
             m_state->error = m_state->writeError;
-            return bytes.size() - 1;
+            const qsizetype originalSize = m_state->bytes.size();
+            const int partialBytes = qMax(1, bytes.size() / 2);
+            m_state->bytes.append(bytes.constData(), partialBytes);
+            m_state->partialBytesAttempted += partialBytes;
+            m_state->bytes.truncate(originalSize);
+            ++m_state->rollbacks;
+            return partialBytes;
         }
         m_state->bytes.append(bytes);
         return bytes.size();
@@ -459,12 +467,17 @@ void DiagnosticSessionTest::shortWriteEmitsOnceAndDisablesTheSession() {
     options.storage = storage;
     auto created = DiagnosticSession::create(options);
     QVERIFY2(created.session, qPrintable(created.error));
+    const QByteArray headerBytes = storage->file->bytes;
     QSignalSpy failures(created.session.get(), &DiagnosticSession::writeFailed);
     created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("short")));
     QVERIFY(!created.session->isActive());
     QCOMPARE(failures.count(), 1);
     QCOMPARE(failures.at(0).at(0).toString(), QStringLiteral("short write failure"));
     QCOMPARE(storage->file->writes, 2);
+    QVERIFY(storage->file->partialBytesAttempted > 0);
+    QCOMPARE(storage->file->rollbacks, 1);
+    QCOMPARE(storage->file->bytes, headerBytes);
+    QVERIFY(!storage->file->bytes.contains("receiver short"));
     created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("later")));
     QCOMPARE(storage->file->writes, 2);
 }
