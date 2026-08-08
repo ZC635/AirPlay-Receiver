@@ -25,9 +25,10 @@ struct NetworkAdapterFact {
     bool enabled = false;
     bool up = false;
     QString physicalClassification;
-    int routeMetric = -1;
+    qint64 routeMetric = -1;
     bool ownsDefaultRoute = false;
     QStringList prefixes;
+    bool enabledKnown = false;
 };
 
 struct NetworkEnvironmentFact {

@@ -244,21 +244,6 @@ private slots:
                      .network.status, DiagnosticFactStatus::TimedOut);
     }
 
-    void firewallClassificationPrefersBlockAndIgnoresInapplicableRules() {
-        const QVector<WindowsFirewallRuleCandidate> rules{
-            {true, true, true, true, QStringLiteral("allow")},
-            {true, true, true, true, QStringLiteral("block")},
-            {false, true, true, true, QStringLiteral("block")},
-            {true, false, true, true, QStringLiteral("block")},
-            {true, true, false, true, QStringLiteral("block")},
-            {true, true, true, false, QStringLiteral("block")}};
-        QCOMPARE(classifyWindowsFirewallRules(rules), QStringLiteral("denied"));
-        QCOMPARE(classifyWindowsFirewallRules({{true, true, true, true,
-                                                 QStringLiteral("allow")}}),
-                 QStringLiteral("confirmed"));
-        QCOMPARE(classifyWindowsFirewallRules({}), QStringLiteral("absent"));
-    }
-
     void firewallScriptUsesExplicitCandidatesAndEnabledRules() {
         const QString script = windowsEnvironmentFirewallScript(
             QStringLiteral("C:\\Program Files\\AirPlay\\receiver.exe"));
@@ -271,6 +256,69 @@ private slots:
         QVERIFY(script.contains(QStringLiteral("$activeProfiles")));
         QVERIFY(script.contains(QStringLiteral("Split(',')|ForEach-Object{$_.Trim()}")));
         QVERIFY(script.contains(QStringLiteral("$activeProfiles.Count -gt 0")));
+    }
+
+    void eventsReportUnknownEnabledAndRouteMetricHonestly() {
+        EnvironmentSnapshot snapshot = EnvironmentDiagnostics::collect(fakeProviders(), 3000);
+        NetworkAdapterFact &adapter = snapshot.network.value.adapters.first();
+        adapter.enabledKnown = false;
+        adapter.routeMetric = -1;
+        DiagnosticEvent event = EnvironmentDiagnostics::events(snapshot).constLast();
+        QCOMPARE(event.fields.value(QStringLiteral("enabled")), QStringLiteral("unavailable"));
+        QCOMPARE(event.fields.value(QStringLiteral("route_metric")), QStringLiteral("unavailable"));
+
+        adapter.enabledKnown = true;
+        adapter.enabled = false;
+        adapter.routeMetric = 6000000000LL;
+        event = EnvironmentDiagnostics::events(snapshot).constLast();
+        QCOMPARE(event.fields.value(QStringLiteral("enabled")), QStringLiteral("no"));
+        QCOMPARE(event.fields.value(QStringLiteral("route_metric")), QStringLiteral("6000000000"));
+    }
+
+    void windowsOperationsKeepWideMetricsAndMissingProvidersAreUnavailable() {
+        WindowsEnvironmentOperations operations;
+        WindowsAdapterOperation adapter;
+        adapter.luid = 1;
+        adapter.ifType = 6;
+        adapter.enabledKnown = true;
+        adapter.enabled = true;
+        adapter.ipv4InterfaceMetric = 3000000000LL;
+        operations.adapters = [adapter](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsAdapterOperation>>::available({adapter});
+        };
+        operations.routes = [](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsRouteOperation>>::available(
+                {{1, QAbstractSocket::IPv4Protocol, true, 3000000000LL}});
+        };
+        operations.firewall = [](QDeadlineTimer) { return WindowsFirewallOperation{}; };
+        const auto collected = EnvironmentDiagnostics::collect(
+            windowsEnvironmentDiagnosticProviders(operations), 3000);
+        QCOMPARE(collected.network.value.adapters.constFirst().routeMetric, 6000000000LL);
+
+        adapter.ipv4InterfaceMetric = -1;
+        operations.adapters = [adapter](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsAdapterOperation>>::available({adapter});
+        };
+        const auto unknownMetric = EnvironmentDiagnostics::collect(
+            windowsEnvironmentDiagnosticProviders(operations), 3000);
+        QVERIFY(unknownMetric.network.value.adapters.constFirst().ownsDefaultRoute);
+        QCOMPARE(unknownMetric.network.value.adapters.constFirst().routeMetric, -1LL);
+        const DiagnosticEvent unknownMetricEvent = EnvironmentDiagnostics::events(unknownMetric).constLast();
+        QCOMPARE(unknownMetricEvent.fields.value(QStringLiteral("default_route")), QStringLiteral("yes"));
+        QCOMPARE(unknownMetricEvent.fields.value(QStringLiteral("route_metric")),
+                 QStringLiteral("unavailable"));
+
+        const EnvironmentSnapshot missing = EnvironmentDiagnostics::collect({}, 100);
+        QCOMPARE(missing.operatingSystem.status, DiagnosticFactStatus::Unavailable);
+        QCOMPARE(missing.cpuArchitecture.status, DiagnosticFactStatus::Unavailable);
+        QCOMPARE(missing.processElevation.status, DiagnosticFactStatus::Unavailable);
+        QCOMPARE(missing.network.status, DiagnosticFactStatus::Unavailable);
+    }
+
+    void buildsSystemPowerShellPathWithoutPathLookup() {
+        QCOMPARE(windowsSystemPowerShellPath(QStringLiteral("C:\\Windows\\System32")),
+                 QStringLiteral("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"));
+        QVERIFY(windowsSystemPowerShellPath({}).isEmpty());
     }
 
     void timedOutFirewallPreservesCollectedNetworkDetails() {

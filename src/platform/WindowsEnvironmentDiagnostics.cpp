@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace {
 
@@ -53,6 +54,7 @@ DiagnosticValue<QVector<WindowsAdapterOperation>> readAdapters(QDeadlineTimer de
         ifRow.InterfaceLuid = entry->Luid;
         if (GetIfEntry2(&ifRow) == NO_ERROR) {
             adapter.enabled = ifRow.AdminStatus == NET_IF_ADMIN_STATUS_UP;
+            adapter.enabledKnown = true;
             adapter.physicalKnown = true;
             adapter.physical = ifRow.InterfaceAndOperStatusFlags.HardwareInterface != 0;
         }
@@ -65,9 +67,9 @@ DiagnosticValue<QVector<WindowsAdapterOperation>> readAdapters(QDeadlineTimer de
             row.InterfaceLuid = entry->Luid;
             if (GetIpInterfaceEntry(&row) == NO_ERROR) {
                 if (family == AF_INET)
-                    adapter.ipv4InterfaceMetric = static_cast<int>(row.Metric);
+                    adapter.ipv4InterfaceMetric = static_cast<qint64>(row.Metric);
                 else
-                    adapter.ipv6InterfaceMetric = static_cast<int>(row.Metric);
+                    adapter.ipv6InterfaceMetric = static_cast<qint64>(row.Metric);
             }
         }
         for (IP_ADAPTER_UNICAST_ADDRESS *address = entry->FirstUnicastAddress; address;
@@ -133,10 +135,19 @@ WindowsFirewallOperation readFirewall(QDeadlineTimer deadline) {
     const int remaining = deadline.remainingTime();
     if (remaining <= 0)
         return {DiagnosticFact::timedOut(), DiagnosticFact::timedOut(), DiagnosticFact::timedOut()};
-    const QString command = windowsEnvironmentFirewallScript(
-        QCoreApplication::applicationFilePath());
+    wchar_t systemDirectory[MAX_PATH];
+    const UINT systemDirectoryLength = GetSystemDirectoryW(systemDirectory, MAX_PATH);
+    const QString powerShell = systemDirectoryLength == 0 || systemDirectoryLength >= MAX_PATH
+        ? QString() : windowsSystemPowerShellPath(
+            QString::fromWCharArray(systemDirectory, static_cast<int>(systemDirectoryLength)));
+    if (powerShell.isEmpty())
+        return {};
+    const QString command = windowsEnvironmentFirewallScript(QCoreApplication::applicationFilePath());
     QProcess process;
-    process.start(QStringLiteral("powershell.exe"),
+    process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
+        arguments->flags |= CREATE_NO_WINDOW;
+    });
+    process.start(powerShell,
                   {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
                    QStringLiteral("-Command"), command});
     if (!process.waitForFinished(remaining)) {
@@ -212,19 +223,6 @@ EnvironmentDiagnosticProviders defaultProviders() {
 
 } // namespace
 
-QString classifyWindowsFirewallRules(const QVector<WindowsFirewallRuleCandidate> &rules) {
-    bool allowed = false;
-    for (const WindowsFirewallRuleCandidate &rule : rules) {
-        if (!rule.enabled || !rule.inbound || !rule.activeProfile || !rule.executableMatches)
-            continue;
-        if (rule.action == QStringLiteral("block"))
-            return QStringLiteral("denied");
-        if (rule.action == QStringLiteral("allow"))
-            allowed = true;
-    }
-    return allowed ? QStringLiteral("confirmed") : QStringLiteral("absent");
-}
-
 QString windowsEnvironmentFirewallScript(QString executable) {
     executable.replace(QLatin1Char('\''), QStringLiteral("''"));
     return QStringLiteral(
@@ -237,6 +235,14 @@ QString windowsEnvironmentFirewallScript(QString executable) {
         "if($candidateRules.Count -eq 0){$rule='absent'}elseif(($candidateRules|ForEach-Object{$_.Action}) -contains 'Block'){$rule='denied'}else{$rule='confirmed'}}catch{$rule='not_read'}};"
         "[pscustomobject]@{category=$category;profiles=$profiles;rule=$rule}|ConvertTo-Json -Compress")
         .arg(executable);
+}
+
+QString windowsSystemPowerShellPath(QString systemDirectory) {
+    if (systemDirectory.isEmpty())
+        return {};
+    while (systemDirectory.endsWith(QLatin1Char('\\')) || systemDirectory.endsWith(QLatin1Char('/')))
+        systemDirectory.chop(1);
+    return systemDirectory + QStringLiteral("\\WindowsPowerShell\\v1.0\\powershell.exe");
 }
 
 EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvironmentOperations operations) {
@@ -271,15 +277,17 @@ EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvi
             adapter.sessionIndex = index + 1;
             adapter.type = adapterType(source);
             adapter.enabled = source.enabled;
+            adapter.enabledKnown = source.enabledKnown;
             adapter.up = source.up;
             adapter.physicalClassification = physicalClass(source);
             for (const WindowsRouteOperation &route : routes.value) {
                 if (route.defaultRoute && route.luid == source.luid) {
                     adapter.ownsDefaultRoute = true;
-                    const int interfaceMetric = route.family == QAbstractSocket::IPv4Protocol
+                    const qint64 interfaceMetric = route.family == QAbstractSocket::IPv4Protocol
                         ? source.ipv4InterfaceMetric : source.ipv6InterfaceMetric;
-                    if (interfaceMetric >= 0 && route.routeMetric >= 0) {
-                        const int metric = interfaceMetric + route.routeMetric;
+                    if (interfaceMetric >= 0 && route.routeMetric >= 0 &&
+                        interfaceMetric <= std::numeric_limits<qint64>::max() - route.routeMetric) {
+                        const qint64 metric = interfaceMetric + route.routeMetric;
                         adapter.routeMetric = adapter.routeMetric < 0
                             ? metric : qMin(adapter.routeMetric, metric);
                     }
