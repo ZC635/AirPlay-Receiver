@@ -39,6 +39,12 @@ void DiagnosticSanitizerTest::sensitiveTextNeverSurvives_data() {
                                  << QStringList{"AA:BB", "11:22"};
     QTest::newRow("headers") << "Authorization: Bearer secret\r\nX-Session-ID: abc\nFAKE event"
                               << QStringList{"secret", "abc", "FAKE event"};
+    QTest::newRow("single-line-authorization") << "Authorization: Bearer single-line-secret"
+                                                << QStringList{"single-line-secret"};
+    QTest::newRow("single-line-session") << "X-Session-ID: single-line-session"
+                                          << QStringList{"single-line-session"};
+    QTest::newRow("nested-single-line-header")
+        << "request header: Authorization: Bearer nested-secret" << QStringList{"nested-secret"};
     QTest::newRow("keys") << "eiv=001122 ekey=aabbcc aeskey=deadbeef public_key=cafe"
                            << QStringList{"001122", "aabbcc", "deadbeef", "cafe"};
 }

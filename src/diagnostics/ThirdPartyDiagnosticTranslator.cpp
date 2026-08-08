@@ -94,13 +94,13 @@ std::optional<DiagnosticEvent> ThirdPartyDiagnosticTranslator::translate(int ups
     if (completeMatch(audioCodec, text, &match))
         return eventFor(upstreamLevel, QStringLiteral("codec_selected"),
                         {{QStringLiteral("codec"), match.captured(1).toLower()},
-                         {QStringLiteral("media"), QStringLiteral("audio")}});
+                         {QStringLiteral("stream_type"), QStringLiteral("audio")}});
 
     static const QRegularExpression videoCodec(QStringLiteral(R"(\AVideo codec: (H264|H265)\z)"));
     if (completeMatch(videoCodec, text, &match))
         return eventFor(upstreamLevel, QStringLiteral("codec_selected"),
                         {{QStringLiteral("codec"), match.captured(1).toLower()},
-                         {QStringLiteral("media"), QStringLiteral("video")}});
+                         {QStringLiteral("stream_type"), QStringLiteral("video")}});
 
     static const QRegularExpression socketError(QStringLiteral(R"(\ASocket error: ([1-9][0-9]{0,5})\z)"));
     if (completeMatch(socketError, text, &match))

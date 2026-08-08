@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include "diagnostics/DiagnosticSanitizer.h"
 #include "diagnostics/ThirdPartyDiagnosticTranslator.h"
 
 class ThirdPartyDiagnosticTranslatorTest final : public QObject {
@@ -8,6 +9,7 @@ class ThirdPartyDiagnosticTranslatorTest final : public QObject {
 private slots:
     void translatesReviewedSafePatterns();
     void translatesAllReviewedFixedPatterns();
+    void codecEventsUseOnlyNonSensitiveEnumeratedFields();
     void rejectsRawSecretsAndPayloads();
     void rejectsMultilineOversizedAndUnknownMessages();
 };
@@ -67,7 +69,7 @@ void ThirdPartyDiagnosticTranslatorTest::translatesAllReviewedFixedPatterns() {
 
     const auto codec = ThirdPartyDiagnosticTranslator::translate(6, "Video codec: H264");
     QVERIFY(codec.has_value());
-    const QMap<QString, QString> expectedCodec = {{"codec", "h264"}, {"media", "video"}};
+    const QMap<QString, QString> expectedCodec = {{"codec", "h264"}, {"stream_type", "video"}};
     QCOMPARE(codec->fields, expectedCodec);
 
     const auto socket = ThirdPartyDiagnosticTranslator::translate(3, "Socket error: 104");
@@ -76,6 +78,15 @@ void ThirdPartyDiagnosticTranslatorTest::translatesAllReviewedFixedPatterns() {
     const QMap<QString, QString> expectedSocket = {{"code", "104"}};
     QCOMPARE(socket->fields, expectedSocket);
     QCOMPARE(socket->severity, DiagnosticSeverity::Error);
+}
+
+void ThirdPartyDiagnosticTranslatorTest::codecEventsUseOnlyNonSensitiveEnumeratedFields() {
+    const auto codec = ThirdPartyDiagnosticTranslator::translate(6, "Video codec: H264");
+    QVERIFY(codec.has_value());
+    for (auto it = codec->fields.cbegin(); it != codec->fields.cend(); ++it)
+        QVERIFY(!DiagnosticSanitizer::isSensitiveField(it.key()));
+    QCOMPARE(codec->fields.value("stream_type"), QString("video"));
+    QVERIFY(QStringList({"h264", "h265"}).contains(codec->fields.value("codec")));
 }
 
 void ThirdPartyDiagnosticTranslatorTest::rejectsRawSecretsAndPayloads() {

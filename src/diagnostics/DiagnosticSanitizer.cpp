@@ -94,8 +94,11 @@ QString DiagnosticSanitizer::sanitizeText(QStringView value) {
         QStringLiteral(R"((?:[A-Za-z]:[\\/]|\\\\)[^\s,;]*)"));
     static const QRegularExpression mac(
         QStringLiteral(R"(\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b)"));
+    static const QRegularExpression headerValue(
+        QStringLiteral(R"(\b(?:(?:request\s+)?headers?|authorization|proxy-authorization|(?:x-)?(?:apple-)?session-id|cookie|set-cookie)\s*:\s*[^\r\n]*)"),
+        QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression secret(
-        QStringLiteral(R"(\b(?:eiv|ekey|aeskey|public_key|private_key|key|token|password|secret|authorization|session(?:_id)?|deviceid|device_id|username|user|computer|hostname|client_name|ssid)\s*[:=]\s*[^\s,;]+)"),
+        QStringLiteral(R"(\b(?:eiv|ekey|aeskey|public_key|private_key|key|token|password|secret|authorization|(?:x-)?(?:apple-)?session(?:[_-]id)?|deviceid|device_id|username|user|computer|hostname|client_name|ssid)\s*[:=]\s*[^\r\n,;]*)"),
         QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression ipv6(
         QStringLiteral(R"((?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f:]+(?![0-9A-Fa-f:]))"));
@@ -105,6 +108,7 @@ QString DiagnosticSanitizer::sanitizeText(QStringView value) {
     text.replace(mac, QStringLiteral("[mac]"));
     text = replaceAddresses(text, ipv6, 64);
     text = replaceAddresses(text, ipv4, 24);
+    text.replace(headerValue, QStringLiteral("[redacted]"));
     text.replace(secret, QStringLiteral("[redacted]"));
     return escapeControls(text);
 }
