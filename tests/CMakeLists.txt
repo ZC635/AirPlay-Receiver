@@ -10,6 +10,10 @@ add_executable(DiagnosticSanitizerTest diagnostics/DiagnosticSanitizerTest.cpp)
 target_link_libraries(DiagnosticSanitizerTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME DiagnosticSanitizerTest COMMAND DiagnosticSanitizerTest)
 
+add_executable(DiagnosticSessionTest diagnostics/DiagnosticSessionTest.cpp)
+target_link_libraries(DiagnosticSessionTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticSessionTest COMMAND DiagnosticSessionTest)
+
 add_executable(ThirdPartyDiagnosticTranslatorTest diagnostics/ThirdPartyDiagnosticTranslatorTest.cpp)
 target_link_libraries(ThirdPartyDiagnosticTranslatorTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME ThirdPartyDiagnosticTranslatorTest COMMAND ThirdPartyDiagnosticTranslatorTest)
@@ -250,6 +254,7 @@ execute_process(
 set(AIRPLAY_QT_TESTS
     DiagnosticLogSinkTest
     DiagnosticSanitizerTest
+    DiagnosticSessionTest
     ThirdPartyDiagnosticTranslatorTest
     SettingsChangeDeferrerTest
     SettingsApplyTypesTest
