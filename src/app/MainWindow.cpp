@@ -227,6 +227,22 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
 
 MainWindow::~MainWindow() = default;
 
+void MainWindow::setDiagnosticLoggingActive(bool active) {
+    diagnosticLoggingActive_ = active;
+    setWindowTitle(diagnosticLoggingActive_
+        ? QStringLiteral("AirPlay Receiver [Diagnostic Logging]")
+        : QStringLiteral("AirPlay Receiver"));
+}
+
+void MainWindow::handleDiagnosticWriteFailure(QString error) {
+    if (diagnosticLoggingStopped_) {
+        return;
+    }
+    diagnosticLoggingStopped_ = true;
+    setDiagnosticLoggingActive(false);
+    emit diagnosticLoggingStopped(std::move(error));
+}
+
 bool MainWindow::isToolbarVisible() const {
     return !toolbar_->isHidden();
 }

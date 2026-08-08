@@ -146,6 +146,20 @@ private slots:
         QCOMPARE(missing, playbackStandaloneRuntimePaths());
     }
 
+    void standaloneSnapshotUsesRelativeNamesOnly() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const auto snapshot = DependencyDiagnostics::standaloneRuntimeSnapshot(dir.path());
+
+        QVERIFY(!snapshot.complete);
+        QVERIFY(snapshot.missingRelativePaths.contains("airplay_receiver.exe"));
+        for (const QString &path : snapshot.missingRelativePaths) {
+            QVERIFY(QDir::isRelativePath(path));
+            QVERIFY(!path.contains(dir.path()));
+        }
+    }
+
     void acceptsCompleteStandaloneRuntimeFiles() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

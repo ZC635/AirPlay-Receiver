@@ -16,12 +16,19 @@ struct RecordingCapabilityDiagnostics {
     QStringList missingFactories;
 };
 
+struct StandaloneRuntimeSnapshot {
+    bool complete = false;
+    QStringList relativePaths;
+    QStringList missingRelativePaths;
+};
+
 class DependencyDiagnostics {
 public:
     static DiagnosticResult checkExecutable(const QString &name);
     static DiagnosticResult checkEnvironmentVariable(const QString &name);
     static QStringList checkRuntimeBasics();
     static bool shouldCheckStandaloneRuntime();
+    static StandaloneRuntimeSnapshot standaloneRuntimeSnapshot(const QString &directory);
     static QStringList checkStandaloneRuntime(const QString &directory);
     static bool configurePackageLocalGStreamerEnvironment(
         const QString &applicationDirectory);
