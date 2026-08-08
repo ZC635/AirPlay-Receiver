@@ -137,7 +137,7 @@ private:
     enum class BackendErrorSafety { CanFinalize, Broken };
     void cleanupUxPlay();
     void endRecordingSession(bool canFinalize, bool waitForIdle);
-    void handleBackendError(QString error, BackendErrorSafety safety);
+    void handleBackendError(QString error, BackendErrorSafety safety, QString diagnosticStage);
     void observeRendererCall(const QString &call) const;
     void installVideoSampleTap();
     void installAudioSampleTap();

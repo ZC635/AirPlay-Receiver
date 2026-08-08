@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <utility>
 
 #if AIRPLAY_WITH_UXPLAY
@@ -31,6 +32,15 @@ constexpr unsigned short kDynamicPort = 0;
 constexpr bool kAudioSync = false;
 constexpr bool kVideoSync = false;
 constexpr unsigned int kPlaybinVersion = 3;
+
+std::optional<qsizetype> boundedCStringLength(const char *value, qsizetype maximumLength) {
+    for (qsizetype index = 0; index <= maximumLength; ++index) {
+        if (value[index] == '\0') {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
 
 QByteArray defaultDeviceId() {
     return QByteArrayLiteral("02:00:00:00:00:01");
@@ -300,7 +310,8 @@ UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
     discoveryConfig.diagnosticSink = m_diagnosticSink;
     m_discovery = new UxPlayDiscovery(std::move(discoveryConfig), this);
     QObject::connect(m_discovery, &UxPlayDiscovery::failed, this, [this](const QString &message) {
-        handleBackendError(message, BackendErrorSafety::CanFinalize);
+        handleBackendError(message, BackendErrorSafety::CanFinalize,
+                           QStringLiteral("discovery_runtime"));
     });
 #endif
 }
@@ -399,18 +410,30 @@ void UxPlayReceiver::start() {
 
     if (!gstreamer_init()) {
         m_acceptingCallbacks.store(false);
+        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("receiver"),
+            QStringLiteral("failure"), {{QStringLiteral("stage"), QStringLiteral("gstreamer_init")},
+                                         {QStringLiteral("result"), QStringLiteral("failed")}}, true));
         setError("Failed to initialize GStreamer");
         setState(ReceiverState::Error);
         return;
     }
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+        QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("gstreamer_init")},
+                                              {QStringLiteral("result"), QStringLiteral("success")}}, true));
 
     m_logger = logger_init();
     if (!m_logger) {
         m_acceptingCallbacks.store(false);
+        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("receiver"),
+            QStringLiteral("failure"), {{QStringLiteral("stage"), QStringLiteral("logger_init")},
+                                         {QStringLiteral("result"), QStringLiteral("failed")}}, true));
         setError("Failed to initialize UxPlay logger");
         setState(ReceiverState::Error);
         return;
     }
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+        QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("logger_init")},
+                                              {QStringLiteral("result"), QStringLiteral("success")}}, true));
     auto *logger = static_cast<logger_t *>(m_logger);
     logger_set_callback(logger, logCallback, m_callbackContext);
     logger_set_level(logger, LOGGER_INFO);
@@ -435,6 +458,9 @@ void UxPlayReceiver::start() {
         return;
     }
     m_videoRendererInitialized = true;
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+        QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("video_renderer_init")},
+                                              {QStringLiteral("result"), QStringLiteral("success")}}, true));
     video_renderer_start();
     const QString frameRate = m_config.videoQuality.frameRate == VideoFrameRate::Fps15
         ? QStringLiteral("fps15") : m_config.videoQuality.frameRate == VideoFrameRate::Fps60
@@ -458,6 +484,9 @@ void UxPlayReceiver::start() {
         return;
     }
     m_audioRendererInitialized = true;
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+        QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("audio_renderer_init")},
+                                              {QStringLiteral("result"), QStringLiteral("success")}}, true));
     m_renderersStarted.store(true);
 
     m_glibTimer = new QTimer();
@@ -505,6 +534,9 @@ void UxPlayReceiver::start() {
     // UxPlay defers SET_PARAMETER volume callbacks through its RTP loop; DEBUG logs expose them immediately.
     raop_set_log_level(raop, LOGGER_DEBUG);
     m_raop = raop;
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+        QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("raop_init")},
+                                              {QStringLiteral("result"), QStringLiteral("success")}}, true));
 
     const QByteArray deviceId = defaultDeviceId();
     if (raop_init2(raop, 0, deviceId.constData(), "") != 0) {
@@ -516,6 +548,9 @@ void UxPlayReceiver::start() {
         setState(ReceiverState::Error);
         return;
     }
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+        QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("pairing_init")},
+                                              {QStringLiteral("result"), QStringLiteral("success")}}, true));
     unsigned short port = static_cast<unsigned short>(m_config.basePort > 0 ? m_config.basePort : kDynamicPort);
     if (!m_discovery->start(m_raop, port)) {
         recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("receiver"),
@@ -526,6 +561,9 @@ void UxPlayReceiver::start() {
         setState(ReceiverState::Error);
         return;
     }
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+        QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("discovery_start")},
+                                              {QStringLiteral("result"), QStringLiteral("success")}}, true));
 
     setState(ReceiverState::Discoverable);
 #else
@@ -766,10 +804,10 @@ void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compres
             recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
                 QStringLiteral("codec_selected"), {{QStringLiteral("codec"), codec},
                     {QStringLiteral("stream_type"), QStringLiteral("audio")}}, true));
-            recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
-                QStringLiteral("renderer_started"), {{QStringLiteral("renderer"), QStringLiteral("audio")},
-                                                       {QStringLiteral("result"), QStringLiteral("success")}}, true));
         }
+        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+            QStringLiteral("renderer_started"), {{QStringLiteral("renderer"), QStringLiteral("audio")},
+                                                   {QStringLiteral("result"), QStringLiteral("success")}}, true));
     });
 }
 
@@ -799,15 +837,23 @@ void UxPlayReceiver::handleLogMessageFromUxPlayCallback(int level, const char *m
     if (message == nullptr) {
         return;
     }
-    if (level == LOGGER_DEBUG && std::strncmp(message, "volume: ", 8) == 0) {
+    const auto messageLength = boundedCStringLength(message, 512);
+    if (!messageLength) {
+        m_callbackDispatch.runIfCurrent(generation, [&] {
+            recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("third_party"),
+                QStringLiteral("message_suppressed"), {{QStringLiteral("reason"), QStringLiteral("not_allowlisted")}}, true));
+        });
+        return;
+    }
+    if (level == LOGGER_DEBUG && *messageLength >= 8 && std::strncmp(message, "volume: ", 8) == 0) {
         bool ok = false;
-        const float airPlayDb = QString::fromLatin1(message + 8).toFloat(&ok);
+        const float airPlayDb = QString::fromLatin1(message + 8, *messageLength - 8).toFloat(&ok);
         if (ok) {
             setVolumeFromUxPlayCallback(volumeFromAirPlayDb(airPlayDb), generation);
         }
     }
     m_callbackDispatch.runIfCurrent(generation, [&] {
-        const QByteArrayView raw(message, static_cast<qsizetype>(std::strlen(message)));
+        const QByteArrayView raw(message, *messageLength);
         auto translated = ThirdPartyDiagnosticTranslator::translate(level, raw);
         if (translated) {
             translated->flushImmediately = true;
@@ -822,8 +868,10 @@ void UxPlayReceiver::handleLogMessageFromUxPlayCallback(int level, const char *m
 void UxPlayReceiver::handleClientRequestFromUxPlayCallback(const char *model, quint64 generation) {
     m_callbackDispatch.runIfCurrent(generation, [&] {
         QMap<QString, QString> fields;
-        if (model) {
-            const auto safeModel = DiagnosticSanitizer::safeClientModel(QString::fromUtf8(model));
+        const auto modelLength = model ? boundedCStringLength(model, 64) : std::nullopt;
+        if (modelLength) {
+            const auto safeModel = DiagnosticSanitizer::safeClientModel(
+                QString::fromUtf8(model, *modelLength));
             if (safeModel) {
                 fields.insert(QStringLiteral("model"), *safeModel);
             }
@@ -1029,7 +1077,7 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
                 clearVideoSampleTap();
                 handleBackendError(
                     QStringLiteral("Failed to reinitialize GStreamer video renderer"),
-                    BackendErrorSafety::Broken);
+                    BackendErrorSafety::Broken, QStringLiteral("video_renderer_reinit"));
                 return;
             }
             m_videoRendererInitialized = true;
@@ -1044,7 +1092,7 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
             } else {
                 handleBackendError(
                     QStringLiteral("Failed to select GStreamer video codec after renderer reset"),
-                    BackendErrorSafety::Broken);
+                    BackendErrorSafety::Broken, QStringLiteral("video_codec_select"));
                 return;
             }
             m_videoRendererStopped.store(false);
@@ -1337,14 +1385,15 @@ void UxPlayReceiver::setError(QString error) {
 
 #if AIRPLAY_WITH_UXPLAY
 void UxPlayReceiver::handleBackendError(QString error,
-                                        BackendErrorSafety safety) {
+                                        BackendErrorSafety safety, QString diagnosticStage) {
     if (QThread::currentThread() != thread()) {
         QPointer<UxPlayReceiver> guardedReceiver(this);
         QMetaObject::invokeMethod(this,
-            [guardedReceiver, error = std::move(error), safety]() mutable {
+            [guardedReceiver, error = std::move(error), safety,
+             diagnosticStage = std::move(diagnosticStage)]() mutable {
                 if (guardedReceiver) {
                     guardedReceiver->handleBackendError(std::move(error),
-                                                        safety);
+                                                        safety, std::move(diagnosticStage));
                 }
             },
             Qt::BlockingQueuedConnection);
@@ -1353,6 +1402,9 @@ void UxPlayReceiver::handleBackendError(QString error,
 
     m_acceptingVideoTapSamples.store(false, std::memory_order_release);
     endRecordingSession(safety == BackendErrorSafety::CanFinalize, true);
+    recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("receiver"),
+        QStringLiteral("failure"), {{QStringLiteral("stage"), std::move(diagnosticStage)},
+                                     {QStringLiteral("result"), QStringLiteral("failed")}}, true));
     setError(std::move(error));
     cleanupUxPlay();
     setState(ReceiverState::Error);
