@@ -11,11 +11,13 @@
 #endif
 #include <windows.h>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
 #include "app/AppSettings.h"
 #include "app/AppSettingsStore.h"
+#include "app/BuildIdentity.h"
 #include "app/DiagnosticActivation.h"
 #include "app/MainWindow.h"
 #include "app/RecordingStartupCleanup.h"
@@ -33,6 +35,17 @@ struct DiagnosticStartupDecision {
     QString userError;
 };
 
+struct DiagnosticShutdownDecision {
+    bool recordStartupAborted = false;
+    bool recordShutdownStarted = false;
+    bool closeNormally = false;
+};
+
+struct StandaloneRuntimeDecision {
+    bool emitManifestEntries = false;
+    QString result;
+};
+
 DiagnosticStartupDecision diagnosticStartupDecision(
     const DiagnosticActivation &activation, bool sessionCreated,
     const QString &creationError) {
@@ -41,6 +54,34 @@ DiagnosticStartupDecision diagnosticStartupDecision(
     }
     return {sessionCreated, true, sessionCreated ? QString() : creationError};
 }
+
+DiagnosticShutdownDecision diagnosticShutdownDecision(bool normalExit) {
+    return { !normalExit, normalExit, normalExit };
+}
+
+StandaloneRuntimeDecision diagnosticStandaloneRuntimeDecision(bool shouldCheck) {
+    return {shouldCheck, shouldCheck ? QStringLiteral("checked") : QStringLiteral("skipped")};
+}
+
+bool diagnosticLoggingActiveForSession(bool sessionCreated, bool sessionActive) {
+    return sessionCreated && sessionActive;
+}
+
+class DiagnosticWriteFailureRelay {
+public:
+    void setHandler(std::function<void(QString)> handler) {
+        handler_ = std::move(handler);
+    }
+
+    void deliver(QString error) const {
+        if (handler_) {
+            handler_(std::move(error));
+        }
+    }
+
+private:
+    std::function<void(QString)> handler_;
+};
 
 namespace {
 
@@ -74,14 +115,29 @@ void closeDiagnosticSession(DiagnosticLogSink *sink,
                             std::optional<QtDiagnosticMessageBridge> &qtBridge,
                             std::unique_ptr<DiagnosticSession> &session,
                             AirPlayReceiver *receiver) {
-    recordStartup(sink, QStringLiteral("shutdown_started"), {}, true);
+    const DiagnosticShutdownDecision decision = diagnosticShutdownDecision(true);
+    if (decision.recordShutdownStarted) {
+        recordStartup(sink, QStringLiteral("shutdown_started"), {}, true);
+    }
     if (receiver != nullptr) {
         receiver->stop();
     }
     qtBridge.reset();
-    if (session) {
+    if (decision.closeNormally && session) {
         session->closeNormally();
     }
+}
+
+void abortDiagnosticSession(DiagnosticLogSink *sink,
+                            std::optional<QtDiagnosticMessageBridge> &qtBridge,
+                            std::unique_ptr<DiagnosticSession> &session) {
+    const DiagnosticShutdownDecision decision = diagnosticShutdownDecision(false);
+    if (decision.recordStartupAborted) {
+        recordStartup(sink, QStringLiteral("startup_aborted"),
+                      {{QStringLiteral("reason"), QStringLiteral("missing_runtime")}}, true);
+    }
+    qtBridge.reset();
+    session.reset();
 }
 
 } // namespace
@@ -120,7 +176,7 @@ int main(int argc, char *argv[]) {
 
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("AirPlay Receiver"));
-    QCoreApplication::setApplicationVersion(QStringLiteral(AIRPLAY_VERSION));
+    QCoreApplication::setApplicationVersion(QString::fromUtf16(AirPlayBuildIdentity::version));
 
     const DiagnosticActivation activation = DiagnosticActivation::parse(
         QCoreApplication::arguments(), qgetenv("AIRPLAY_DEBUG_LOG"));
@@ -138,6 +194,19 @@ int main(int argc, char *argv[]) {
             sink = session.get();
         }
     }
+    MainWindow *diagnosticWindow = nullptr;
+    DiagnosticWriteFailureRelay writeFailureRelay;
+    writeFailureRelay.setHandler([&diagnosticWindow](QString error) {
+        if (diagnosticWindow != nullptr) {
+            diagnosticWindow->handleDiagnosticWriteFailure(std::move(error));
+        }
+    });
+    if (session) {
+        QObject::connect(session.get(), &DiagnosticSession::writeFailed, &app,
+                         [&writeFailureRelay](const QString &error) {
+            writeFailureRelay.deliver(error);
+        }, Qt::QueuedConnection);
+    }
     const DiagnosticStartupDecision startupDecision = diagnosticStartupDecision(
         activation, session != nullptr, creationError);
     if (!startupDecision.userError.isEmpty()) {
@@ -152,10 +221,10 @@ int main(int argc, char *argv[]) {
     recordStartup(sink, QStringLiteral("session_activation"),
                   {{QStringLiteral("activation_source"), activation.sourceName()}}, true);
     recordStartup(sink, QStringLiteral("application_identity"),
-                  {{QStringLiteral("build_id"), QStringLiteral(AIRPLAY_BUILD_ID)},
+                  {{QStringLiteral("build_id"), QString::fromUtf16(AirPlayBuildIdentity::buildId)},
                    {QStringLiteral("elevated"), processIsElevated() ? QStringLiteral("yes") : QStringLiteral("no")},
                    {QStringLiteral("executable_name"), QFileInfo(QCoreApplication::applicationFilePath()).fileName()},
-                   {QStringLiteral("version"), QStringLiteral(AIRPLAY_VERSION)}}, true);
+                   {QStringLiteral("version"), QString::fromUtf16(AirPlayBuildIdentity::version)}}, true);
 
 #if AIRPLAY_WITH_UXPLAY
     const bool gstreamerEnvironmentConfigured =
@@ -165,23 +234,29 @@ int main(int argc, char *argv[]) {
                   {{QStringLiteral("result"), gstreamerEnvironmentConfigured ? QStringLiteral("yes") : QStringLiteral("no")}},
                   true);
 
-    const bool checkStandaloneRuntime = DependencyDiagnostics::shouldCheckStandaloneRuntime();
-    const StandaloneRuntimeSnapshot runtimeSnapshot =
-        DependencyDiagnostics::standaloneRuntimeSnapshot(QCoreApplication::applicationDirPath());
-    for (const QString &relativeName : runtimeSnapshot.relativePaths) {
-        const bool present = !runtimeSnapshot.missingRelativePaths.contains(relativeName);
-        recordStartup(sink, QStringLiteral("runtime_manifest_entry"),
-                      {{QStringLiteral("relative_name"), relativeName},
-                       {QStringLiteral("result"), present ? QStringLiteral("present") : QStringLiteral("missing")}});
-    }
-    if (checkStandaloneRuntime && !runtimeSnapshot.complete) {
-        QMessageBox::critical(
-            nullptr,
-            QStringLiteral("AirPlay Receiver dependencies missing"),
-            QString("This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again.")
-                .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
-        closeDiagnosticSession(sink, qtBridge, session, nullptr);
-        return 1;
+    const StandaloneRuntimeDecision runtimeDecision = diagnosticStandaloneRuntimeDecision(
+        DependencyDiagnostics::shouldCheckStandaloneRuntime());
+    if (!runtimeDecision.emitManifestEntries) {
+        recordStartup(sink, QStringLiteral("standalone_runtime_check"),
+                      {{QStringLiteral("result"), runtimeDecision.result}}, true);
+    } else {
+        const StandaloneRuntimeSnapshot runtimeSnapshot =
+            DependencyDiagnostics::standaloneRuntimeSnapshot(QCoreApplication::applicationDirPath());
+        for (const QString &relativeName : runtimeSnapshot.relativePaths) {
+            const bool present = !runtimeSnapshot.missingRelativePaths.contains(relativeName);
+            recordStartup(sink, QStringLiteral("runtime_manifest_entry"),
+                          {{QStringLiteral("relative_name"), relativeName},
+                           {QStringLiteral("result"), present ? QStringLiteral("present") : QStringLiteral("missing")}});
+        }
+        if (!runtimeSnapshot.complete) {
+            QMessageBox::critical(
+                nullptr,
+                QStringLiteral("AirPlay Receiver dependencies missing"),
+                QString("This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again.")
+                    .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
+            abortDiagnosticSession(sink, qtBridge, session);
+            return 1;
+        }
     }
 
     const RecordingCapabilityDiagnostics recordingDiagnostics =
@@ -229,15 +304,13 @@ int main(int argc, char *argv[]) {
     });
     MainWindow window(settings, &hotkeys, &receiver, settingsPath);
     recordStartup(sink, QStringLiteral("window_constructed"), {}, true);
-    window.setDiagnosticLoggingActive(startupDecision.loggingActive);
-    if (session) {
-        QObject::connect(session.get(), &DiagnosticSession::writeFailed, &window,
-                         &MainWindow::handleDiagnosticWriteFailure, Qt::QueuedConnection);
-    }
     QObject::connect(&window, &MainWindow::diagnosticLoggingStopped, &app,
                      [](const QString &error) {
         QMessageBox::warning(nullptr, QStringLiteral("Diagnostic logging stopped"), error);
     });
+    diagnosticWindow = &window;
+    window.setDiagnosticLoggingActive(diagnosticLoggingActiveForSession(
+        session != nullptr, session && session->isActive()));
     recordStartup(sink, QStringLiteral("receiver_start_requested"), {}, true);
     receiver.start();
     window.show();
@@ -247,15 +320,13 @@ int main(int argc, char *argv[]) {
 #else
     MainWindow window(settings, &hotkeys, nullptr, settingsPath);
     recordStartup(sink, QStringLiteral("window_constructed"), {}, true);
-    window.setDiagnosticLoggingActive(startupDecision.loggingActive);
-    if (session) {
-        QObject::connect(session.get(), &DiagnosticSession::writeFailed, &window,
-                         &MainWindow::handleDiagnosticWriteFailure, Qt::QueuedConnection);
-    }
     QObject::connect(&window, &MainWindow::diagnosticLoggingStopped, &app,
                      [](const QString &error) {
         QMessageBox::warning(nullptr, QStringLiteral("Diagnostic logging stopped"), error);
     });
+    diagnosticWindow = &window;
+    window.setDiagnosticLoggingActive(diagnosticLoggingActiveForSession(
+        session != nullptr, session && session->isActive()));
     recordStartup(sink, QStringLiteral("receiver_start_requested"),
                   {{QStringLiteral("result"), QStringLiteral("not_built")}}, true);
     window.show();
