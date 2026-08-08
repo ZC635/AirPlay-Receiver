@@ -135,14 +135,18 @@ EnvironmentSnapshot EnvironmentDiagnostics::collect(const EnvironmentDiagnosticP
     QDeadlineTimer deadline(qMax(0, totalTimeoutMs));
     EnvironmentSnapshot snapshot;
     const auto fact = [&deadline](const auto &provider) {
-        if (deadline.hasExpired() || !provider)
+        if (!provider)
+            return DiagnosticFact::unavailable();
+        if (deadline.hasExpired())
             return DiagnosticFact::timedOut();
         return timedOutIfExpired(deadline, provider(deadline));
     };
     snapshot.operatingSystem = fact(providers.operatingSystem);
     snapshot.cpuArchitecture = fact(providers.cpuArchitecture);
     snapshot.processElevation = fact(providers.processElevation);
-    if (deadline.hasExpired() || !providers.network) {
+    if (!providers.network) {
+        snapshot.network = DiagnosticValue<NetworkEnvironmentFact>::unavailable();
+    } else if (deadline.hasExpired()) {
         snapshot.network = DiagnosticValue<NetworkEnvironmentFact>::timedOut();
     } else {
         snapshot.network = timedOutIfExpired(deadline, providers.network(deadline));
@@ -194,10 +198,14 @@ QList<DiagnosticEvent> EnvironmentDiagnostics::events(const EnvironmentSnapshot 
                                           QStringLiteral("environment_adapter"),
                                           {{QStringLiteral("index"), QString::number(adapter.sessionIndex)},
                                            {QStringLiteral("type"), type},
-                                           {QStringLiteral("enabled"), adapter.enabled ? QStringLiteral("yes") : QStringLiteral("no")},
+                                           {QStringLiteral("enabled"), adapter.enabledKnown
+                                                ? (adapter.enabled ? QStringLiteral("yes") : QStringLiteral("no"))
+                                                : QStringLiteral("unavailable")},
                                            {QStringLiteral("up"), adapter.up ? QStringLiteral("yes") : QStringLiteral("no")},
                                            {QStringLiteral("physical_class"), physical},
-                                           {QStringLiteral("route_metric"), QString::number(adapter.routeMetric)},
+                                           {QStringLiteral("route_metric"), adapter.routeMetric < 0
+                                                ? QStringLiteral("unavailable")
+                                                : QString::number(adapter.routeMetric)},
                                            {QStringLiteral("default_route"), adapter.ownsDefaultRoute ? QStringLiteral("yes") : QStringLiteral("no")},
                                            {QStringLiteral("prefixes"), prefixes.join(QLatin1Char(','))}}, true));
     }
