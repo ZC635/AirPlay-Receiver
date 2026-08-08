@@ -233,8 +233,8 @@ QString windowsEnvironmentFirewallScript(QString executable) {
         "$category=$categories|Select-Object -First 1;"
         "$activeProfiles=@($categories|ForEach-Object{switch($_){'domain'{'Domain'};'private'{'Private'};'public'{'Public'}}});"
         "$profiles=(Get-NetFirewallProfile|ForEach-Object{$n=$_.Name.ToLowerInvariant();$v=if($_.Enabled){'on'}else{'off'};$n+'='+$v}) -join ',';"
-        "$rule='not_read';try{$candidateRules=@();Get-NetFirewallRule -PolicyStore ActiveStore|ForEach-Object{$r=$_;$ruleProfiles=@($r.Profile.ToString().Split(','));$profileApplies=($ruleProfiles -contains 'Any') -or (($ruleProfiles|Where-Object{$activeProfiles -contains $_}).Count -gt 0);if($r.Enabled.ToString() -eq 'True' -and $r.Direction.ToString() -eq 'Inbound' -and $profileApplies){Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r|ForEach-Object{if($_.Program -ieq $target){$candidateRules+=$r}}}};"
-        "if($candidateRules.Count -eq 0){$rule='absent'}elseif(($candidateRules|ForEach-Object{$_.Action}) -contains 'Block'){$rule='denied'}else{$rule='confirmed'}}catch{$rule='not_read'};"
+        "$rule='not_read';if($activeProfiles.Count -gt 0){try{$candidateRules=@();Get-NetFirewallRule -PolicyStore ActiveStore|ForEach-Object{$r=$_;$ruleProfiles=@($r.Profile.ToString().Split(',')|ForEach-Object{$_.Trim()});$profileApplies=($ruleProfiles -contains 'Any') -or (($ruleProfiles|Where-Object{$activeProfiles -contains $_}).Count -gt 0);if($r.Enabled.ToString() -eq 'True' -and $r.Direction.ToString() -eq 'Inbound' -and $profileApplies){Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r|ForEach-Object{if($_.Program -ieq $target){$candidateRules+=$r}}}};"
+        "if($candidateRules.Count -eq 0){$rule='absent'}elseif(($candidateRules|ForEach-Object{$_.Action}) -contains 'Block'){$rule='denied'}else{$rule='confirmed'}}catch{$rule='not_read'}};"
         "[pscustomobject]@{category=$category;profiles=$profiles;rule=$rule}|ConvertTo-Json -Compress")
         .arg(executable);
 }
@@ -260,18 +260,11 @@ EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvi
             return DiagnosticValue<NetworkEnvironmentFact>::timedOut();
         if (routes.status != DiagnosticFactStatus::Available)
             return DiagnosticValue<NetworkEnvironmentFact>{routes.status, {}};
-        const WindowsFirewallOperation firewall = operations.firewall(deadline);
-        if (deadline.hasExpired())
-            return DiagnosticValue<NetworkEnvironmentFact>::timedOut();
-
         QVector<WindowsAdapterOperation> sorted = inputAdapters.value;
         std::sort(sorted.begin(), sorted.end(), [](const auto &left, const auto &right) {
             return left.luid < right.luid;
         });
         NetworkEnvironmentFact network;
-        network.category = firewall.category;
-        network.firewallProfiles = firewall.profiles;
-        network.executableFirewallRule = firewall.executableRule;
         for (int index = 0; index < sorted.size(); ++index) {
             const WindowsAdapterOperation &source = sorted.at(index);
             NetworkAdapterFact adapter;
@@ -296,7 +289,16 @@ EnvironmentDiagnosticProviders windowsEnvironmentDiagnosticProviders(WindowsEnvi
                 adapter.prefixes.append(DiagnosticSanitizer::maskedAddress(address.address, address.prefixLength));
             network.adapters.append(std::move(adapter));
         }
-        return DiagnosticValue<NetworkEnvironmentFact>::available(network);
+        if (deadline.hasExpired())
+            return DiagnosticValue<NetworkEnvironmentFact>{DiagnosticFactStatus::TimedOut,
+                                                            std::move(network)};
+        const WindowsFirewallOperation firewall = operations.firewall(deadline);
+        network.category = firewall.category;
+        network.firewallProfiles = firewall.profiles;
+        network.executableFirewallRule = firewall.executableRule;
+        return DiagnosticValue<NetworkEnvironmentFact>{
+            deadline.hasExpired() ? DiagnosticFactStatus::TimedOut : DiagnosticFactStatus::Available,
+            std::move(network)};
     };
     return providers;
 }
