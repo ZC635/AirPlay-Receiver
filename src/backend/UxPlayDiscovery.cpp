@@ -255,14 +255,21 @@ bool UxPlayDiscovery::createBroadcast()
     int dnssdError = 0;
     const QByteArray serverName = m_config.receiverName.toUtf8();
     const QByteArray hwAddress = defaultHardwareAddress();
-    auto *dnssd = failsForStage(QStringLiteral("dns_sd_init"))
+    const bool injectedFailure = failsForStage(QStringLiteral("dns_sd_init"));
+    auto *dnssd = injectedFailure
         ? nullptr
         : dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(),
                      &dnssdError, 0);
     if (dnssdError || !dnssd) {
-        recordFailure(QStringLiteral("dns_sd_init"),
-                      {{QStringLiteral("code"), QString::number(dnssdError)}});
-        setLastError(QStringLiteral("Failed to initialize DNS-SD: %1").arg(dnssdError));
+        if (injectedFailure) {
+            recordFailure(QStringLiteral("dns_sd_init"),
+                          {{QStringLiteral("classification"), QStringLiteral("injected_failure")}});
+            setLastError(QStringLiteral("Failed to initialize DNS-SD"));
+        } else {
+            recordFailure(QStringLiteral("dns_sd_init"),
+                          {{QStringLiteral("code"), QString::number(dnssdError)}});
+            setLastError(QStringLiteral("Failed to initialize DNS-SD: %1").arg(dnssdError));
+        }
         return false;
     }
 
