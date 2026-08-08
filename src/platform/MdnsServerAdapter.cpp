@@ -95,11 +95,12 @@ void MdnsServerAdapter::onMessageReceived(const QMdnsEngine::Message &message) {
 }
 
 void MdnsServerAdapter::onError(const QString &message) {
-    if (!sink_)
-        return;
-    sink_->record(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("discovery"),
-                                      QStringLiteral("error"),
-                                      {{QStringLiteral("reason"), QStringLiteral("qmdns_engine")},
-                                       {QStringLiteral("message"),
-                                        DiagnosticSanitizer::sanitizeText(message).left(256)}}, true));
+    if (sink_) {
+        sink_->record(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("discovery"),
+                                          QStringLiteral("error"),
+                                          {{QStringLiteral("reason"), QStringLiteral("qmdns_engine")},
+                                           {QStringLiteral("message"),
+                                            DiagnosticSanitizer::sanitizeText(message).left(256)}}, true));
+    }
+    emit error(message);
 }
