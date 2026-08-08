@@ -39,14 +39,14 @@ public:
         if (file->open())
             return file;
         if (error)
-            *error = file->errorString();
+            *error = QFileInfo::exists(exactPath) ? QStringLiteral("already exists") : file->errorString();
         return {};
     }
 
     QVector<DiagnosticStoredFile> list(const QString &exactDirectory) override {
         QVector<DiagnosticStoredFile> files;
         const QFileInfoList entries = QDir(exactDirectory).entryInfoList(
-            QDir::Files | QDir::NoSymLinks | QDir::Readable | QDir::Hidden);
+            QDir::Files | QDir::NoSymLinks | QDir::Hidden);
         files.reserve(entries.size());
         for (const QFileInfo &entry : entries)
             files.append({entry.fileName(), entry.lastModified(), entry.isFile() && !entry.isSymLink()});
@@ -199,7 +199,7 @@ DiagnosticSessionCreateResult DiagnosticSession::create(DiagnosticSessionOptions
     if (options.applicationDirectory.isEmpty())
         return {{}, QStringLiteral("application directory is empty")};
     if (options.maxBytes <= 0 || options.compactThresholdBytes < 0 || options.finalReserveBytes < 0 ||
-        options.compactThresholdBytes > options.maxBytes || options.finalReserveBytes >= options.maxBytes ||
+        options.compactThresholdBytes > options.maxBytes - options.finalReserveBytes || options.finalReserveBytes >= options.maxBytes ||
         options.maxSessions <= 0) {
         return {{}, QStringLiteral("invalid diagnostic session limits")};
     }
@@ -217,7 +217,8 @@ DiagnosticSessionCreateResult DiagnosticSession::create(DiagnosticSessionOptions
     QString path;
     std::unique_ptr<DiagnosticSessionFile> file;
     QString createError;
-    for (int suffix = 0; ; ++suffix) {
+    constexpr int maximumSessionNameAttempts = 10000;
+    for (int suffix = 0; suffix != maximumSessionNameAttempts; ++suffix) {
         const QString name = suffix == 0 ? stem + QStringLiteral(".log") :
             stem + QStringLiteral("-%1.log").arg(suffix, 2, 10, QLatin1Char('0'));
         path = QDir(logsDirectory).filePath(name);
@@ -225,15 +226,23 @@ DiagnosticSessionCreateResult DiagnosticSession::create(DiagnosticSessionOptions
         file = options.storage->createExclusive(path, &createError);
         if (file)
             break;
-        if (!createError.contains(QStringLiteral("exist"), Qt::CaseInsensitive))
+        if (createError != QStringLiteral("already exists"))
             return {{}, createError.isEmpty() ? QStringLiteral("failed to create diagnostic log") : createError};
     }
+    if (!file)
+        return {{}, QStringLiteral("diagnostic log filename collision limit reached")};
 
     QVector<DiagnosticStoredFile> retained;
     for (const DiagnosticStoredFile &entry : options.storage->list(logsDirectory)) {
         if (entry.regularFile && isSessionFileName(entry.fileName))
             retained.append(entry);
     }
+    const QString currentName = QFileInfo(path).fileName();
+    const bool currentListed = std::any_of(retained.cbegin(), retained.cend(), [&](const DiagnosticStoredFile &entry) {
+        return entry.fileName == currentName;
+    });
+    if (!currentListed)
+        retained.append({currentName, now, true});
     std::sort(retained.begin(), retained.end(), [](const DiagnosticStoredFile &left,
                                                      const DiagnosticStoredFile &right) {
         return left.lastModified == right.lastModified ? left.fileName < right.fileName :
@@ -320,13 +329,14 @@ void DiagnosticSession::record(DiagnosticEvent event) {
             key += QLatin1Char('\x1f') + it.key() + QLatin1Char('=') + it.value();
 
         auto fail = [&] {
+            QString error = d->file->errorString();
+            if (error.isEmpty())
+                error = QStringLiteral("diagnostic log write failed");
             d->active = false;
             d->file->close();
             if (!d->failureEmitted) {
                 d->failureEmitted = true;
-                failure = d->file->errorString();
-                if (failure.isEmpty())
-                    failure = QStringLiteral("diagnostic log write failed");
+                failure = std::move(error);
             }
         };
         auto writeLine = [&](const QByteArray &bytes, bool flush) {
@@ -363,32 +373,29 @@ void DiagnosticSession::record(DiagnosticEvent event) {
             return;
         }
         writeDuplicateNotice();
-        if (!d->active)
-            return;
-        d->duplicateKey = key;
-        d->duplicateComponent = component;
-        d->duplicateEvent = name;
+        if (d->active) {
+            d->duplicateKey = key;
+            d->duplicateComponent = component;
+            d->duplicateEvent = name;
 
-        if (!d->compact && d->bytesWritten + line.size() > d->options.compactThresholdBytes) {
-            d->compact = true;
-            DiagnosticEvent notice = makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("session"),
-                QStringLiteral("compact_mode_entered"), {}, true, event.timeUtc);
-            const QByteArray noticeLine = formattedLine(notice, {}).toUtf8();
-            if (d->bytesWritten + noticeLine.size() <= d->options.maxBytes)
-                writeLine(noticeLine, true);
+            const qint64 ordinaryLimit = d->options.maxBytes - d->options.finalReserveBytes;
+            if (!d->compact && d->bytesWritten + line.size() > d->options.compactThresholdBytes) {
+                d->compact = true;
+                DiagnosticEvent notice = makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("session"),
+                    QStringLiteral("compact_mode_entered"), {}, true, event.timeUtc);
+                const QByteArray noticeLine = formattedLine(notice, {}).toUtf8();
+                if (d->bytesWritten + noticeLine.size() <= ordinaryLimit)
+                    writeLine(noticeLine, true);
+            }
+            if (d->active && d->compact &&
+                (event.severity == DiagnosticSeverity::Debug || event.severity == DiagnosticSeverity::Info)) {
+                ++d->compactOrSizeSuppressed;
+            } else if (d->active && d->bytesWritten + line.size() > ordinaryLimit) {
+                ++d->compactOrSizeSuppressed;
+            } else if (d->active) {
+                writeLine(line, event.flushImmediately || isBoundary(event.severity));
+            }
         }
-        if (!d->active)
-            return;
-        if (d->compact && (event.severity == DiagnosticSeverity::Debug || event.severity == DiagnosticSeverity::Info)) {
-            ++d->compactOrSizeSuppressed;
-            return;
-        }
-        const qint64 ordinaryLimit = d->options.maxBytes - d->options.finalReserveBytes;
-        if (d->bytesWritten + line.size() > ordinaryLimit) {
-            ++d->compactOrSizeSuppressed;
-            return;
-        }
-        writeLine(line, event.flushImmediately || isBoundary(event.severity));
     }
     if (!failure.isEmpty())
         emit writeFailed(failure);
@@ -401,13 +408,14 @@ void DiagnosticSession::closeNormally() {
         if (!d->active || d->closed)
             return;
         auto fail = [&] {
+            QString error = d->file->errorString();
+            if (error.isEmpty())
+                error = QStringLiteral("diagnostic log write failed");
             d->active = false;
             d->file->close();
             if (!d->failureEmitted) {
                 d->failureEmitted = true;
-                failure = d->file->errorString();
-                if (failure.isEmpty())
-                    failure = QStringLiteral("diagnostic log write failed");
+                failure = std::move(error);
             }
         };
         auto writeLine = [&](const QByteArray &bytes) {
@@ -431,10 +439,9 @@ void DiagnosticSession::closeNormally() {
                 d->compactOrSizeSuppressed += d->pendingDuplicates;
             d->pendingDuplicates = 0;
         }
-        if (!d->active)
-            return;
-        DiagnosticEvent summary = makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("session"),
-            QStringLiteral("session_summary"),
+        if (d->active) {
+            DiagnosticEvent summary = makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("session"),
+                QStringLiteral("session_summary"),
             {{QStringLiteral("airplay_providers"), QString::number(d->airplayProviders)},
              {QStringLiteral("client_requests"), QString::number(d->clientRequest)},
              {QStringLiteral("compact_mode"), d->compact ? QStringLiteral("yes") : QStringLiteral("no")},
@@ -451,14 +458,15 @@ void DiagnosticSession::closeNormally() {
              {QStringLiteral("searches"), QString::number(d->searchReceived)},
              {QStringLiteral("send_requests"), QString::number(d->sendRequested)},
              {QStringLiteral("startup_completed"), d->startupCompleted > 0 ? QStringLiteral("yes") : QStringLiteral("no")},
-             {QStringLiteral("warnings"), QString::number(d->warnings)}}, true, d->options.now().toUTC());
-        const QByteArray line = formattedLine(summary, sanitizedFields(summary.fields)).toUtf8();
-        if (line.size() <= d->options.finalReserveBytes && line.size() <= d->options.maxBytes - d->bytesWritten)
-            writeLine(line);
-        else
-            fail();
-        if (d->active && !d->file->flush())
-            fail();
+                 {QStringLiteral("warnings"), QString::number(d->warnings)}}, true, d->options.now().toUTC());
+            const QByteArray line = formattedLine(summary, sanitizedFields(summary.fields)).toUtf8();
+            if (line.size() <= d->options.finalReserveBytes && line.size() <= d->options.maxBytes - d->bytesWritten)
+                writeLine(line);
+            else
+                fail();
+            if (d->active && !d->file->flush())
+                fail();
+        }
         if (d->file)
             d->file->close();
         d->closed = true;

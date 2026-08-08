@@ -44,8 +44,11 @@ struct FakeFileState {
     int writes = 0;
     int closes = 0;
     int failWriteAt = 0;
+    int shortWriteAt = 0;
     bool flushSucceeds = true;
+    bool clearErrorOnClose = false;
     QString error;
+    QString writeError = QStringLiteral("write failure");
 };
 
 class FakeSessionFile final : public DiagnosticSessionFile {
@@ -55,8 +58,12 @@ public:
     qint64 write(const QByteArray &bytes) override {
         ++m_state->writes;
         if (m_state->failWriteAt != 0 && m_state->writes >= m_state->failWriteAt) {
-            m_state->error = QStringLiteral("write failure");
+            m_state->error = m_state->writeError;
             return -1;
+        }
+        if (m_state->shortWriteAt != 0 && m_state->writes >= m_state->shortWriteAt) {
+            m_state->error = m_state->writeError;
+            return bytes.size() - 1;
         }
         m_state->bytes.append(bytes);
         return bytes.size();
@@ -66,7 +73,11 @@ public:
             m_state->error = QStringLiteral("flush failure");
         return m_state->flushSucceeds;
     }
-    void close() override { ++m_state->closes; }
+    void close() override {
+        ++m_state->closes;
+        if (m_state->clearErrorOnClose)
+            m_state->error.clear();
+    }
     QString errorString() const override { return m_state->error; }
 
 private:
@@ -78,6 +89,7 @@ public:
     QString ensureError;
     QString exclusiveError;
     bool removeSucceeds = true;
+    bool omitCreatedFromList = false;
     QVector<DiagnosticStoredFile> stored;
     std::shared_ptr<FakeFileState> file = std::make_shared<FakeFileState>();
     QStringList ensuredPaths;
@@ -98,10 +110,11 @@ public:
     }
     QVector<DiagnosticStoredFile> list(const QString &) override {
         QVector<DiagnosticStoredFile> result = stored;
-        for (const QString &path : createdPaths) {
-            result.append({QFileInfo(path).fileName(),
-                           QDateTime(QDate(2026, 8, 8), QTime(7, 30, 12), QTimeZone::UTC), true});
-        }
+        if (!omitCreatedFromList)
+            for (const QString &path : createdPaths) {
+                result.append({QFileInfo(path).fileName(),
+                               QDateTime(QDate(2026, 8, 8), QTime(7, 30, 12), QTimeZone::UTC), true});
+            }
         return result;
     }
     bool remove(const QString &exactPath) override {
@@ -125,6 +138,14 @@ private slots:
     void reportsStorageAndHeaderFailuresWithoutFallback();
     void retentionFailureDeletesTheCurrentSession();
     void writeFailureEmitsOnceAndDisablesTheSession();
+    void duplicateNoticeFailureEmitsOnceAfterUnlock();
+    void compactNoticeFailureEmitsOnceAfterUnlock();
+    void closeDuplicateNoticeFailureEmitsOnceAfterUnlock();
+    void shortWriteEmitsOnceAndDisablesTheSession();
+    void retentionIncludesCurrentWhenStorageOmitsIt();
+    void collisionRetryUsesOnlyExactSentinelAndIsBounded();
+    void rejectsCompactThresholdInsideSummaryReserve();
+    void retentionIncludesMatchingFileWithoutReadableFilter();
     void summaryUsesTheFixedFactContract();
     void reserveKeepsFullSummaryAndBoundsDuplicateNotices();
 };
@@ -361,6 +382,157 @@ void DiagnosticSessionTest::writeFailureEmitsOnceAndDisablesTheSession() {
         QStringLiteral("receiver"), QStringLiteral("second")));
     QCOMPARE(failures.count(), 1);
     QCOMPARE(storage->file->writes, 2);
+}
+
+void DiagnosticSessionTest::duplicateNoticeFailureEmitsOnceAfterUnlock() {
+    QTemporaryDir dir;
+    auto storage = std::make_shared<FakeSessionStorage>();
+    storage->file->failWriteAt = 3;
+    storage->file->writeError = QStringLiteral("duplicate notice failure");
+    storage->file->clearErrorOnClose = true;
+    auto options = testOptions(dir.path());
+    options.storage = storage;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY2(created.session, qPrintable(created.error));
+    QSignalSpy failures(created.session.get(), &DiagnosticSession::writeFailed);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("same")));
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("same")));
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("next")));
+    QVERIFY(!created.session->isActive());
+    QCOMPARE(failures.count(), 1);
+    QCOMPARE(failures.at(0).at(0).toString(), QStringLiteral("duplicate notice failure"));
+    QCOMPARE(storage->file->writes, 3);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("later")));
+    QCOMPARE(storage->file->writes, 3);
+}
+
+void DiagnosticSessionTest::compactNoticeFailureEmitsOnceAfterUnlock() {
+    QTemporaryDir dir;
+    auto storage = std::make_shared<FakeSessionStorage>();
+    storage->file->failWriteAt = 2;
+    storage->file->writeError = QStringLiteral("compact notice failure");
+    storage->file->clearErrorOnClose = true;
+    auto options = testOptions(dir.path());
+    options.compactThresholdBytes = 100;
+    options.storage = storage;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY2(created.session, qPrintable(created.error));
+    QSignalSpy failures(created.session.get(), &DiagnosticSession::writeFailed);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("ordinary")));
+    QVERIFY(!created.session->isActive());
+    QCOMPARE(failures.count(), 1);
+    QCOMPARE(failures.at(0).at(0).toString(), QStringLiteral("compact notice failure"));
+    QCOMPARE(storage->file->writes, 2);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("later")));
+    QCOMPARE(storage->file->writes, 2);
+}
+
+void DiagnosticSessionTest::closeDuplicateNoticeFailureEmitsOnceAfterUnlock() {
+    QTemporaryDir dir;
+    auto storage = std::make_shared<FakeSessionStorage>();
+    storage->file->failWriteAt = 3;
+    storage->file->writeError = QStringLiteral("close duplicate notice failure");
+    storage->file->clearErrorOnClose = true;
+    auto options = testOptions(dir.path());
+    options.storage = storage;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY2(created.session, qPrintable(created.error));
+    QSignalSpy failures(created.session.get(), &DiagnosticSession::writeFailed);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("same")));
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("same")));
+    created.session->closeNormally();
+    QVERIFY(!created.session->isActive());
+    QCOMPARE(failures.count(), 1);
+    QCOMPARE(failures.at(0).at(0).toString(), QStringLiteral("close duplicate notice failure"));
+    QCOMPARE(storage->file->writes, 3);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("later")));
+    QCOMPARE(storage->file->writes, 3);
+}
+
+void DiagnosticSessionTest::shortWriteEmitsOnceAndDisablesTheSession() {
+    QTemporaryDir dir;
+    auto storage = std::make_shared<FakeSessionStorage>();
+    storage->file->shortWriteAt = 2;
+    storage->file->writeError = QStringLiteral("short write failure");
+    storage->file->clearErrorOnClose = true;
+    auto options = testOptions(dir.path());
+    options.storage = storage;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY2(created.session, qPrintable(created.error));
+    QSignalSpy failures(created.session.get(), &DiagnosticSession::writeFailed);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("short")));
+    QVERIFY(!created.session->isActive());
+    QCOMPARE(failures.count(), 1);
+    QCOMPARE(failures.at(0).at(0).toString(), QStringLiteral("short write failure"));
+    QCOMPARE(storage->file->writes, 2);
+    created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("later")));
+    QCOMPARE(storage->file->writes, 2);
+}
+
+void DiagnosticSessionTest::retentionIncludesCurrentWhenStorageOmitsIt() {
+    QTemporaryDir dir;
+    auto storage = std::make_shared<FakeSessionStorage>();
+    storage->omitCreatedFromList = true;
+    storage->stored = {
+        {QStringLiteral("AirPlay-Diagnostic-2026-08-07-070000.log"), QDateTime(QDate(2026, 8, 7), QTime(7, 0), QTimeZone::UTC), true},
+        {QStringLiteral("AirPlay-Diagnostic-2026-08-07-070001.log"), QDateTime(QDate(2026, 8, 7), QTime(7, 1), QTimeZone::UTC), true}};
+    auto options = testOptions(dir.path());
+    options.maxSessions = 2;
+    options.storage = storage;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY2(created.session, qPrintable(created.error));
+    QCOMPARE(storage->removedPaths.size(), 1);
+    QVERIFY(storage->removedPaths.first().endsWith(QStringLiteral("AirPlay-Diagnostic-2026-08-07-070000.log")));
+    QVERIFY(!storage->removedPaths.contains(created.session->filePath()));
+}
+
+void DiagnosticSessionTest::collisionRetryUsesOnlyExactSentinelAndIsBounded() {
+    QTemporaryDir dir;
+    auto storage = std::make_shared<FakeSessionStorage>();
+    storage->exclusiveError = QStringLiteral("path does not exist");
+    auto options = testOptions(dir.path());
+    options.storage = storage;
+    auto otherError = DiagnosticSession::create(options);
+    QVERIFY(!otherError.session);
+    QCOMPARE(otherError.error, QStringLiteral("path does not exist"));
+    QCOMPARE(storage->createdPaths.size(), 1);
+
+    storage = std::make_shared<FakeSessionStorage>();
+    storage->exclusiveError = QStringLiteral("already exists");
+    options.storage = storage;
+    auto exhausted = DiagnosticSession::create(options);
+    QVERIFY(!exhausted.session);
+    QCOMPARE(exhausted.error, QStringLiteral("diagnostic log filename collision limit reached"));
+    QVERIFY(storage->createdPaths.size() > 1);
+    QVERIFY(storage->createdPaths.size() <= 10000);
+}
+
+void DiagnosticSessionTest::rejectsCompactThresholdInsideSummaryReserve() {
+    QTemporaryDir dir;
+    auto options = testOptions(dir.path());
+    options.maxBytes = 2048;
+    options.finalReserveBytes = 400;
+    options.compactThresholdBytes = 1700;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY(!created.session);
+    QCOMPARE(created.error, QStringLiteral("invalid diagnostic session limits"));
+}
+
+void DiagnosticSessionTest::retentionIncludesMatchingFileWithoutReadableFilter() {
+    QTemporaryDir dir;
+    const QString logs = QDir(dir.path()).filePath(QStringLiteral("logs"));
+    QVERIFY(QDir().mkpath(logs));
+    const QString oldest = QDir(logs).filePath(QStringLiteral("AirPlay-Diagnostic-2026-08-07-070000.log"));
+    for (int index = 0; index != 10; ++index) {
+        QFile file(QDir(logs).filePath(QStringLiteral("AirPlay-Diagnostic-2026-08-07-07000%1.log").arg(index)));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.close();
+    }
+    QVERIFY(QFile::setPermissions(oldest, QFileDevice::WriteOwner));
+    auto created = DiagnosticSession::create(testOptions(dir.path()));
+    QVERIFY2(created.session, qPrintable(created.error));
+    QVERIFY(!QFileInfo::exists(oldest));
+    QCOMPARE(QDir(logs).entryList({QStringLiteral("AirPlay-Diagnostic-*.log")}, QDir::Files).size(), 10);
 }
 
 void DiagnosticSessionTest::summaryUsesTheFixedFactContract() {
