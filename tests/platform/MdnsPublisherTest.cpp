@@ -1,6 +1,9 @@
 #include <QtTest/QtTest>
 #include <QMap>
+#include <QPointer>
 #include <QByteArray>
+
+#include <memory>
 
 #include "platform/MdnsPublishing.h"
 #include "platform/MdnsPublisher.h"
@@ -11,10 +14,16 @@
 
 class PublisherFakeServer final : public QMdnsEngine::AbstractServer {
 public:
-    ~PublisherFakeServer() override { emit error(QStringLiteral("late teardown error")); }
+    explicit PublisherFakeServer(QObject *parent = nullptr) : QMdnsEngine::AbstractServer(parent) {}
+    ~PublisherFakeServer() override {
+        ++destructionCount;
+        emit error(QStringLiteral("late teardown error"));
+    }
     void sendMessage(const QMdnsEngine::Message &) override {}
     void sendMessageToAll(const QMdnsEngine::Message &) override {}
     void fail(const QString &message) { emit error(message); }
+
+    inline static int destructionCount = 0;
 };
 #endif
 
@@ -215,6 +224,32 @@ private slots:
                                   reinterpret_cast<const char *>(raw), sizeof(raw)));
         publisher.stop();
         QCOMPARE(countEvents(sink, "error"), 0);
+    }
+
+    void factoryServerIsReparentedAndSafelyOwned() {
+        PublisherFakeServer::destructionCount = 0;
+        auto externalOwner = std::make_unique<QObject>();
+        auto *server = new PublisherFakeServer(externalOwner.get());
+        QPointer<PublisherFakeServer> serverGuard(server);
+        CollectingSink sink;
+        MdnsPublisher publisher(&sink, [server](QObject *) { return server; });
+        const unsigned char raw[] = {9, 't', 'x', 't', 'v', 'e', 'r', 's', '=', '1'};
+
+        QVERIFY(publisher.publish(QStringLiteral("Receiver"), QByteArray::fromHex("020000000001"), 5000,
+                                  reinterpret_cast<const char *>(raw), sizeof(raw),
+                                  reinterpret_cast<const char *>(raw), sizeof(raw)));
+        const bool publisherOwnsServer = server->parent() == &publisher;
+        QVERIFY(publisherOwnsServer);
+        if (!publisherOwnsServer) {
+            publisher.stop();
+            return;
+        }
+
+        externalOwner.reset();
+        QVERIFY(!serverGuard.isNull());
+        publisher.stop();
+        QVERIFY(serverGuard.isNull());
+        QCOMPARE(PublisherFakeServer::destructionCount, 1);
     }
 #endif
 

@@ -141,8 +141,15 @@ bool MdnsPublisher::publish(const QString &receiverName, const QByteArray &hardw
     if (!d->server) {
         return false;
     }
-    if (!d->server->parent())
-        d->server->setParent(this);
+    if (d->server->thread() != thread()) {
+        d->server = nullptr;
+        return false;
+    }
+    d->server->setParent(this);
+    if (d->server->parent() != this) {
+        d->server = nullptr;
+        return false;
+    }
     d->sink->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("discovery"),
                                         QStringLiteral("server_created")));
 
