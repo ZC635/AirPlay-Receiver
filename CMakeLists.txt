@@ -109,6 +109,8 @@ add_library(airplay_app_lib
     src/platform/DependencyDiagnostics.h
     src/platform/EnvironmentDiagnostics.cpp
     src/platform/EnvironmentDiagnostics.h
+    src/platform/NetworkDiagnosticsMonitor.cpp
+    src/platform/NetworkDiagnosticsMonitor.h
     src/platform/WindowsEnvironmentDiagnostics.cpp
     src/platform/WindowsEnvironmentDiagnostics.h
     src/platform/AspectRatioSizing.cpp

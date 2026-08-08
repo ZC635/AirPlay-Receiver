@@ -107,6 +107,10 @@ add_executable(EnvironmentDiagnosticsTest platform/EnvironmentDiagnosticsTest.cp
 target_link_libraries(EnvironmentDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME EnvironmentDiagnosticsTest COMMAND EnvironmentDiagnosticsTest)
 
+add_executable(NetworkDiagnosticsMonitorTest platform/NetworkDiagnosticsMonitorTest.cpp)
+target_link_libraries(NetworkDiagnosticsMonitorTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME NetworkDiagnosticsMonitorTest COMMAND NetworkDiagnosticsMonitorTest)
+
 add_executable(MdnsPublisherTest platform/MdnsPublisherTest.cpp)
 target_link_libraries(MdnsPublisherTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
@@ -287,6 +291,7 @@ set(AIRPLAY_QT_TESTS
     WindowsWindowBehaviorTest
     DependencyDiagnosticsTest
     EnvironmentDiagnosticsTest
+    NetworkDiagnosticsMonitorTest
     MdnsPublisherTest
     DiscoveryRestartControllerTest
     ReceiverStatePolicyTest
