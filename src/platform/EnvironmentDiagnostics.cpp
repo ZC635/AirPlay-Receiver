@@ -111,7 +111,9 @@ DiagnosticFact timedOutIfExpired(QDeadlineTimer deadline, DiagnosticFact value) 
 
 template<typename T>
 DiagnosticValue<T> timedOutIfExpired(QDeadlineTimer deadline, DiagnosticValue<T> value) {
-    return deadline.hasExpired() ? DiagnosticValue<T>::timedOut() : value;
+    if (deadline.hasExpired())
+        value.status = DiagnosticFactStatus::TimedOut;
+    return value;
 }
 
 } // namespace
@@ -156,7 +158,11 @@ QList<DiagnosticEvent> EnvironmentDiagnostics::events(const EnvironmentSnapshot 
             {QStringLiteral("elevated"), QStringLiteral("not_elevated")})},
         {QStringLiteral("network"), statusText(snapshot.network.status)},
     };
-    if (snapshot.network.status == DiagnosticFactStatus::Available) {
+    const bool hasNetworkDetails = !snapshot.network.value.adapters.isEmpty() ||
+        snapshot.network.value.category.status != DiagnosticFactStatus::Unavailable ||
+        snapshot.network.value.firewallProfiles.status != DiagnosticFactStatus::Unavailable ||
+        snapshot.network.value.executableFirewallRule.status != DiagnosticFactStatus::Unavailable;
+    if (snapshot.network.status == DiagnosticFactStatus::Available || hasNetworkDetails) {
         snapshotFields.insert(QStringLiteral("network_category"), enumValue(
             snapshot.network.value.category,
             {QStringLiteral("domain"), QStringLiteral("private"), QStringLiteral("public")}));
@@ -170,7 +176,7 @@ QList<DiagnosticEvent> EnvironmentDiagnostics::events(const EnvironmentSnapshot 
     QList<DiagnosticEvent> result;
     result.append(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("environment"),
                                       QStringLiteral("environment_snapshot"), snapshotFields, true));
-    if (snapshot.network.status != DiagnosticFactStatus::Available)
+    if (snapshot.network.status == DiagnosticFactStatus::Unavailable || !hasNetworkDetails)
         return result;
 
     for (const NetworkAdapterFact &adapter : snapshot.network.value.adapters) {

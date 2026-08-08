@@ -269,6 +269,46 @@ private slots:
         QVERIFY(!script.contains(QStringLiteral("-match $profile")));
         QVERIFY(script.contains(QStringLiteral("-contains 'Block'")));
         QVERIFY(script.contains(QStringLiteral("$activeProfiles")));
+        QVERIFY(script.contains(QStringLiteral("Split(',')|ForEach-Object{$_.Trim()}")));
+        QVERIFY(script.contains(QStringLiteral("$activeProfiles.Count -gt 0")));
+    }
+
+    void timedOutFirewallPreservesCollectedNetworkDetails() {
+        WindowsEnvironmentOperations operations;
+        WindowsAdapterOperation adapter;
+        adapter.luid = 1;
+        adapter.ifType = 6;
+        adapter.enabled = true;
+        adapter.up = true;
+        adapter.physicalKnown = true;
+        adapter.physical = true;
+        operations.adapters = [adapter](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsAdapterOperation>>::available({adapter});
+        };
+        operations.routes = [](QDeadlineTimer) {
+            return DiagnosticValue<QVector<WindowsRouteOperation>>::available({});
+        };
+        operations.firewall = [](QDeadlineTimer) {
+            QThread::msleep(40);
+            return WindowsFirewallOperation{DiagnosticFact::timedOut(), DiagnosticFact::timedOut(),
+                                            DiagnosticFact::timedOut()};
+        };
+
+        const EnvironmentSnapshot snapshot = EnvironmentDiagnostics::collect(
+            windowsEnvironmentDiagnosticProviders(operations), 20);
+        QCOMPARE(snapshot.network.status, DiagnosticFactStatus::TimedOut);
+        QCOMPARE(snapshot.network.value.adapters.size(), 1);
+        const QList<DiagnosticEvent> events = EnvironmentDiagnostics::events(snapshot);
+        QVERIFY(std::any_of(events.cbegin(), events.cend(), [](const DiagnosticEvent &event) {
+            return event.fields.value(QStringLiteral("firewall_rule")) == QStringLiteral("timed_out");
+        }));
+        QCOMPARE(events.constLast().name, QStringLiteral("environment_adapter"));
+
+        EnvironmentDiagnosticProviders emptyTimeout = fakeProviders();
+        emptyTimeout.network = [](QDeadlineTimer) {
+            return DiagnosticValue<NetworkEnvironmentFact>::timedOut();
+        };
+        QCOMPARE(EnvironmentDiagnostics::events(EnvironmentDiagnostics::collect(emptyTimeout, 3000)).size(), 1);
     }
 
     void collectionSharesDeadlineAndSkipsProvidersAfterExpiry() {
