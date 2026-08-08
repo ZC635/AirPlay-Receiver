@@ -110,8 +110,16 @@ NetworkMonitorOperations windowsNetworkMonitorOperations() {
 NetworkDiagnosticsMonitor::NetworkDiagnosticsMonitor(DiagnosticLogSink *sink,
                                                      NetworkMonitorOperations operations,
                                                      int debounceMs, QObject *parent)
+    : NetworkDiagnosticsMonitor(sink, std::move(operations), std::nullopt, debounceMs, parent) {
+}
+
+NetworkDiagnosticsMonitor::NetworkDiagnosticsMonitor(
+    DiagnosticLogSink *sink, NetworkMonitorOperations operations,
+    std::optional<DiagnosticValue<NetworkEnvironmentFact>> initialBaseline,
+    int debounceMs, QObject *parent)
     : QObject(parent), sink_(sink), operations_(std::move(operations)),
       timer_(new QTimer(this)), debounceMs_(qMax(0, debounceMs)) {
+    initialBaseline_ = std::move(initialBaseline);
     timer_->setSingleShot(true);
     connect(timer_, &QTimer::timeout, this, &NetworkDiagnosticsMonitor::recollect);
 }
@@ -128,7 +136,9 @@ bool NetworkDiagnosticsMonitor::start() {
         return false;
     }
 
-    const DiagnosticValue<NetworkEnvironmentFact> initial = operations_.recollect(QDeadlineTimer(3000));
+    const DiagnosticValue<NetworkEnvironmentFact> initial = initialBaseline_
+        ? *initialBaseline_ : operations_.recollect(QDeadlineTimer(3000));
+    initialBaseline_.reset();
     lastKey_ = privacyFilteredKey(initial);
     accepting_.store(true, std::memory_order_release);
 
@@ -141,16 +151,24 @@ bool NetworkDiagnosticsMonitor::start() {
                 guard->requestRecollection();
         }, Qt::QueuedConnection);
     };
-    if (!operations_.registerInterface(callback, &interfaceHandle_)) {
+    void *interfaceHandle = nullptr;
+    void *routeHandle = nullptr;
+    if (!operations_.registerInterface(callback, &interfaceHandle)) {
         accepting_.store(false, std::memory_order_release);
+        if (interfaceHandle != nullptr)
+            operations_.cancel(interfaceHandle);
         return false;
     }
-    if (!operations_.registerRoute(callback, &routeHandle_)) {
+    if (!operations_.registerRoute(callback, &routeHandle)) {
         accepting_.store(false, std::memory_order_release);
-        operations_.cancel(interfaceHandle_);
-        interfaceHandle_ = nullptr;
+        if (routeHandle != nullptr)
+            operations_.cancel(routeHandle);
+        if (interfaceHandle != nullptr)
+            operations_.cancel(interfaceHandle);
         return false;
     }
+    interfaceHandle_ = interfaceHandle;
+    routeHandle_ = routeHandle;
     return true;
 }
 
@@ -207,11 +225,14 @@ QString NetworkDiagnosticsMonitor::privacyFilteredKey(
     QStringList adapters;
     for (qsizetype index = 1; index < events.size(); ++index) {
         const QMap<QString, QString> &fields = events.at(index).fields;
+        QStringList prefixes = fields.value(QStringLiteral("prefixes")).split(
+            QLatin1Char(','), Qt::SkipEmptyParts);
+        std::sort(prefixes.begin(), prefixes.end());
         adapters.append(fields.value(QStringLiteral("type")) + QLatin1Char('|') +
                         fields.value(QStringLiteral("up")) + QLatin1Char('|') +
                         fields.value(QStringLiteral("default_route")) + QLatin1Char('|') +
                         fields.value(QStringLiteral("route_metric")) + QLatin1Char('|') +
-                        fields.value(QStringLiteral("prefixes")));
+                        prefixes.join(QLatin1Char(',')));
     }
     std::sort(adapters.begin(), adapters.end());
     parts.append(adapters.join(QLatin1Char(';')));
