@@ -91,10 +91,17 @@ private:
 
 class ToggleableSink final : public DiagnosticLogSink {
 public:
-    void record(DiagnosticEvent event) override { events.append(std::move(event)); }
+    void record(DiagnosticEvent event) override {
+        events.append(std::move(event));
+        if (deactivateAfterNetworkChanged &&
+            events.constLast().name == QStringLiteral("network_changed")) {
+            active = false;
+        }
+    }
     bool isActive() const override { return active; }
 
     bool active = true;
+    bool deactivateAfterNetworkChanged = false;
     QVector<DiagnosticEvent> events;
 };
 
@@ -234,6 +241,23 @@ private slots:
         QVERIFY(ops.cancelInterfaceCalled);
         QVERIFY(ops.cancelRouteCalled);
         QCOMPARE(sink.events.size(), 0);
+    }
+
+    void stopsWhenSummaryWriteMakesSinkInactive() {
+        ToggleableSink sink;
+        sink.deactivateAfterNetworkChanged = true;
+        FakeNetworkMonitorOperations ops;
+        ops.snapshots = {DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.1.xxx/24")),
+                         DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.2.xxx/24"))};
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 0);
+        QVERIFY(monitor.start());
+        ops.fireInterfaceChanged();
+        QCoreApplication::processEvents();
+        QCOMPARE(ops.recollectCalls, 2);
+        QVERIFY(ops.cancelInterfaceCalled);
+        QVERIFY(ops.cancelRouteCalled);
+        QCOMPARE(sink.events.size(), 1);
+        QCOMPARE(sink.events.constFirst().name, QStringLiteral("network_changed"));
     }
 
     void retainsProvidedBaselineWhenRegistrationFailsThenRetries() {
