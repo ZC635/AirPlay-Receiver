@@ -15,6 +15,9 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
 include(cmake/UxPlayDependency.cmake)
 
 add_library(airplay_app_lib
+    src/diagnostics/DiagnosticEvent.h
+    src/diagnostics/DiagnosticLogSink.cpp
+    src/diagnostics/DiagnosticLogSink.h
     src/app/AppSettings.cpp
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
