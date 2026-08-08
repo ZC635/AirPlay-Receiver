@@ -25,6 +25,23 @@ private slots:
         QCOMPARE(event.name, QString("failure"));
         QVERIFY(event.flushImmediately);
     }
+
+    void collectingSinkRetainsEventsAndSupportsQueries() {
+        CollectingSink sink;
+        sink.record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "started",
+                                        {{"result", "yes"}}));
+        sink.record(makeDiagnosticEvent(DiagnosticSeverity::Warning, "receiver", "failure",
+                                        {{"reason", "renderer_init"}}));
+
+        QCOMPARE(countEvents(sink, "failure"), 1);
+        QVERIFY(hasEvent(sink, "failure"));
+        QVERIFY(!hasEvent(sink, "missing"));
+
+        const auto failure = findEvent(sink, "failure");
+        QVERIFY(failure.severity == DiagnosticSeverity::Warning);
+        QCOMPARE(failure.fields.value("reason"), QString("renderer_init"));
+        QCOMPARE(joinedFields(sink), QString("yes|renderer_init"));
+    }
 };
 
 QTEST_GUILESS_MAIN(DiagnosticLogSinkTest)
