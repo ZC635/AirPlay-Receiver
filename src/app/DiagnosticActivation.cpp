@@ -76,5 +76,10 @@ DiagnosticActivation DiagnosticActivation::parse(
         result.enabled = true;
         result.source = DiagnosticActivationSource::EnvironmentVariable;
     }
+    if (parentPidSeen && !result.enabled) {
+        result.parentPid = 0;
+        result.readyToken.clear();
+        result.argumentError = QStringLiteral("diagnostic_coordination_requires_activation");
+    }
     return result;
 }
