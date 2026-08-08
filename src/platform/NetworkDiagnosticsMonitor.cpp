@@ -129,16 +129,19 @@ NetworkDiagnosticsMonitor::~NetworkDiagnosticsMonitor() {
 }
 
 bool NetworkDiagnosticsMonitor::start() {
+    if (sink_ == nullptr || !sink_->isActive()) {
+        stop();
+        return false;
+    }
     if (accepting_.load(std::memory_order_acquire))
         return true;
-    if (sink_ == nullptr || !operations_.registerInterface || !operations_.registerRoute ||
-        !operations_.cancel || !operations_.recollect) {
+    if (!operations_.registerInterface || !operations_.registerRoute || !operations_.cancel ||
+        !operations_.recollect) {
         return false;
     }
 
     const DiagnosticValue<NetworkEnvironmentFact> initial = initialBaseline_
         ? *initialBaseline_ : operations_.recollect(QDeadlineTimer(3000));
-    initialBaseline_.reset();
     lastKey_ = privacyFilteredKey(initial);
     accepting_.store(true, std::memory_order_release);
 
@@ -169,6 +172,7 @@ bool NetworkDiagnosticsMonitor::start() {
     }
     interfaceHandle_ = interfaceHandle;
     routeHandle_ = routeHandle;
+    initialBaseline_.reset();
     return true;
 }
 
@@ -188,6 +192,10 @@ void NetworkDiagnosticsMonitor::stop() {
 void NetworkDiagnosticsMonitor::requestRecollection() {
     if (!accepting_.load(std::memory_order_acquire))
         return;
+    if (sink_ == nullptr || !sink_->isActive()) {
+        stop();
+        return;
+    }
     if (debounceMs_ == 0) {
         recollect();
         return;
@@ -198,6 +206,10 @@ void NetworkDiagnosticsMonitor::requestRecollection() {
 void NetworkDiagnosticsMonitor::recollect() {
     if (!accepting_.load(std::memory_order_acquire))
         return;
+    if (sink_ == nullptr || !sink_->isActive()) {
+        stop();
+        return;
+    }
     const DiagnosticValue<NetworkEnvironmentFact> current = operations_.recollect(QDeadlineTimer(3000));
     if (current.status == DiagnosticFactStatus::TimedOut) {
         recordChanged(current);
@@ -241,8 +253,12 @@ QString NetworkDiagnosticsMonitor::privacyFilteredKey(
 
 void NetworkDiagnosticsMonitor::recordChanged(
     const DiagnosticValue<NetworkEnvironmentFact> &network) {
-    if (!accepting_.load(std::memory_order_acquire) || sink_ == nullptr)
+    if (!accepting_.load(std::memory_order_acquire))
         return;
+    if (sink_ == nullptr || !sink_->isActive()) {
+        stop();
+        return;
+    }
     const QList<DiagnosticEvent> events = EnvironmentDiagnostics::events(networkSnapshot(network));
     const DiagnosticEvent snapshot = events.isEmpty() ? DiagnosticEvent{} : events.constFirst();
     const QString category = snapshot.fields.value(QStringLiteral("network_category"),

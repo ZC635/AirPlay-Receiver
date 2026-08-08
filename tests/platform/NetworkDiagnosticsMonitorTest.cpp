@@ -5,6 +5,10 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QTest>
+#include <QThread>
+
+#include <memory>
+#include <thread>
 
 namespace {
 
@@ -57,6 +61,7 @@ public:
             },
             [this](QDeadlineTimer) {
                 ++recollectCalls;
+                recollectThread = QThread::currentThreadId();
                 return snapshots.isEmpty()
                     ? DiagnosticValue<NetworkEnvironmentFact>::unavailable()
                     : snapshots.takeFirst();
@@ -75,12 +80,22 @@ public:
     int cancelInterfaceCount = 0;
     int cancelRouteCount = 0;
     int recollectCalls = 0;
+    Qt::HANDLE recollectThread = nullptr;
 
 private:
     int interfaceHandle = 0;
     int routeHandle = 0;
     NetworkMonitorOperations::ChangeCallback interfaceCallback;
     NetworkMonitorOperations::ChangeCallback routeCallback;
+};
+
+class ToggleableSink final : public DiagnosticLogSink {
+public:
+    void record(DiagnosticEvent event) override { events.append(std::move(event)); }
+    bool isActive() const override { return active; }
+
+    bool active = true;
+    QVector<DiagnosticEvent> events;
 };
 
 void processEventsFor(int milliseconds) {
@@ -175,6 +190,97 @@ private slots:
         }
         QCOMPARE(ops.cancelInterfaceCount, 1);
         QCOMPARE(ops.cancelRouteCount, 1);
+    }
+
+    void rejectsInactiveSinkBeforeBaselineRecollection() {
+        ToggleableSink sink;
+        sink.active = false;
+        FakeNetworkMonitorOperations ops;
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 0);
+        QVERIFY(!monitor.start());
+        QCOMPARE(ops.recollectCalls, 0);
+        QCOMPARE(ops.cancelInterfaceCount, 0);
+        QCOMPARE(ops.cancelRouteCount, 0);
+    }
+
+    void stopsWhenSinkBecomesInactiveBeforeQueuedRecollection() {
+        ToggleableSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.snapshots = {DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.1.xxx/24")),
+                         DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.2.xxx/24"))};
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 0);
+        QVERIFY(monitor.start());
+        sink.active = false;
+        ops.fireInterfaceChanged();
+        QCoreApplication::processEvents();
+        QCOMPARE(ops.recollectCalls, 1);
+        QVERIFY(ops.cancelInterfaceCalled);
+        QVERIFY(ops.cancelRouteCalled);
+        QCOMPARE(sink.events.size(), 0);
+    }
+
+    void stopsWhenSinkBecomesInactiveBeforeDebounceTimeout() {
+        ToggleableSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.snapshots = {DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.1.xxx/24")),
+                         DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.2.xxx/24"))};
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 25);
+        QVERIFY(monitor.start());
+        ops.fireInterfaceChanged();
+        QCoreApplication::processEvents();
+        sink.active = false;
+        processEventsFor(60);
+        QCOMPARE(ops.recollectCalls, 1);
+        QVERIFY(ops.cancelInterfaceCalled);
+        QVERIFY(ops.cancelRouteCalled);
+        QCOMPARE(sink.events.size(), 0);
+    }
+
+    void retainsProvidedBaselineWhenRegistrationFailsThenRetries() {
+        CollectingSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.registerRouteResult = false;
+        const auto initial = DiagnosticValue<NetworkEnvironmentFact>::available(
+            networkFact("192.168.1.xxx/24"));
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), initial, 0);
+        QVERIFY(!monitor.start());
+        QCOMPARE(ops.recollectCalls, 0);
+        QCOMPARE(ops.cancelInterfaceCount, 1);
+        QCOMPARE(ops.cancelRouteCount, 1);
+        ops.registerRouteResult = true;
+        QVERIFY(monitor.start());
+        QCOMPARE(ops.recollectCalls, 0);
+        QCOMPARE(ops.cancelInterfaceCount, 1);
+        QCOMPARE(ops.cancelRouteCount, 1);
+    }
+
+    void workerCallbackRecollectsOnTheQtThread() {
+        CollectingSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.snapshots = {DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.1.xxx/24")),
+                         DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.2.xxx/24"))};
+        NetworkDiagnosticsMonitor monitor(&sink, ops.asOperations(), 0);
+        QVERIFY(monitor.start());
+        const Qt::HANDLE qtThread = QThread::currentThreadId();
+        std::thread worker([&ops] { ops.fireInterfaceChanged(); });
+        worker.join();
+        QCoreApplication::processEvents();
+        QCOMPARE(ops.recollectCalls, 2);
+        QCOMPARE(ops.recollectThread, qtThread);
+    }
+
+    void ignoresQueuedCallbackAfterMonitorDestruction() {
+        CollectingSink sink;
+        FakeNetworkMonitorOperations ops;
+        ops.snapshots = {DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.1.xxx/24")),
+                         DiagnosticValue<NetworkEnvironmentFact>::available(networkFact("192.168.2.xxx/24"))};
+        auto monitor = std::make_unique<NetworkDiagnosticsMonitor>(&sink, ops.asOperations(), 0);
+        QVERIFY(monitor->start());
+        ops.fireInterfaceChanged();
+        monitor.reset();
+        QCoreApplication::processEvents();
+        QCOMPARE(ops.recollectCalls, 1);
+        QCOMPARE(sink.events.size(), 0);
     }
 
     void coalescesCallbackBurstsIntoOneDebouncedRecollection() {
