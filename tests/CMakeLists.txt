@@ -1,3 +1,10 @@
+add_library(airplay_test_support INTERFACE)
+target_include_directories(airplay_test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(DiagnosticLogSinkTest diagnostics/DiagnosticLogSinkTest.cpp)
+target_link_libraries(DiagnosticLogSinkTest PRIVATE airplay_app_lib airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticLogSinkTest COMMAND DiagnosticLogSinkTest)
+
 add_executable(SettingsChangeDeferrerTest app/SettingsChangeDeferrerTest.cpp)
 target_link_libraries(SettingsChangeDeferrerTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsChangeDeferrerTest COMMAND SettingsChangeDeferrerTest)
@@ -232,6 +239,7 @@ execute_process(
 )
 
 set(AIRPLAY_QT_TESTS
+    DiagnosticLogSinkTest
     SettingsChangeDeferrerTest
     SettingsApplyTypesTest
     SettingsApplyCoordinatorTest
