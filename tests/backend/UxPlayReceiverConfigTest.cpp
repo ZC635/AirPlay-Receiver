@@ -3,6 +3,7 @@
 #include <QTemporaryDir>
 
 #include <cmath>
+#include <array>
 #include <thread>
 #include <type_traits>
 
@@ -623,12 +624,14 @@ private slots:
 #if AIRPLAY_WITH_UXPLAY
         TapControllerEnvironment environment;
         FakeMdnsPublishing publisher;
+        CollectingSink sink;
         bool cleanupSawCommittedRecording = false;
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Recoverable Backend Error Test";
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
         config.mdnsPublisher = &publisher;
+        config.diagnosticSink = &sink;
         config.recordingControllerHooks = environment.hooks();
         config.rendererCallObserver = [&](const QString &call) {
             if (call == QStringLiteral("cleanup_after_recording_boundary")) {
@@ -658,7 +661,8 @@ private slots:
         });
 
         receiver.handleBackendError(QStringLiteral("Injected recoverable backend error"),
-                                    UxPlayReceiver::BackendErrorSafety::CanFinalize);
+                                    UxPlayReceiver::BackendErrorSafety::CanFinalize,
+                                    QStringLiteral("test_recoverable"));
 
         QCOMPARE(receiver.state(), ReceiverState::Error);
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
@@ -669,6 +673,11 @@ private slots:
         QCOMPARE(environment.discardCalls.load(), 0);
         QVERIFY(cleanupSawCommittedRecording);
         QCOMPARE(finishedThread, receiver.thread());
+        const auto failure = findEvent(sink, QStringLiteral("failure"));
+        QCOMPARE(failure.fields.value(QStringLiteral("stage")), QStringLiteral("test_recoverable"));
+        QCOMPARE(failure.fields.value(QStringLiteral("result")), QStringLiteral("failed"));
+        QVERIFY(failure.flushImmediately);
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("Injected recoverable backend error")));
 #endif
     }
 
@@ -713,7 +722,8 @@ private slots:
         });
 
         receiver.handleBackendError(QStringLiteral("Injected recoverable backend error"),
-                                    UxPlayReceiver::BackendErrorSafety::CanFinalize);
+                                    UxPlayReceiver::BackendErrorSafety::CanFinalize,
+                                    QStringLiteral("test_finalize_failure"));
 
         QCOMPARE(receiver.state(), ReceiverState::Error);
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
@@ -762,7 +772,8 @@ private slots:
         });
 
         receiver.handleBackendError(QStringLiteral("Injected broken backend error"),
-                                    UxPlayReceiver::BackendErrorSafety::Broken);
+                                    UxPlayReceiver::BackendErrorSafety::Broken,
+                                    QStringLiteral("test_broken"));
 
         QCOMPARE(receiver.state(), ReceiverState::Error);
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
@@ -1466,6 +1477,83 @@ private slots:
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("device_id")));
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("client_name")));
         QVERIFY(event.flushImmediately);
+#endif
+    }
+
+    void boundedCallbackStringsNeverReadPastDiagnosticLimits() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        CollectingSink sink;
+        config.diagnosticSink = &sink;
+        UxPlayReceiver receiver(config);
+        receiver.m_acceptingCallbacks.store(true);
+        receiver.m_callbackGeneration.store(1);
+        std::array<char, 66> model{};
+        model.fill('m');
+        model.back() = '\0';
+        std::array<char, 514> log{};
+        log.fill('x');
+        log.back() = '\0';
+
+        receiver.handleClientRequestFromUxPlayCallback(model.data(), 1);
+        receiver.handleLogMessageFromUxPlayCallback(LOGGER_INFO, log.data(), 1);
+
+        const auto client = findEvent(sink, QStringLiteral("client_request"));
+        QVERIFY(!client.fields.contains(QStringLiteral("model")));
+        QCOMPARE(countEvents(sink, QStringLiteral("message_suppressed")), 1);
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("xxxxxxxx")));
+#endif
+    }
+
+    void startupRecordsOrderedInitializationFacts() {
+#if AIRPLAY_WITH_UXPLAY
+        CollectingSink sink;
+        UxPlayReceiverConfig config;
+        config.diagnosticSink = &sink;
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+
+        receiver.start();
+
+        QStringList stages;
+        for (const auto &event : sink.events) {
+            if (event.name == QStringLiteral("initialization")) {
+                stages.append(event.fields.value(QStringLiteral("stage")));
+                QCOMPARE(event.fields.value(QStringLiteral("result")), QStringLiteral("success"));
+                QVERIFY(event.flushImmediately);
+            }
+        }
+        QCOMPARE(stages, QStringList({QStringLiteral("gstreamer_init"), QStringLiteral("logger_init"),
+            QStringLiteral("video_renderer_init"), QStringLiteral("audio_renderer_init"),
+            QStringLiteral("raop_init"), QStringLiteral("pairing_init"),
+            QStringLiteral("discovery_start")}));
+        receiver.stop();
+#endif
+    }
+
+    void unknownAudioCompressionRecordsRendererStartWithoutCodecOrRawValue() {
+#if AIRPLAY_WITH_UXPLAY
+        CollectingSink sink;
+        UxPlayReceiverConfig config;
+        config.diagnosticSink = &sink;
+        config.videoSink = "fakesink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        receiver.start();
+        sink.events.clear();
+        unsigned char unknown = 99;
+
+        receiver.startAudioRendererFromUxPlayCallback(&unknown,
+            receiver.callbackGenerationForUxPlayCallback());
+        QCOMPARE(countEvents(sink, QStringLiteral("renderer_started")), 1);
+        QCOMPARE(countEvents(sink, QStringLiteral("codec_selected")), 0);
+        QVERIFY(!joinedFields(sink).contains(QStringLiteral("99")));
+        sink.events.clear();
+        receiver.startAudioRendererFromUxPlayCallback(&unknown,
+            receiver.callbackGenerationForUxPlayCallback() - 1);
+        QCOMPARE(sink.events.size(), 0);
+        receiver.stop();
 #endif
     }
 
