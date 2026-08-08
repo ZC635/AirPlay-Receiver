@@ -1632,12 +1632,17 @@ private slots:
             QCOMPARE(countEvents(sink, QStringLiteral("renderer_started")), 1);
             QCOMPARE(findEvent(sink, QStringLiteral("codec_selected")).fields.value(QStringLiteral("codec")), codec);
         }
+        receiver.stop();
+        sink.events.clear();
+        UxPlayReceiver rejected(config);
+        rejected.start();
         sink.events.clear();
         unsigned char unknown = 99;
-        receiver.startAudioRendererFromUxPlayCallback(&unknown,
-            receiver.callbackGenerationForUxPlayCallback());
+        rejected.startAudioRendererFromUxPlayCallback(&unknown,
+            rejected.callbackGenerationForUxPlayCallback());
         QCOMPARE(countEvents(sink, QStringLiteral("renderer_started")), 0);
         QCOMPARE(countEvents(sink, QStringLiteral("codec_selected")), 0);
+        QVERIFY(!rejected.m_audioRendererStarted.load());
         const auto failure = findEvent(sink, QStringLiteral("failure"));
         const QMap<QString, QString> expectedFailure{{QStringLiteral("stage"), QStringLiteral("audio_renderer_start")},
             {QStringLiteral("result"), QStringLiteral("failed")}, {QStringLiteral("reason"), QStringLiteral("unknown_codec")}};
@@ -1645,10 +1650,17 @@ private slots:
         QVERIFY(failure.flushImmediately);
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("99")));
         sink.events.clear();
-        receiver.startAudioRendererFromUxPlayCallback(&unknown,
-            receiver.callbackGenerationForUxPlayCallback() - 1);
+        rejected.startAudioRendererFromUxPlayCallback(nullptr,
+            rejected.callbackGenerationForUxPlayCallback());
+        QCOMPARE(countEvents(sink, QStringLiteral("renderer_started")), 0);
+        QCOMPARE(countEvents(sink, QStringLiteral("codec_selected")), 0);
+        QVERIFY(!rejected.m_audioRendererStarted.load());
+        QCOMPARE(countEvents(sink, QStringLiteral("failure")), 1);
+        sink.events.clear();
+        rejected.startAudioRendererFromUxPlayCallback(&unknown,
+            rejected.callbackGenerationForUxPlayCallback() - 1);
         QCOMPARE(sink.events.size(), 0);
-        receiver.stop();
+        rejected.stop();
 #endif
     }
 

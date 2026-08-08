@@ -800,9 +800,6 @@ void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compres
         if (!m_callbackDispatch.accepts(generation)) {
             return;
         }
-        audio_renderer_start(compressionType);
-        m_audioRendererStarted.store(true);
-        audio_renderer_set_volume(m_volume.load());
         QString codec;
         if (compressionType) {
             switch (*compressionType) {
@@ -813,19 +810,22 @@ void UxPlayReceiver::startAudioRendererFromUxPlayCallback(unsigned char *compres
             default: break;
             }
         }
-        if (!codec.isEmpty()) {
-            recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
-                QStringLiteral("codec_selected"), {{QStringLiteral("codec"), codec},
-                    {QStringLiteral("stream_type"), QStringLiteral("audio")}}, true));
-            recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
-                QStringLiteral("renderer_started"), {{QStringLiteral("renderer"), QStringLiteral("audio")},
-                                                       {QStringLiteral("result"), QStringLiteral("success")}}, true));
+        if (codec.isEmpty()) {
+            recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("receiver"),
+                QStringLiteral("failure"), {{QStringLiteral("stage"), QStringLiteral("audio_renderer_start")},
+                                             {QStringLiteral("result"), QStringLiteral("failed")},
+                                             {QStringLiteral("reason"), QStringLiteral("unknown_codec")}}, true));
             return;
         }
-        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Error, QStringLiteral("receiver"),
-            QStringLiteral("failure"), {{QStringLiteral("stage"), QStringLiteral("audio_renderer_start")},
-                                         {QStringLiteral("result"), QStringLiteral("failed")},
-                                         {QStringLiteral("reason"), QStringLiteral("unknown_codec")}}, true));
+        audio_renderer_start(compressionType);
+        m_audioRendererStarted.store(true);
+        audio_renderer_set_volume(m_volume.load());
+        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+            QStringLiteral("codec_selected"), {{QStringLiteral("codec"), codec},
+                {QStringLiteral("stream_type"), QStringLiteral("audio")}}, true));
+        recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
+            QStringLiteral("renderer_started"), {{QStringLiteral("renderer"), QStringLiteral("audio")},
+                                                   {QStringLiteral("result"), QStringLiteral("success")}}, true));
     });
 }
 
