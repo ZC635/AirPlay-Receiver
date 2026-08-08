@@ -31,6 +31,7 @@ struct DiagnosticStoredFile {
 class DiagnosticSessionFile {
 public:
     virtual ~DiagnosticSessionFile() = default;
+    // All implementations must append all bytes or leave the underlying device unchanged.
     virtual qint64 write(const QByteArray &bytes) = 0;
     virtual bool flush() = 0;
     virtual void close() = 0;

@@ -18,13 +18,28 @@ public:
     explicit QFileDiagnosticSessionFile(QString path) : m_file(std::move(path)) {}
 
     bool open() { return m_file.open(QIODevice::WriteOnly | QIODevice::NewOnly); }
-    qint64 write(const QByteArray &bytes) override { return m_file.write(bytes); }
+    qint64 write(const QByteArray &bytes) override {
+        const qint64 originalSize = m_file.size();
+        const qint64 originalPosition = m_file.pos();
+        const qint64 written = m_file.write(bytes);
+        if (written == bytes.size())
+            return written;
+
+        const QString writeError = m_file.errorString();
+        if (!m_file.resize(originalSize) || !m_file.seek(originalPosition)) {
+            m_error = QStringLiteral("diagnostic log write rollback failed");
+        } else {
+            m_error = writeError.isEmpty() ? QStringLiteral("diagnostic log write failed") : writeError;
+        }
+        return -1;
+    }
     bool flush() override { return m_file.flush(); }
     void close() override { m_file.close(); }
-    QString errorString() const override { return m_file.errorString(); }
+    QString errorString() const override { return m_error.isEmpty() ? m_file.errorString() : m_error; }
 
 private:
     QFile m_file;
+    QString m_error;
 };
 
 class LocalDiagnosticSessionStorage final : public DiagnosticSessionStorage {
