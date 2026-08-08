@@ -20,6 +20,8 @@ add_library(airplay_app_lib
     src/diagnostics/DiagnosticLogSink.h
     src/diagnostics/DiagnosticSanitizer.h
     src/diagnostics/DiagnosticSanitizer.cpp
+    src/diagnostics/DiagnosticSession.h
+    src/diagnostics/DiagnosticSession.cpp
     src/diagnostics/ThirdPartyDiagnosticTranslator.h
     src/diagnostics/ThirdPartyDiagnosticTranslator.cpp
     src/app/AppSettings.cpp
