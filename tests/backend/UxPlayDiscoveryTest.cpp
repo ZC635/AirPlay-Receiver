@@ -158,6 +158,9 @@ private slots:
         QVERIFY(eventIndex(sink, "dns_sd_initialized") < eventIndex(sink, "http_server_started"));
         QVERIFY(eventIndex(sink, "http_server_started") < eventIndex(sink, "services_registered"));
         QVERIFY(!joinedFields(sink).contains("Private Receiver Name"));
+
+        discovery.stop();
+        QCOMPARE(countEvents(sink, "services_unregistered"), 1);
 #else
         QSKIP("UxPlay support is not enabled in this build");
 #endif
@@ -198,6 +201,11 @@ private slots:
             QCOMPARE(failure.fields.value("classification"), QStringLiteral("injected_failure"));
             QVERIFY(!failure.fields.contains("code"));
             QVERIFY(!discovery.lastError().contains(QStringLiteral(": 0")));
+        }
+        if (stage == QStringLiteral("raop_register")
+            || stage == QStringLiteral("airplay_register")
+            || stage == QStringLiteral("mdns_publish")) {
+            QVERIFY(!hasEvent(sink, "services_unregistered"));
         }
         QVERIFY(!joinedFields(sink).contains("Private Receiver Name"));
         QVERIFY(!joinedFields(sink).contains("private hook error"));
@@ -428,10 +436,12 @@ private slots:
 #if AIRPLAY_WITH_UXPLAY
         FakeMdnsPublishing publisher;
         publisher.failedPublishCalls = {2};
+        CollectingSink sink;
         ScopedRaop raop;
         QVERIFY(raop.isValid());
-        UxPlayDiscovery discovery(discoveryConfig("AirPlay Original Rename", &publisher, 10000));
+        UxPlayDiscovery discovery(discoveryConfig("AirPlay Original Rename", &publisher, 10000, &sink));
         QVERIFY(discovery.start(raop.get(), 0));
+        sink.events.clear();
 
         discovery.setReceiverName("AirPlay First Rename");
         QVERIFY(discovery.restart("AirPlay Original Rename"));
@@ -442,6 +452,9 @@ private slots:
         QVERIFY(discovery.restart("AirPlay Ignored Recovery Name"));
         QVERIFY(discovery.m_discoveryRestartController->pending());
         QCOMPARE(discovery.m_discoveryRestartController->recoveryName(), QString("AirPlay Original Rename"));
+        QCOMPARE(countEvents(sink, "restart_requested"), 2);
+        QCOMPARE(countEvents(sink, "restart_scheduled"), 1);
+        QCOMPARE(countEvents(sink, "restart_completed"), 0);
 
         discovery.m_discoveryRestartController->trigger();
 

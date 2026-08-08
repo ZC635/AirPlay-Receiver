@@ -61,6 +61,7 @@ private:
     void *m_dnssd = nullptr;
     bool m_raopHttpdStarted = false;
     unsigned short m_raopPort = 0;
+    bool m_servicesRegistered = false;
     DiscoveryRestartController *m_discoveryRestartController = nullptr;
     MdnsPublishing *m_mdnsPublisher = nullptr;
     bool m_ownsMdnsPublisher = false;

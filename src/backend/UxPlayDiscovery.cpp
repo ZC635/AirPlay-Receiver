@@ -169,8 +169,9 @@ bool UxPlayDiscovery::restart(QString recoveryName)
         return m_raop != nullptr;
     };
 
+    const bool wasPending = m_discoveryRestartController->pending();
     const bool scheduled = m_discoveryRestartController->schedule(std::move(recoveryName), shouldStartHttpd, std::move(ops));
-    if (scheduled) {
+    if (scheduled && !wasPending) {
         recordEvent(QStringLiteral("restart_scheduled"));
     }
     if (!scheduled) {
@@ -334,6 +335,7 @@ bool UxPlayDiscovery::registerBroadcast(unsigned short port)
     }
     m_lastError.clear();
     recordEvent(QStringLiteral("services_registered"));
+    m_servicesRegistered = true;
     return true;
 #else
     Q_UNUSED(port);
@@ -354,13 +356,17 @@ void UxPlayDiscovery::stopBroadcast()
     }
 
     if (!m_dnssd) {
+        m_servicesRegistered = false;
         return;
     }
 
     auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
     dnssd_unregister_raop(dnssd);
     dnssd_unregister_airplay(dnssd);
-    recordEvent(QStringLiteral("services_unregistered"));
+    if (m_servicesRegistered) {
+        recordEvent(QStringLiteral("services_unregistered"));
+        m_servicesRegistered = false;
+    }
     dnssd_destroy(dnssd);
     m_dnssd = nullptr;
     recordEvent(QStringLiteral("dns_sd_destroyed"));
@@ -375,13 +381,17 @@ void UxPlayDiscovery::unregisterBroadcast()
     }
 
     if (!m_dnssd) {
+        m_servicesRegistered = false;
         return;
     }
 
     auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
     dnssd_unregister_raop(dnssd);
     dnssd_unregister_airplay(dnssd);
-    recordEvent(QStringLiteral("services_unregistered"));
+    if (m_servicesRegistered) {
+        recordEvent(QStringLiteral("services_unregistered"));
+        m_servicesRegistered = false;
+    }
 #endif
 }
 
@@ -398,12 +408,14 @@ void UxPlayDiscovery::destroyBroadcast()
     }
 
     if (!m_dnssd) {
+        m_servicesRegistered = false;
         return;
     }
 
     auto *dnssd = static_cast<dnssd_t *>(m_dnssd);
     dnssd_destroy(dnssd);
     m_dnssd = nullptr;
+    m_servicesRegistered = false;
     recordEvent(QStringLiteral("dns_sd_destroyed"));
 #endif
 }
