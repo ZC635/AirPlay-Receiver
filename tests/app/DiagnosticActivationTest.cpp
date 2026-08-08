@@ -1,5 +1,8 @@
 #include <QtTest>
 
+#include <QFile>
+#include <QTemporaryDir>
+
 #include "app/DiagnosticActivation.h"
 
 #define main diagnosticActivationTestMain
@@ -21,6 +24,9 @@ private slots:
     void ignoresOrdinaryStartupArguments();
     void directCreationFailureFallsBackToNullMode();
     void successfulCreationEnablesTitleSuffix();
+    void missingSettingsFileIsDefaulted();
+    void invalidSettingsFileIsDefaulted();
+    void validSettingsObjectIsLoaded();
 };
 
 void DiagnosticActivationTest::normalLaunchIsDisabled() {
@@ -114,6 +120,35 @@ void DiagnosticActivationTest::successfulCreationEnablesTitleSuffix() {
     QVERIFY(decision.loggingActive);
     QVERIFY(decision.continueApplication);
     QVERIFY(decision.userError.isEmpty());
+}
+
+void DiagnosticActivationTest::missingSettingsFileIsDefaulted() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    QVERIFY(!settingsFileContainsObject(directory.filePath("airplay-settings.json")));
+}
+
+void DiagnosticActivationTest::invalidSettingsFileIsDefaulted() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile file(directory.filePath("airplay-settings.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("not json");
+    file.close();
+
+    QVERIFY(!settingsFileContainsObject(file.fileName()));
+}
+
+void DiagnosticActivationTest::validSettingsObjectIsLoaded() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile file(directory.filePath("airplay-settings.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("{}");
+    file.close();
+
+    QVERIFY(settingsFileContainsObject(file.fileName()));
 }
 
 QTEST_GUILESS_MAIN(DiagnosticActivationTest)
