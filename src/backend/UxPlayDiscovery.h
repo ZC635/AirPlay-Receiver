@@ -1,9 +1,13 @@
 #pragma once
 
 #include "backend/VideoQualitySettings.h"
+#include "diagnostics/DiagnosticLogSink.h"
 
 #include <QObject>
 #include <QString>
+#include <QStringView>
+
+#include <functional>
 
 class DiscoveryRestartController;
 class MdnsPublishing;
@@ -12,6 +16,8 @@ struct UxPlayDiscoveryConfig {
     QString receiverName = "AirPlay Receiver";
     VideoQualitySettings videoQuality;
     MdnsPublishing *mdnsPublisher = nullptr;
+    DiagnosticLogSink *diagnosticSink = &nullDiagnosticLogSink();
+    std::function<QString(QStringView stage)> failureForStage;
     int restartDelayMs = 2000;
 };
 
@@ -41,6 +47,11 @@ private:
     void unregisterBroadcast();
     void destroyBroadcast();
     void stopHttpdIfStarted();
+    bool failsForStage(QStringView stage) const;
+    void recordEvent(QString name, QMap<QString, QString> fields = {},
+                     DiagnosticSeverity severity = DiagnosticSeverity::Info,
+                     bool flushImmediately = true) const;
+    void recordFailure(QStringView stage, QMap<QString, QString> fields = {}) const;
 
     UxPlayDiscoveryConfig m_config;
     QString m_lastError;
