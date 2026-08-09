@@ -507,6 +507,10 @@ function Invoke-Build {
         $LauncherSrc = Join-Path $ProjectRoot "scripts\launcher.cmd"
         if (Test-Path $LauncherSrc) { Copy-Item $LauncherSrc $VariantBuildDir -Force }
 
+        $DiagnosticLauncherName = 'Start with Diagnostic Logging.cmd'
+        $DiagnosticLauncherSrc = Join-Path $ProjectRoot "scripts\$DiagnosticLauncherName"
+        Copy-Item -LiteralPath $DiagnosticLauncherSrc -Destination $VariantBuildDir -Force
+
         foreach ($nonPortableDll in @("D3DCompiler_47.dll", "D3DCompiler_46.dll", "D3DCompiler_43.dll", "dxcompiler.dll", "dxil.dll")) {
             $nonPortablePath = Join-Path $VariantBuildDir $nonPortableDll
             if (Test-Path -LiteralPath $nonPortablePath) {

@@ -58,6 +58,8 @@ if (-not (Test-Path -LiteralPath $PackageDir)) {
 }
 
 $requiredPaths = @(Get-PortableRuntimeManifestPaths)
+$diagnosticLauncherName = 'Start with Diagnostic Logging.cmd'
+$requiredPaths += $diagnosticLauncherName
 
 $missing = @()
 foreach ($relativePath in $requiredPaths) {

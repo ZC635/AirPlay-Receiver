@@ -17,6 +17,15 @@ if ($verifyContent -match 'ComSpec|GetTempFileName') {
     throw "Portable verifier must not shell-expand package paths or use temporary redirection files."
 }
 
+$diagnosticLauncherName = 'Start with Diagnostic Logging.cmd'
+if ($diagnosticLauncherName -match '[^\x20-\x7E]') { throw 'Diagnostic launcher filename must contain printable ASCII characters only.' }
+$diagnosticLauncher = Join-Path $ProjectRoot "scripts\$diagnosticLauncherName"
+if (-not (Test-Path -LiteralPath $diagnosticLauncher)) { throw "Missing diagnostic launcher: $diagnosticLauncher" }
+$launcherContent = Get-Content -LiteralPath $diagnosticLauncher -Raw
+if ($launcherContent -notmatch '%~dp0airplay_receiver\.exe') { throw 'Diagnostic launcher must resolve the adjacent executable from its own directory.' }
+if ($launcherContent -notmatch [regex]::Escape('--diagnostic-log')) { throw 'Diagnostic launcher must pass --diagnostic-log.' }
+if ($launcherContent -match 'runas|AIRPLAY_DEBUG_LOG|AppData|TEMP|>') { throw 'Diagnostic launcher must not elevate, persist environment state, redirect, or choose another directory.' }
+
 function Get-PortableRuntimeManifestPaths {
     $manifestPath = Join-Path $ProjectRoot "config\portable-runtime-manifest.txt"
     if (-not (Test-Path -LiteralPath $manifestPath)) {
@@ -48,6 +57,8 @@ function New-CompletePortablePackageFixture {
 
     $requiredPaths = @(Get-PortableRuntimeManifestPaths)
 
+    $requiredPaths += $diagnosticLauncherName
+
     foreach ($relativePath in $requiredPaths) {
         New-RequiredPortableFile $Root $relativePath
     }
@@ -70,6 +81,23 @@ try {
     New-CompletePortablePackageFixture $validPackage
 
     & $verifyScript -PackageDir $validPackage -SkipRuntimeProbe
+
+    $missingLauncherPackage = Join-Path $tempRoot "missing-diagnostic-launcher"
+    New-Item -ItemType Directory -Path $missingLauncherPackage -Force | Out-Null
+    New-CompletePortablePackageFixture $missingLauncherPackage
+    Remove-Item -LiteralPath (Join-Path $missingLauncherPackage $diagnosticLauncherName) -Force
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $missingLauncherOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File $verifyScript -PackageDir $missingLauncherPackage -SkipRuntimeProbe 2>&1
+    $missingLauncherExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+    if ($missingLauncherExitCode -eq 0) {
+        throw "Expected portable verifier to reject package missing $diagnosticLauncherName."
+    }
+    if (($missingLauncherOutput -join "`n") -notmatch [regex]::Escape($diagnosticLauncherName)) {
+        throw "Expected verifier output to mention $diagnosticLauncherName. Output: $($missingLauncherOutput -join ' ')"
+    }
 
     $runtimeProbePackage = Join-Path $tempRoot "runtime-probe-required"
     New-Item -ItemType Directory -Path $runtimeProbePackage -Force | Out-Null
