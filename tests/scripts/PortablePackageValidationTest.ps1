@@ -17,6 +17,12 @@ if ($verifyContent -match 'ComSpec|GetTempFileName') {
     throw "Portable verifier must not shell-expand package paths or use temporary redirection files."
 }
 
+$readmePath = Join-Path $ProjectRoot 'README.md'
+$readmeContent = Get-Content -LiteralPath $readmePath -Raw
+if ($readmeContent -notmatch [regex]::Escape('The [Diagnostic Logging] title suffix is the only continuous indication')) {
+    throw 'README must identify the [Diagnostic Logging] title suffix as the only continuous diagnostic indicator.'
+}
+
 $diagnosticLauncherName = 'Start with Diagnostic Logging.cmd'
 if ($diagnosticLauncherName -match '[^\x20-\x7E]') { throw 'Diagnostic launcher filename must contain printable ASCII characters only.' }
 $diagnosticLauncher = Join-Path $ProjectRoot "scripts\$diagnosticLauncherName"
