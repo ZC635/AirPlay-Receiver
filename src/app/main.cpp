@@ -220,17 +220,22 @@ int main(int argc, char *argv[]) {
             writeFailureRelay.deliver(error);
         }, Qt::QueuedConnection);
     }
+    std::optional<QtDiagnosticMessageBridge> qtBridge;
+    if (session) {
+        qtBridge.emplace(sink);
+    }
+    if (runDiagnosticChildGate(activation, session.get(), creationError, {}) ==
+        DiagnosticChildGateResult::ExitChild) {
+        qtBridge.reset();
+        session.reset();
+        return 1;
+    }
     const DiagnosticStartupDecision startupDecision = diagnosticStartupDecision(
         activation, session != nullptr, creationError);
     if (!startupDecision.userError.isEmpty()) {
         QMessageBox::warning(nullptr, QStringLiteral("Diagnostic logging unavailable"),
                              startupDecision.userError);
     }
-    std::optional<QtDiagnosticMessageBridge> qtBridge;
-    if (session) {
-        qtBridge.emplace(sink);
-    }
-
     recordStartup(sink, QStringLiteral("session_activation"),
                   {{QStringLiteral("activation_source"), activation.sourceName()}}, true);
     recordStartup(sink, QStringLiteral("application_identity"),
