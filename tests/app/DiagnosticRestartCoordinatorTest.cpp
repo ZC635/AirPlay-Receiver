@@ -26,6 +26,7 @@ private slots:
     void coordinatedChildWaitsForParentAfterReady();
     void coordinatedChildExitsForHandoffFailures();
     void sessionFailureSendsBoundedSanitizedErrorAndExits();
+    void normalCloseWritesSessionSummaryMarkers();
     void childWaitFailureClosesHandleAndRecordsHandoffFailure();
 };
 
@@ -276,6 +277,24 @@ void DiagnosticRestartCoordinatorTest::sessionFailureSendsBoundedSanitizedErrorA
     QVERIFY(!line.contains('\r'));
 }
 
+void DiagnosticRestartCoordinatorTest::normalCloseWritesSessionSummaryMarkers() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DiagnosticSessionOptions options;
+    options.applicationDirectory = directory.path();
+    auto created = DiagnosticSession::create(options);
+    QVERIFY(created.session);
+    const QString logPath = created.session->filePath();
+    created.session->closeNormally();
+
+    QFile log(logPath);
+    QVERIFY(log.open(QIODevice::ReadOnly));
+    const QByteArray contents = log.readAll();
+    QVERIFY(!contents.contains("session_closed_normally"));
+    QVERIFY(contents.contains(" session session_summary"));
+    QVERIFY(contents.contains("normal_exit=yes"));
+}
+
 void DiagnosticRestartCoordinatorTest::childWaitFailureClosesHandleAndRecordsHandoffFailure() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -305,7 +324,8 @@ void DiagnosticRestartCoordinatorTest::childWaitFailureClosesHandleAndRecordsHan
     const QByteArray contents = log.readAll();
     QVERIFY(contents.contains(" ERROR startup child_handoff_failed"));
     QVERIFY(contents.contains("reason=parent_exit_wait_failed result=failed"));
-    QVERIFY(!contents.contains("session_closed_normally"));
+    QVERIFY(!contents.contains(" session session_summary"));
+    QVERIFY(!contents.contains("normal_exit=yes"));
 }
 
 QTEST_GUILESS_MAIN(DiagnosticRestartCoordinatorTest)
