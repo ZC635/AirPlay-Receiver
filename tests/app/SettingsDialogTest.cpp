@@ -13,12 +13,20 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyTypes.h"
 #include "backend/VideoQualitySettings.h"
 #include "platform/RecordingPathActions.h"
 
 namespace {
+bool isAscii(const QString &text) {
+    return std::all_of(text.cbegin(), text.cend(), [](QChar character) {
+        return character.unicode() <= 0x7f;
+    });
+}
+
 class FakeRecordingPathActions final : public RecordingPathActions {
 public:
     QString chooseExistingDirectory(QWidget *parent,
@@ -465,6 +473,9 @@ private slots:
         QVERIFY(buttons != nullptr);
         QCOMPARE(restart->text(), QString("Restart with Diagnostic Logging"));
         QCOMPARE(open->text(), QString("Open Log Folder"));
+        QVERIFY(isAscii(group->title()));
+        QVERIFY(isAscii(restart->text()));
+        QVERIFY(isAscii(open->text()));
         QVERIFY(layout->indexOf(group) > layout->indexOf(dialog.findChild<QGroupBox *>("hotkeyBindingGroup")));
         QVERIFY(layout->indexOf(group) < layout->indexOf(buttons));
 
@@ -498,6 +509,7 @@ private slots:
         QVERIFY(!summary->isHidden());
         QVERIFY(summary->text().contains("Could not save C:/settings.json"));
         QVERIFY(summary->text().contains("Could not open diagnostic log folder"));
+        QVERIFY(isAscii(summary->text()));
     }
 
     void initializesRecordingSettingsControls() {

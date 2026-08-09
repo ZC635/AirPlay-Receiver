@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <QString>
 #include <QVector>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -44,6 +45,7 @@ struct MainWindowRuntimeServices {
     DiagnosticRestartCoordinator *diagnosticRestartCoordinator = nullptr;
     DiagnosticUiPrompts *diagnosticPrompts = nullptr;
     bool diagnosticLoggingActive = false;
+    std::function<void()> quitApplication;
 };
 
 class MainWindow final : public QMainWindow {
@@ -125,6 +127,7 @@ private:
     DiagnosticRestartCoordinator *diagnosticRestartCoordinator_ = nullptr;
     std::unique_ptr<DiagnosticUiPrompts> ownedDiagnosticPrompts_;
     DiagnosticUiPrompts *diagnosticPrompts_ = nullptr;
+    std::function<void()> quitApplication_;
     QPointer<SettingsDialog> activeSettingsDialog_;
     QString currentError_;
     QString settingsPath_;
