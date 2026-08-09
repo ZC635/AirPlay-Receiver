@@ -28,6 +28,7 @@ private slots:
     void sessionFailureSendsBoundedSanitizedErrorAndExits();
     void normalCloseWritesSessionSummaryMarkers();
     void childWaitFailureClosesHandleAndRecordsHandoffFailure();
+    void rejectsParentPidsOutsideWindowsHandleRange();
 };
 
 namespace {
@@ -326,6 +327,32 @@ void DiagnosticRestartCoordinatorTest::childWaitFailureClosesHandleAndRecordsHan
     QVERIFY(contents.contains("reason=parent_exit_wait_failed result=failed"));
     QVERIFY(!contents.contains(" session session_summary"));
     QVERIFY(!contents.contains("normal_exit=yes"));
+}
+
+void DiagnosticRestartCoordinatorTest::rejectsParentPidsOutsideWindowsHandleRange() {
+    for (const QString &parentPid : {QStringLiteral("4294967296"), QStringLiteral("4294967297")}) {
+        const DiagnosticActivation activation = DiagnosticActivation::parse(
+            {"app", "--diagnostic-log", "--diagnostic-parent-pid=" + parentPid,
+             "--diagnostic-ready-token=private"}, {});
+        QVERIFY(!activation.isCoordinatedChild());
+        QCOMPARE(activation.argumentError, QStringLiteral("invalid_diagnostic_parent_pid"));
+
+        int openCalls = 0;
+        DiagnosticChildGateOperations operations;
+        operations.openParentForWait = [&openCalls](qint64, QString *) {
+            ++openCalls;
+            return reinterpret_cast<void *>(quintptr(1));
+        };
+        QCOMPARE(runDiagnosticChildGate(activation, nullptr, {}, operations),
+                 DiagnosticChildGateResult::ContinueStartup);
+        QCOMPARE(openCalls, 0);
+    }
+
+    const DiagnosticActivation maximum = DiagnosticActivation::parse(
+        {"app", "--diagnostic-log", "--diagnostic-parent-pid=4294967295",
+         "--diagnostic-ready-token=private"}, {});
+    QVERIFY(maximum.isCoordinatedChild());
+    QCOMPARE(maximum.parentPid, qint64(4294967295));
 }
 
 QTEST_GUILESS_MAIN(DiagnosticRestartCoordinatorTest)

@@ -11,6 +11,8 @@
 #endif
 #include <windows.h>
 
+#include <limits>
+
 namespace {
 
 constexpr auto diagnosticLog = "--diagnostic-log";
@@ -118,7 +120,8 @@ DiagnosticActivation DiagnosticActivation::parse(
             parentPidSeen = true;
             bool converted = false;
             const qint64 parentPid = argument.mid(qstrlen(parentPidPrefix)).toLongLong(&converted, 10);
-            if (!converted || parentPid <= 0) {
+            if (!converted || parentPid <= 0 ||
+                parentPid > static_cast<qint64>(std::numeric_limits<DWORD>::max())) {
                 result.argumentError = QStringLiteral("invalid_diagnostic_parent_pid");
                 return result;
             }
