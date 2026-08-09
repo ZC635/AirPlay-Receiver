@@ -4,6 +4,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QFile>
 
 #include "app/DiagnosticActivation.h"
 #include "app/DiagnosticRestartCoordinator.h"
@@ -25,6 +26,7 @@ private slots:
     void coordinatedChildWaitsForParentAfterReady();
     void coordinatedChildExitsForHandoffFailures();
     void sessionFailureSendsBoundedSanitizedErrorAndExits();
+    void childWaitFailureClosesHandleAndRecordsHandoffFailure();
 };
 
 namespace {
@@ -92,42 +94,53 @@ void DiagnosticRestartCoordinatorTest::errorIsSingleLineAndNeverReady() {
 
 void DiagnosticRestartCoordinatorTest::rejectsStartFailureAndSecondBegin() {
     DiagnosticRestartCoordinator failedStart(operationsFor(QStringLiteral("restart-test-fail"), nullptr, false));
+    QSignalSpy ready(&failedStart, &DiagnosticRestartCoordinator::childReady);
     QSignalSpy failures(&failedStart, &DiagnosticRestartCoordinator::failed);
     QVERIFY(!failedStart.begin(QStringLiteral("C:/receiver/airplay_receiver.exe"), 1234));
     QCOMPARE(failures.count(), 1);
+    QCOMPARE(ready.count(), 0);
 
     DiagnosticRestartCoordinator coordinator(operationsFor(QStringLiteral("restart-test-active")));
+    QSignalSpy activeReady(&coordinator, &DiagnosticRestartCoordinator::childReady);
     QVERIFY(coordinator.begin(QStringLiteral("C:/receiver/airplay_receiver.exe"), 1234));
     QVERIFY(!coordinator.begin(QStringLiteral("C:/receiver/airplay_receiver.exe"), 1234));
+    QCOMPARE(activeReady.count(), 0);
 }
 
 void DiagnosticRestartCoordinatorTest::malformedOverflowAndTimeoutFailOnce() {
     const QString token = QStringLiteral("restart-test-malformed");
     DiagnosticRestartCoordinator coordinator(operationsFor(token));
+    QSignalSpy ready(&coordinator, &DiagnosticRestartCoordinator::childReady);
     QSignalSpy failures(&coordinator, &DiagnosticRestartCoordinator::failed);
     QVERIFY(coordinator.begin(QStringLiteral("C:/receiver/airplay_receiver.exe"), 1234));
     connectAndWrite(token, QByteArray(1025, 'x'));
     QTRY_COMPARE(failures.count(), 1);
+    QCOMPARE(ready.count(), 0);
 
     DiagnosticRestartCoordinator timeout(operationsFor(QStringLiteral("restart-test-timeout")));
+    QSignalSpy timeoutReady(&timeout, &DiagnosticRestartCoordinator::childReady);
     QSignalSpy timeoutFailures(&timeout, &DiagnosticRestartCoordinator::failed);
     QVERIFY(timeout.begin(QStringLiteral("C:/receiver/airplay_receiver.exe"), 1234));
     QTimer *timer = timeout.findChild<QTimer *>();
     QVERIFY(timer);
     QVERIFY(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
     QCOMPARE(timeoutFailures.count(), 1);
+    QCOMPARE(timeoutReady.count(), 0);
 }
 
 void DiagnosticRestartCoordinatorTest::rejectsMalformedAndSecondConnectionExactlyOnce() {
     const QString malformedToken = QStringLiteral("restart-test-malformed-line");
     DiagnosticRestartCoordinator malformed(operationsFor(malformedToken));
+    QSignalSpy malformedReady(&malformed, &DiagnosticRestartCoordinator::childReady);
     QSignalSpy malformedFailures(&malformed, &DiagnosticRestartCoordinator::failed);
     QVERIFY(malformed.begin(QStringLiteral("C:/receiver/airplay_receiver.exe"), 1234));
     connectAndWrite(malformedToken, "NOT_READY\n");
     QTRY_COMPARE(malformedFailures.count(), 1);
+    QCOMPARE(malformedReady.count(), 0);
 
     const QString token = QStringLiteral("restart-test-second-connection");
     DiagnosticRestartCoordinator coordinator(operationsFor(token));
+    QSignalSpy ready(&coordinator, &DiagnosticRestartCoordinator::childReady);
     QSignalSpy failures(&coordinator, &DiagnosticRestartCoordinator::failed);
     QVERIFY(coordinator.begin(QStringLiteral("C:/receiver/airplay_receiver.exe"), 1234));
     QLocalSocket first;
@@ -143,6 +156,7 @@ void DiagnosticRestartCoordinatorTest::rejectsMalformedAndSecondConnectionExactl
     QVERIFY(timer);
     QVERIFY(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
     QCOMPARE(failures.count(), 1);
+    QCOMPARE(ready.count(), 0);
 }
 
 void DiagnosticRestartCoordinatorTest::incorrectServerNameCannotSignalReady() {
@@ -260,6 +274,38 @@ void DiagnosticRestartCoordinatorTest::sessionFailureSendsBoundedSanitizedErrorA
     QVERIFY(line.endsWith('\n'));
     QVERIFY(line.size() <= 1024);
     QVERIFY(!line.contains('\r'));
+}
+
+void DiagnosticRestartCoordinatorTest::childWaitFailureClosesHandleAndRecordsHandoffFailure() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DiagnosticSessionOptions options;
+    options.applicationDirectory = directory.path();
+    auto created = DiagnosticSession::create(options);
+    QVERIFY(created.session);
+    const QString logPath = created.session->filePath();
+    const DiagnosticActivation activation = DiagnosticActivation::parse(
+        {"app", "--diagnostic-log", "--diagnostic-parent-pid=1234", "--diagnostic-ready-token=private"}, {});
+    void *handle = reinterpret_cast<void *>(quintptr(1));
+    int timeout = 0;
+    int closes = 0;
+    DiagnosticChildGateOperations operations {
+        [handle](qint64, QString *) { return handle; },
+        [](const QString &, const QByteArray &line, QString *) { return line == QByteArrayLiteral("READY\n"); },
+        [&timeout](void *, int timeoutMs, QString *) { timeout = timeoutMs; return false; },
+        [&closes, handle](void *value) { QCOMPARE(value, handle); ++closes; },
+    };
+
+    QCOMPARE(runDiagnosticChildGate(activation, created.session.get(), {}, operations),
+             DiagnosticChildGateResult::ExitChild);
+    QCOMPARE(timeout, 30000);
+    QCOMPARE(closes, 1);
+    QFile log(logPath);
+    QVERIFY(log.open(QIODevice::ReadOnly));
+    const QByteArray contents = log.readAll();
+    QVERIFY(contents.contains(" ERROR startup child_handoff_failed"));
+    QVERIFY(contents.contains("reason=parent_exit_wait_failed result=failed"));
+    QVERIFY(!contents.contains("session_closed_normally"));
 }
 
 QTEST_GUILESS_MAIN(DiagnosticRestartCoordinatorTest)
