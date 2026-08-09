@@ -38,6 +38,7 @@ struct WindowsFirewallOperation {
 };
 
 QString windowsEnvironmentFirewallScript(QString executable);
+QString windowsNetworkCategoryForProfiles(const QStringList &categories);
 QString windowsSystemPowerShellPath(QString systemDirectory);
 qint64 windowsRouteMetricFromNative(quint32 metric);
 

@@ -258,6 +258,29 @@ private slots:
         QVERIFY(script.contains(QStringLiteral("$activeProfiles.Count -gt 0")));
     }
 
+    void mixedNetworkCategoriesUseDeterministicPrecedence() {
+        QCOMPARE(windowsNetworkCategoryForProfiles(
+                     {QStringLiteral("private"), QStringLiteral("public")}),
+                 QStringLiteral("public"));
+        QCOMPARE(windowsNetworkCategoryForProfiles(
+                     {QStringLiteral("public"), QStringLiteral("private")}),
+                 QStringLiteral("public"));
+        QCOMPARE(windowsNetworkCategoryForProfiles(
+                     {QStringLiteral("private"), QStringLiteral("domain")}),
+                 QStringLiteral("domain"));
+        QCOMPARE(windowsNetworkCategoryForProfiles(
+                     {QStringLiteral("domain"), QStringLiteral("private")}),
+                 QStringLiteral("domain"));
+        QCOMPARE(windowsNetworkCategoryForProfiles({QStringLiteral("private")}),
+                 QStringLiteral("private"));
+        QVERIFY(windowsNetworkCategoryForProfiles({}).isEmpty());
+
+        const QString script = windowsEnvironmentFirewallScript(QStringLiteral("receiver.exe"));
+        QVERIFY(!script.contains(QStringLiteral("$category=$categories|Select-Object -First 1")));
+        QVERIFY(script.contains(QStringLiteral("$categories -contains 'public'")));
+        QVERIFY(script.contains(QStringLiteral("$categories -contains 'domain'")));
+    }
+
     void eventsReportUnknownEnabledAndRouteMetricHonestly() {
         EnvironmentSnapshot snapshot = EnvironmentDiagnostics::collect(fakeProviders(), 3000);
         NetworkAdapterFact &adapter = snapshot.network.value.adapters.first();

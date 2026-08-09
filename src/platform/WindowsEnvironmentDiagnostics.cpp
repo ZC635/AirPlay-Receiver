@@ -163,7 +163,13 @@ WindowsFirewallOperation readFirewall(QDeadlineTimer deadline) {
     if (!document.isObject())
         return {};
     const QJsonObject object = document.object();
-    return {factFromJson(object, "category"), factFromJson(object, "profiles"),
+    DiagnosticFact category = factFromJson(object, "category");
+    if (category.status == DiagnosticFactStatus::Available) {
+        category.value = windowsNetworkCategoryForProfiles({category.value});
+        if (category.value.isEmpty())
+            category = DiagnosticFact::unavailable();
+    }
+    return {category, factFromJson(object, "profiles"),
             factFromJson(object, "rule")};
 }
 
@@ -228,13 +234,23 @@ QString windowsEnvironmentFirewallScript(QString executable) {
     return QStringLiteral(
         "$ErrorActionPreference='Stop';$target='%1';"
         "$categories=@(Get-NetConnectionProfile|ForEach-Object{switch($_.NetworkCategory){'DomainAuthenticated'{'domain'};'Private'{'private'};'Public'{'public'}}}|Where-Object{$_}|Select-Object -Unique);"
-        "$category=$categories|Select-Object -First 1;"
+        "$category=if($categories -contains 'public'){'public'}elseif($categories -contains 'domain'){'domain'}elseif($categories -contains 'private'){'private'}else{$null};"
         "$activeProfiles=@($categories|ForEach-Object{switch($_){'domain'{'Domain'};'private'{'Private'};'public'{'Public'}}});"
         "$profiles=(Get-NetFirewallProfile|ForEach-Object{$n=$_.Name.ToLowerInvariant();$v=if($_.Enabled){'on'}else{'off'};$n+'='+$v}) -join ',';"
         "$rule='not_read';if($activeProfiles.Count -gt 0){try{$candidateRules=@();Get-NetFirewallRule -PolicyStore ActiveStore|ForEach-Object{$r=$_;$ruleProfiles=@($r.Profile.ToString().Split(',')|ForEach-Object{$_.Trim()});$profileApplies=($ruleProfiles -contains 'Any') -or (($ruleProfiles|Where-Object{$activeProfiles -contains $_}).Count -gt 0);if($r.Enabled.ToString() -eq 'True' -and $r.Direction.ToString() -eq 'Inbound' -and $profileApplies){Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r|ForEach-Object{if($_.Program -ieq $target){$candidateRules+=$r}}}};"
         "if($candidateRules.Count -eq 0){$rule='absent'}elseif(($candidateRules|ForEach-Object{$_.Action}) -contains 'Block'){$rule='denied'}else{$rule='confirmed'}}catch{$rule='not_read'}};"
         "[pscustomobject]@{category=$category;profiles=$profiles;rule=$rule}|ConvertTo-Json -Compress")
         .arg(executable);
+}
+
+QString windowsNetworkCategoryForProfiles(const QStringList &categories) {
+    if (categories.contains(QStringLiteral("public"), Qt::CaseInsensitive))
+        return QStringLiteral("public");
+    if (categories.contains(QStringLiteral("domain"), Qt::CaseInsensitive))
+        return QStringLiteral("domain");
+    if (categories.contains(QStringLiteral("private"), Qt::CaseInsensitive))
+        return QStringLiteral("private");
+    return {};
 }
 
 QString windowsSystemPowerShellPath(QString systemDirectory) {
