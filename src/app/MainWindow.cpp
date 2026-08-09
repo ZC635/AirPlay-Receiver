@@ -162,6 +162,10 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     } else {
         diagnosticPrompts_ = runtimeServices.diagnosticPrompts;
     }
+    quitApplication_ = runtimeServices.quitApplication;
+    if (!quitApplication_) {
+        quitApplication_ = [] { QCoreApplication::quit(); };
+    }
     initializeAppResources();
     setWindowIcon(QIcon(":/icons/app-icon.ico"));
     setWindowTitle("AirPlay Receiver");
@@ -289,7 +293,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
             if (receiver_ != nullptr) {
                 receiver_->stop();
             }
-            QCoreApplication::quit();
+            quitApplication_();
         });
         connect(diagnosticRestartCoordinator_, &DiagnosticRestartCoordinator::failed, this,
                 [this](const QString &error) {
@@ -588,7 +592,6 @@ void MainWindow::restartWithDiagnosticLogging(SettingsDialog &dialog) {
                 this, "Settings has unapplied changes. Restarting will discard them. Continue?")) {
             return;
         }
-        dialog.reject();
     }
     if (receiverSessionActive_ && (diagnosticPrompts_ == nullptr || !diagnosticPrompts_->confirmDisconnectMirroring(
             this, "Restarting disconnects the current mirroring session. Continue?"))) {
