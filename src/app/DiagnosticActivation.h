@@ -4,6 +4,10 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
+class DiagnosticSession;
+
 enum class DiagnosticActivationSource { None, CommandArgument, EnvironmentVariable };
 
 struct DiagnosticActivation {
@@ -19,3 +23,16 @@ struct DiagnosticActivation {
 
     static DiagnosticActivation parse(const QStringList &arguments, const QByteArray &environmentValue);
 };
+
+enum class DiagnosticChildGateResult { ContinueStartup, ExitChild };
+
+struct DiagnosticChildGateOperations {
+    std::function<void *(qint64, QString *)> openParentForWait;
+    std::function<bool(const QString &, const QByteArray &, QString *)> sendReadyLine;
+    std::function<bool(void *, int, QString *)> waitForParentExit;
+    std::function<void(void *)> closeParentHandle;
+};
+
+DiagnosticChildGateResult runDiagnosticChildGate(
+    const DiagnosticActivation &, DiagnosticSession *, const QString &sessionCreationError,
+    DiagnosticChildGateOperations operations);

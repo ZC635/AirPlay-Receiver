@@ -2,6 +2,10 @@ add_library(airplay_test_support INTERFACE)
 target_include_directories(airplay_test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(airplay_test_support INTERFACE airplay_app_lib)
 
+add_executable(DiagnosticRestartCoordinatorTest app/DiagnosticRestartCoordinatorTest.cpp)
+target_link_libraries(DiagnosticRestartCoordinatorTest PRIVATE airplay_test_support Qt6::Test Qt6::Network)
+add_test(NAME DiagnosticRestartCoordinatorTest COMMAND DiagnosticRestartCoordinatorTest)
+
 add_executable(DiagnosticLogSinkTest diagnostics/DiagnosticLogSinkTest.cpp)
 target_link_libraries(DiagnosticLogSinkTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME DiagnosticLogSinkTest COMMAND DiagnosticLogSinkTest)
@@ -281,6 +285,7 @@ execute_process(
 )
 
 set(AIRPLAY_QT_TESTS
+    DiagnosticRestartCoordinatorTest
     DiagnosticLogSinkTest
     DiagnosticActivationTest
     QtDiagnosticMessageBridgeTest

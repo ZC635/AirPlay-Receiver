@@ -52,6 +52,8 @@ add_library(airplay_app_lib
     src/app/AppSettings.cpp
     src/app/DiagnosticActivation.cpp
     src/app/DiagnosticActivation.h
+    src/app/DiagnosticRestartCoordinator.cpp
+    src/app/DiagnosticRestartCoordinator.h
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
     src/app/AppSettingsStore.h
