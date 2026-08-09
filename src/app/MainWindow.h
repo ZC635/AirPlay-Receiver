@@ -18,12 +18,33 @@ class QLabel;
 class QImage;
 class QCloseEvent;
 class RecordingPathActions;
+class DiagnosticLogFolderActions;
+class DiagnosticRestartCoordinator;
 class AppSettingsStore;
 class SettingsApplyCoordinator;
 struct SettingsApplyPlan;
 struct SettingsApplyOutcome;
 enum class ReceiverApplyTiming;
 class VideoSurfaceWidget;
+class SettingsDialog;
+
+class DiagnosticUiPrompts {
+public:
+    virtual ~DiagnosticUiPrompts() = default;
+    virtual bool confirmPrivacy(QWidget *, const QString &) = 0;
+    virtual bool confirmDiscardDraft(QWidget *, const QString &) = 0;
+    virtual bool confirmDisconnectMirroring(QWidget *, const QString &) = 0;
+    virtual void showRestartUnavailable(QWidget *, const QString &) = 0;
+    virtual void showRestartFailure(QWidget *, const QString &) = 0;
+};
+
+struct MainWindowRuntimeServices {
+    RecordingPathActions *recordingPathActions = nullptr;
+    DiagnosticLogFolderActions *diagnosticLogFolderActions = nullptr;
+    DiagnosticRestartCoordinator *diagnosticRestartCoordinator = nullptr;
+    DiagnosticUiPrompts *diagnosticPrompts = nullptr;
+    bool diagnosticLoggingActive = false;
+};
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -35,7 +56,8 @@ public:
     MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver, QString settingsPath, QWidget *parent = nullptr);
     MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayReceiver *receiver,
                QString settingsPath, RecordingPathActions *recordingPathActions,
-               QWidget *parent = nullptr);
+               QWidget *parent = nullptr,
+               MainWindowRuntimeServices runtimeServices = {});
     ~MainWindow() override;
     bool isToolbarVisible() const;
     void toggleToolbarVisibility();
@@ -67,6 +89,8 @@ private:
     void syncVolumeFromReceiver(double volume);
     void updateReceiverState(ReceiverState state);
     void showSettingsDialog();
+    void restartWithDiagnosticLogging(SettingsDialog &dialog);
+    void openDiagnosticLogFolder(SettingsDialog &dialog);
     std::optional<ReceiverApplyTiming> chooseReceiverApplyTiming(const SettingsApplyPlan &plan);
     void presentDeferredReceiverApplyFailure(const SettingsApplyOutcome &outcome);
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
@@ -95,6 +119,13 @@ private:
     QPointer<AirPlayReceiver> receiver_;
     std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
     RecordingPathActions *recordingPathActions_ = nullptr;
+    std::unique_ptr<DiagnosticLogFolderActions> ownedDiagnosticLogFolderActions_;
+    DiagnosticLogFolderActions *diagnosticLogFolderActions_ = nullptr;
+    std::unique_ptr<DiagnosticRestartCoordinator> ownedDiagnosticRestartCoordinator_;
+    DiagnosticRestartCoordinator *diagnosticRestartCoordinator_ = nullptr;
+    std::unique_ptr<DiagnosticUiPrompts> ownedDiagnosticPrompts_;
+    DiagnosticUiPrompts *diagnosticPrompts_ = nullptr;
+    QPointer<SettingsDialog> activeSettingsDialog_;
     QString currentError_;
     QString settingsPath_;
     QString windowStatePath_;

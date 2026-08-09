@@ -6,6 +6,10 @@ add_executable(DiagnosticRestartCoordinatorTest app/DiagnosticRestartCoordinator
 target_link_libraries(DiagnosticRestartCoordinatorTest PRIVATE airplay_test_support Qt6::Test Qt6::Network)
 add_test(NAME DiagnosticRestartCoordinatorTest COMMAND DiagnosticRestartCoordinatorTest)
 
+add_executable(DiagnosticLogFolderActionsTest platform/DiagnosticLogFolderActionsTest.cpp)
+target_link_libraries(DiagnosticLogFolderActionsTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME DiagnosticLogFolderActionsTest COMMAND DiagnosticLogFolderActionsTest)
+
 add_executable(DiagnosticLogSinkTest diagnostics/DiagnosticLogSinkTest.cpp)
 target_link_libraries(DiagnosticLogSinkTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME DiagnosticLogSinkTest COMMAND DiagnosticLogSinkTest)
@@ -286,6 +290,7 @@ execute_process(
 
 set(AIRPLAY_QT_TESTS
     DiagnosticRestartCoordinatorTest
+    DiagnosticLogFolderActionsTest
     DiagnosticLogSinkTest
     DiagnosticActivationTest
     QtDiagnosticMessageBridgeTest
