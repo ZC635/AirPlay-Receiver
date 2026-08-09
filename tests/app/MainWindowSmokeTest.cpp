@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 #include "app/AppSettings.h"
 #include "app/AppSettingsStore.h"
+#include "app/DiagnosticRestartCoordinator.h"
 #include "app/MainWindow.h"
 #include "app/SettingsDialog.h"
 #include "app/ShortcutAction.h"
@@ -10,6 +11,7 @@
 #include "backend/ReceiverState.h"
 #include "platform/FakeHotkeyService.h"
 #include "platform/RecordingPathActions.h"
+#include "platform/DiagnosticLogFolderActions.h"
 
 #include <QComboBox>
 #include <QCheckBox>
@@ -168,6 +170,66 @@ public:
     int discardCallsIncludingIdle = 0;
 };
 
+class FakeDiagnosticUiPrompts final : public DiagnosticUiPrompts {
+public:
+    bool confirmPrivacy(QWidget *, const QString &message) override {
+        privacyMessages.append(message);
+        return privacyResult;
+    }
+
+    bool confirmDiscardDraft(QWidget *, const QString &message) override {
+        discardMessages.append(message);
+        return discardResult;
+    }
+
+    bool confirmDisconnectMirroring(QWidget *, const QString &message) override {
+        disconnectMessages.append(message);
+        return disconnectResult;
+    }
+
+    void showRestartUnavailable(QWidget *, const QString &message) override {
+        unavailableMessages.append(message);
+    }
+
+    void showRestartFailure(QWidget *, const QString &message) override {
+        failureMessages.append(message);
+    }
+
+    bool privacyResult = true;
+    bool discardResult = true;
+    bool disconnectResult = true;
+    QStringList privacyMessages;
+    QStringList discardMessages;
+    QStringList disconnectMessages;
+    QStringList unavailableMessages;
+    QStringList failureMessages;
+};
+
+class FakeDiagnosticLogFolderOperations {
+public:
+    DiagnosticLogFolderOperations operation() {
+        return {
+            [this](const QString &path) { createdTargets.append(path); return createError; },
+            [this](const QUrl &url) { openedTargets.append(url.toLocalFile()); return openError; },
+        };
+    }
+
+    QStringList createdTargets;
+    QStringList openedTargets;
+    QString createError;
+    QString openError;
+};
+
+class DiagnosticOrderingReceiver final : public FakeAirPlayReceiver {
+public:
+    void stop() override {
+        events.append("receiver_stop");
+        FakeAirPlayReceiver::stop();
+    }
+
+    QStringList events;
+};
+
 class AcknowledgementOrderingReceiver final : public FakeAirPlayReceiver {
 public:
     RecordingStartResult startRecording(const RecordingOptions &options) override {
@@ -205,6 +267,170 @@ private slots:
 
         QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
         QCOMPARE(stopped.count(), 1);
+    }
+
+    void diagnosticRestartPrivacyDeclineDoesNotStartChild() {
+        FakeAirPlayReceiver receiver;
+        FakeDiagnosticUiPrompts prompts;
+        prompts.privacyResult = false;
+        int starts = 0;
+        DiagnosticRestartOperations operations;
+        operations.startDetached = [&starts](const QString &, const QStringList &, QString *) {
+            ++starts;
+            return true;
+        };
+        operations.createToken = [] { return QStringLiteral("diagnostic-privacy-decline"); };
+        DiagnosticRestartCoordinator coordinator(operations);
+        MainWindowRuntimeServices services;
+        services.diagnosticRestartCoordinator = &coordinator;
+        services.diagnosticPrompts = &prompts;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, QString(), nullptr, nullptr, services);
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settings != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            dialog->findChild<QPushButton *>("restartWithDiagnosticLoggingButton")->click();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+        });
+        settings->click();
+
+        QCOMPARE(prompts.privacyMessages, QStringList({
+            "Diagnostic logging records application, Windows, and privacy-filtered network information. Logs stay on this computer and are never uploaded automatically."}));
+        QCOMPARE(starts, 0);
+        QCOMPARE(receiver.stopCount, 0);
+    }
+
+    void diagnosticRestartHandlesDraftSessionFailureAndLogFolderErrors() {
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        FakeDiagnosticUiPrompts prompts;
+        prompts.discardResult = false;
+        int starts = 0;
+        DiagnosticRestartOperations operations;
+        operations.startDetached = [&starts](const QString &, const QStringList &, QString *) {
+            ++starts;
+            return false;
+        };
+        operations.createToken = [] { return QStringLiteral("diagnostic-confirmations"); };
+        DiagnosticRestartCoordinator coordinator(operations);
+        FakeDiagnosticLogFolderOperations folderOperations;
+        folderOperations.openError = "access denied";
+        DiagnosticLogFolderActions folders("C:/package", folderOperations.operation());
+        MainWindowRuntimeServices services;
+        services.diagnosticRestartCoordinator = &coordinator;
+        services.diagnosticLogFolderActions = &folders;
+        services.diagnosticPrompts = &prompts;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, QString(), nullptr, nullptr, services);
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settings != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Unapplied draft");
+            dialog->findChild<QPushButton *>("restartWithDiagnosticLoggingButton")->click();
+            QVERIFY(dialog->hasUnappliedChanges());
+            prompts.discardResult = true;
+            dialog->findChild<QPushButton *>("restartWithDiagnosticLoggingButton")->click();
+            dialog->findChild<QPushButton *>("openDiagnosticLogFolderButton")->click();
+            auto *summary = dialog->findChild<QLabel *>("settingsApplySummary");
+            QVERIFY(summary != nullptr);
+            QVERIFY(summary->text().contains("access denied"));
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+        });
+        settings->click();
+
+        QCOMPARE(prompts.discardMessages, QStringList({
+            "Settings has unapplied changes. Restarting will discard them. Continue?",
+            "Settings has unapplied changes. Restarting will discard them. Continue?"}));
+        QCOMPARE(prompts.disconnectMessages, QStringList({
+            "Restarting disconnects the current mirroring session. Continue?"}));
+        QCOMPARE(starts, 1);
+        QCOMPARE(prompts.failureMessages, QStringList({
+            "Diagnostic restart could not start the child process."}));
+        QCOMPARE(receiver.stopCount, 0);
+        QCOMPARE(folderOperations.createdTargets, QStringList({"C:/package/logs"}));
+        QCOMPARE(folderOperations.openedTargets, QStringList({"C:/package/logs"}));
+    }
+
+    void diagnosticRestartRejectsActiveRecordingAndDisablesActiveDiagnosticMode() {
+        FakeAirPlayReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        QVERIFY(receiver.startRecording({"C:/recordings", RecordingFormat::Mp4}).accepted);
+        FakeDiagnosticUiPrompts prompts;
+        int starts = 0;
+        DiagnosticRestartOperations operations;
+        operations.startDetached = [&starts](const QString &, const QStringList &, QString *) {
+            ++starts;
+            return true;
+        };
+        operations.createToken = [] { return QStringLiteral("diagnostic-recording-active"); };
+        DiagnosticRestartCoordinator coordinator(operations);
+        MainWindowRuntimeServices services;
+        services.diagnosticRestartCoordinator = &coordinator;
+        services.diagnosticPrompts = &prompts;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, QString(), nullptr, nullptr, services);
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settings != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            dialog->findChild<QPushButton *>("restartWithDiagnosticLoggingButton")->click();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+        });
+        settings->click();
+
+        QCOMPARE(prompts.unavailableMessages, QStringList({
+            "Diagnostic restart is unavailable while a recording is active or being finalized. Finish or discard the recording, then try again."}));
+        QCOMPARE(starts, 0);
+
+        window.setDiagnosticLoggingActive(true);
+        QCOMPARE(window.windowTitle(), QString("AirPlay Receiver [Diagnostic Logging]"));
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            QVERIFY(!dialog->findChild<QPushButton *>("restartWithDiagnosticLoggingButton")->isEnabled());
+            dialog->reject();
+        });
+        settings->click();
+    }
+
+    void diagnosticChildReadyStopsReceiverAfterReady() {
+        DiagnosticOrderingReceiver receiver;
+        FakeDiagnosticUiPrompts prompts;
+        int starts = 0;
+        QStringList order;
+        DiagnosticRestartOperations operations;
+        operations.startDetached = [&starts](const QString &, const QStringList &, QString *) {
+            ++starts;
+            return true;
+        };
+        operations.createToken = [] { return QStringLiteral("diagnostic-child-ready"); };
+        DiagnosticRestartCoordinator coordinator(operations);
+        connect(&coordinator, &DiagnosticRestartCoordinator::childReady,
+                [&order] { order.append("child_ready"); });
+        MainWindowRuntimeServices services;
+        services.diagnosticRestartCoordinator = &coordinator;
+        services.diagnosticPrompts = &prompts;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, QString(), nullptr, nullptr, services);
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settings != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            dialog->findChild<QPushButton *>("restartWithDiagnosticLoggingButton")->click();
+            coordinator.childReady();
+        });
+        settings->click();
+
+        QCOMPARE(starts, 1);
+        QCOMPARE(receiver.stopCount, 1);
+        order.append(receiver.events);
+        QCOMPARE(order, QStringList({"child_ready", "receiver_stop"}));
     }
 
     void constructsWithApplicationIcon() {

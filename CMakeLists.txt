@@ -109,6 +109,8 @@ add_library(airplay_app_lib
     src/backend/VideoQualitySettings.h
     src/platform/DependencyDiagnostics.cpp
     src/platform/DependencyDiagnostics.h
+    src/platform/DiagnosticLogFolderActions.cpp
+    src/platform/DiagnosticLogFolderActions.h
     src/platform/EnvironmentDiagnostics.cpp
     src/platform/EnvironmentDiagnostics.h
     src/platform/NetworkDiagnosticsMonitor.cpp
