@@ -97,6 +97,12 @@ A portable build is a self-contained deployment that does not require MSYS2 to r
 
 Or double-click `airplay_receiver.exe` inside the `build-uxplay-portable\` folder.
 
+### Diagnostics
+
+A normal launch writes no diagnostic logs. To collect logs for a troubleshooting session, choose `Restart with Diagnostic Logging` in Settings or explicitly run `Start with Diagnostic Logging.cmd` from the deployed application folder. `AIRPLAY_DEBUG_LOG` remains only as a safe-mode compatibility entry.
+
+Diagnostic logs are written only to the adjacent `logs` directory: one file per session, up to 20 MB per file, retaining the newest 10 files. Logs are never uploaded automatically; send them manually when requested. A diagnostic title suffix is the only continuous indication that diagnostic logging is active. If the adjacent directory cannot be written, no fallback directory is used and administrator privileges are not required. Diagnostic logging provides information for troubleshooting; it does not automatically determine the root cause.
+
 ### Run
 
 Launch through the helper script:
