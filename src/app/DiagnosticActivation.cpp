@@ -4,6 +4,7 @@
 #include "diagnostics/DiagnosticSanitizer.h"
 #include "diagnostics/DiagnosticSession.h"
 
+#include <QElapsedTimer>
 #include <QLocalSocket>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -59,12 +60,25 @@ DiagnosticChildGateOperations defaultChildGateOperations() {
                     *error = QStringLiteral("private handoff channel unavailable");
                 return false;
             }
-            if (socket.write(line) != line.size() || !socket.flush() ||
-                !socket.waitForBytesWritten(1000)) {
+            if (socket.write(line) != line.size()) {
                 if (error)
                     *error = QStringLiteral("private handoff channel unavailable");
                 socket.disconnectFromServer();
                 return false;
+            }
+            socket.flush();
+            QElapsedTimer writeDeadline;
+            writeDeadline.start();
+            while (socket.bytesToWrite() > 0) {
+                const int remainingMs = 1000 - static_cast<int>(writeDeadline.elapsed());
+                if (remainingMs <= 0 || !socket.waitForBytesWritten(remainingMs)) {
+                    if (socket.bytesToWrite() > 0) {
+                        if (error)
+                            *error = QStringLiteral("private handoff channel unavailable");
+                        socket.disconnectFromServer();
+                        return false;
+                    }
+                }
             }
             socket.disconnectFromServer();
             return true;

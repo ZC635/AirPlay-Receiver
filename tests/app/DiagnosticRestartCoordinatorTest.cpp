@@ -1,10 +1,16 @@
 #include <QtTest>
 
 #include <QLocalSocket>
+#include <QLocalServer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QFile>
+#include <QUuid>
+
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 #include "app/DiagnosticActivation.h"
 #include "app/DiagnosticRestartCoordinator.h"
@@ -29,6 +35,7 @@ private slots:
     void normalCloseWritesSessionSummaryMarkers();
     void childWaitFailureClosesHandleAndRecordsHandoffFailure();
     void rejectsParentPidsOutsideWindowsHandleRange();
+    void defaultChildReadySendCompletesWithoutAnEventLoop();
 };
 
 namespace {
@@ -353,6 +360,74 @@ void DiagnosticRestartCoordinatorTest::rejectsParentPidsOutsideWindowsHandleRang
          "--diagnostic-ready-token=private"}, {});
     QVERIFY(maximum.isCoordinatedChild());
     QCOMPARE(maximum.parentPid, qint64(4294967295));
+}
+
+void DiagnosticRestartCoordinatorTest::defaultChildReadySendCompletesWithoutAnEventLoop() {
+    const QString token = QStringLiteral("restart-test-default-send-") +
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DiagnosticSessionOptions options;
+    options.applicationDirectory = directory.path();
+    auto created = DiagnosticSession::create(options);
+    QVERIFY(created.session);
+    std::mutex serverMutex;
+    std::condition_variable serverListening;
+    bool listenComplete = false;
+    bool listening = false;
+    QByteArray received;
+    std::thread serverThread([&] {
+        QLocalServer server;
+        const bool started = server.listen(token);
+        {
+            std::lock_guard<std::mutex> lock(serverMutex);
+            listening = started;
+            listenComplete = true;
+        }
+        serverListening.notify_one();
+        if (!started || !server.waitForNewConnection(2000))
+            return;
+        std::unique_ptr<QLocalSocket> socket(server.nextPendingConnection());
+        if (socket && socket->waitForReadyRead(1000))
+            received = socket->readAll();
+    });
+    bool serverReady = false;
+    {
+        std::unique_lock<std::mutex> lock(serverMutex);
+        serverReady = serverListening.wait_for(lock, std::chrono::seconds(2),
+                                               [&] { return listenComplete; }) && listening;
+    }
+    if (!serverReady) {
+        serverThread.join();
+        QFAIL("Local readiness server could not listen.");
+    }
+    const DiagnosticActivation activation = DiagnosticActivation::parse(
+        {"app", "--diagnostic-log", "--diagnostic-parent-pid=1234",
+         "--diagnostic-ready-token=" + token}, {});
+    void *handle = reinterpret_cast<void *>(quintptr(1));
+    int waits = 0;
+    int timeout = 0;
+    int closes = 0;
+    DiagnosticChildGateOperations operations;
+    operations.openParentForWait = [handle](qint64, QString *) { return handle; };
+    operations.waitForParentExit = [&waits, &timeout](void *, int timeoutMs, QString *) {
+        ++waits;
+        timeout = timeoutMs;
+        return true;
+    };
+    operations.closeParentHandle = [&closes, handle](void *value) {
+        QCOMPARE(value, handle);
+        ++closes;
+    };
+
+    const DiagnosticChildGateResult result =
+        runDiagnosticChildGate(activation, created.session.get(), {}, operations);
+    serverThread.join();
+    QCOMPARE(result, DiagnosticChildGateResult::ContinueStartup);
+    QCOMPARE(waits, 1);
+    QCOMPARE(timeout, 30000);
+    QCOMPARE(closes, 1);
+    QCOMPARE(received, QByteArrayLiteral("READY\n"));
 }
 
 QTEST_GUILESS_MAIN(DiagnosticRestartCoordinatorTest)
