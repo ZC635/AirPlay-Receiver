@@ -28,9 +28,13 @@ public:
     AppSettings draftSettings() const;
     const AppSettings &committedBaseline() const;
     void presentApplyOutcome(const SettingsApplyOutcome &outcome);
+    bool hasUnappliedChanges() const;
+    void presentDiagnosticActionError(QString error);
 
 signals:
     void applyRequested(AppSettings draft);
+    void restartWithDiagnosticLoggingRequested();
+    void openDiagnosticLogFolderRequested();
 
 public slots:
     void accept() override;
@@ -61,4 +65,5 @@ private:
     QVector<SettingsFieldResult> fieldResults_;
     std::optional<SettingsApplyGlobalResult> globalResult_;
     QString pathActionError_;
+    QString diagnosticActionError_;
 };

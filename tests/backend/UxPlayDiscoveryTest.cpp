@@ -6,6 +6,7 @@
 
 #include <QByteArray>
 #include <QStringList>
+#include <QVector>
 
 #include <cstring>
 
@@ -17,6 +18,7 @@
 #include "backend/DiscoveryRestartController.h"
 #include "lib/raop.h"
 #include "platform/MdnsPublishing.h"
+#include "../support/CollectingDiagnosticLogSink.h"
 
 class FakeMdnsPublishing : public MdnsPublishing {
 public:
@@ -102,12 +104,23 @@ static RaopLayoutForTest *raopLayout(void *raop) {
 }
 
 static UxPlayDiscoveryConfig discoveryConfig(const QString &receiverName, FakeMdnsPublishing *publisher,
-                                             int restartDelayMs = 0) {
+                                             int restartDelayMs = 0,
+                                             DiagnosticLogSink *diagnosticSink = nullptr) {
     UxPlayDiscoveryConfig config;
     config.receiverName = receiverName;
     config.mdnsPublisher = publisher;
     config.restartDelayMs = restartDelayMs;
+    config.diagnosticSink = diagnosticSink;
     return config;
+}
+
+static int eventIndex(const CollectingSink &sink, const QString &name) {
+    for (int index = 0; index < sink.events.size(); ++index) {
+        if (sink.events.at(index).name == name) {
+            return index;
+        }
+    }
+    return -1;
 }
 #endif
 
@@ -115,6 +128,171 @@ class UxPlayDiscoveryTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void successfulStartReportsEveryBoundary() {
+#if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing mdns;
+        CollectingSink sink;
+        ScopedRaop raop;
+        QVERIFY(raop.isValid());
+        UxPlayDiscoveryConfig config;
+        config.receiverName = "Private Receiver Name";
+        config.mdnsPublisher = &mdns;
+        config.diagnosticSink = &sink;
+        UxPlayDiscovery discovery(config);
+
+        QVERIFY(discovery.start(raop.get(), 0));
+
+        QVERIFY(hasEvent(sink, "dns_sd_initialized"));
+        QVERIFY(hasEvent(sink, "http_server_started"));
+        QCOMPARE(findEvent(sink, "http_server_started").fields.value("port"),
+                 QString::number(mdns.lastPort));
+        QVERIFY(hasEvent(sink, "services_registered"));
+        const auto dnsSdInitialized = findEvent(sink, "dns_sd_initialized");
+        const auto httpServerStarted = findEvent(sink, "http_server_started");
+        const auto servicesRegistered = findEvent(sink, "services_registered");
+        for (const auto &event : {dnsSdInitialized, httpServerStarted, servicesRegistered}) {
+            QCOMPARE(event.component, QStringLiteral("discovery"));
+            QCOMPARE(event.severity, DiagnosticSeverity::Info);
+            QVERIFY(event.flushImmediately);
+        }
+        QVERIFY(eventIndex(sink, "dns_sd_initialized") < eventIndex(sink, "http_server_started"));
+        QVERIFY(eventIndex(sink, "http_server_started") < eventIndex(sink, "services_registered"));
+        QVERIFY(!joinedFields(sink).contains("Private Receiver Name"));
+
+        discovery.stop();
+        QCOMPARE(countEvents(sink, "services_unregistered"), 1);
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
+
+    void startFailureReportsSafeStageAndPreservesCleanup_data() {
+#if AIRPLAY_WITH_UXPLAY
+        QTest::addColumn<QString>("stage");
+        QTest::newRow("dns_sd_init") << QStringLiteral("dns_sd_init");
+        QTest::newRow("http_server_start") << QStringLiteral("http_server_start");
+        QTest::newRow("raop_register") << QStringLiteral("raop_register");
+        QTest::newRow("airplay_register") << QStringLiteral("airplay_register");
+        QTest::newRow("mdns_publish") << QStringLiteral("mdns_publish");
+#endif
+    }
+
+    void startFailureReportsSafeStageAndPreservesCleanup() {
+#if AIRPLAY_WITH_UXPLAY
+        QFETCH(QString, stage);
+        FakeMdnsPublishing mdns;
+        CollectingSink sink;
+        ScopedRaop raop;
+        QVERIFY(raop.isValid());
+        auto config = discoveryConfig("Private Receiver Name", &mdns, 0, &sink);
+        config.failureForStage = [stage](QStringView requestedStage) {
+            return requestedStage == stage ? QStringLiteral("private hook error") : QString{};
+        };
+        UxPlayDiscovery discovery(config);
+
+        QVERIFY(!discovery.start(raop.get(), 0));
+
+        const auto failure = findEvent(sink, "failure");
+        QCOMPARE(failure.component, QStringLiteral("discovery"));
+        QCOMPARE(failure.fields.value("stage"), stage);
+        QCOMPARE(failure.fields.value("result"), QStringLiteral("failed"));
+        QVERIFY(failure.flushImmediately);
+        if (stage == QStringLiteral("dns_sd_init")) {
+            QCOMPARE(failure.fields.value("classification"), QStringLiteral("injected_failure"));
+            QVERIFY(!failure.fields.contains("code"));
+            QVERIFY(!discovery.lastError().contains(QStringLiteral(": 0")));
+        }
+        if (stage == QStringLiteral("raop_register")
+            || stage == QStringLiteral("airplay_register")
+            || stage == QStringLiteral("mdns_publish")) {
+            QVERIFY(!hasEvent(sink, "services_unregistered"));
+        }
+        QVERIFY(!joinedFields(sink).contains("Private Receiver Name"));
+        QVERIFY(!joinedFields(sink).contains("private hook error"));
+        QVERIFY(!raop_is_running(static_cast<raop_t *>(raop.get())));
+        QVERIFY(discovery.m_dnssd == nullptr);
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
+
+    void nullRaopReportsSafeFailure() {
+#if AIRPLAY_WITH_UXPLAY
+        CollectingSink sink;
+        UxPlayDiscoveryConfig config;
+        config.diagnosticSink = &sink;
+        UxPlayDiscovery discovery(config);
+
+        QVERIFY(!discovery.start(nullptr, 0));
+
+        const auto failure = findEvent(sink, "failure");
+        QCOMPARE(failure.fields.value("stage"), QStringLiteral("raop_required"));
+        QCOMPARE(failure.fields.value("result"), QStringLiteral("failed"));
+        QVERIFY(failure.flushImmediately);
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
+
+    void restartReportsRealBoundariesInOrder() {
+#if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing mdns;
+        CollectingSink sink;
+        ScopedRaop raop;
+        QVERIFY(raop.isValid());
+        UxPlayDiscovery discovery(discoveryConfig("Private Receiver Name", &mdns, 10000, &sink));
+        QVERIFY(discovery.start(raop.get(), 0));
+
+        sink.events.clear();
+        QVERIFY(discovery.restart());
+        QVERIFY(hasEvent(sink, "restart_requested"));
+        QVERIFY(hasEvent(sink, "restart_scheduled"));
+        QVERIFY(!hasEvent(sink, "restart_completed"));
+        QVERIFY(hasEvent(sink, "http_server_stopped"));
+        QVERIFY(hasEvent(sink, "services_unregistered"));
+
+        discovery.m_discoveryRestartController->trigger();
+
+        QVERIFY(hasEvent(sink, "dns_sd_destroyed"));
+        QVERIFY(hasEvent(sink, "dns_sd_initialized"));
+        QVERIFY(hasEvent(sink, "http_server_started"));
+        QVERIFY(hasEvent(sink, "services_registered"));
+        QVERIFY(hasEvent(sink, "restart_completed"));
+        QVERIFY(eventIndex(sink, "restart_requested") < eventIndex(sink, "restart_scheduled"));
+        QVERIFY(eventIndex(sink, "restart_scheduled") < eventIndex(sink, "dns_sd_destroyed"));
+        QVERIFY(eventIndex(sink, "services_registered") < eventIndex(sink, "restart_completed"));
+
+        discovery.stop();
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
+
+    void restartFailureReportsRecoveryFailedAfterRealAttempt() {
+#if AIRPLAY_WITH_UXPLAY
+        FakeMdnsPublishing mdns;
+        CollectingSink sink;
+        ScopedRaop raop;
+        QVERIFY(raop.isValid());
+        UxPlayDiscovery discovery(discoveryConfig("Private Receiver Name", &mdns, 10000, &sink));
+        QVERIFY(discovery.start(raop.get(), 0));
+        discovery.m_config.failureForStage = [](QStringView stage) {
+            return stage == QStringLiteral("mdns_publish") ? QStringLiteral("private hook error") : QString{};
+        };
+
+        sink.events.clear();
+        QVERIFY(discovery.restart());
+        discovery.m_discoveryRestartController->trigger();
+
+        QVERIFY(hasEvent(sink, "recovery_failed"));
+        QVERIFY(!hasEvent(sink, "restart_completed"));
+        QVERIFY(eventIndex(sink, "services_unregistered") < eventIndex(sink, "recovery_failed"));
+        QVERIFY(!joinedFields(sink).contains("private hook error"));
+#else
+        QSKIP("UxPlay support is not enabled in this build");
+#endif
+    }
+
     void startPublishesInjectedMdnsServicesAndStopUnpublishes() {
 #if AIRPLAY_WITH_UXPLAY
         FakeMdnsPublishing publisher;
@@ -258,10 +436,12 @@ private slots:
 #if AIRPLAY_WITH_UXPLAY
         FakeMdnsPublishing publisher;
         publisher.failedPublishCalls = {2};
+        CollectingSink sink;
         ScopedRaop raop;
         QVERIFY(raop.isValid());
-        UxPlayDiscovery discovery(discoveryConfig("AirPlay Original Rename", &publisher, 10000));
+        UxPlayDiscovery discovery(discoveryConfig("AirPlay Original Rename", &publisher, 10000, &sink));
         QVERIFY(discovery.start(raop.get(), 0));
+        sink.events.clear();
 
         discovery.setReceiverName("AirPlay First Rename");
         QVERIFY(discovery.restart("AirPlay Original Rename"));
@@ -272,6 +452,9 @@ private slots:
         QVERIFY(discovery.restart("AirPlay Ignored Recovery Name"));
         QVERIFY(discovery.m_discoveryRestartController->pending());
         QCOMPARE(discovery.m_discoveryRestartController->recoveryName(), QString("AirPlay Original Rename"));
+        QCOMPARE(countEvents(sink, "restart_requested"), 2);
+        QCOMPARE(countEvents(sink, "restart_scheduled"), 1);
+        QCOMPARE(countEvents(sink, "restart_completed"), 0);
 
         discovery.m_discoveryRestartController->trigger();
 

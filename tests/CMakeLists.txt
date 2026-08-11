@@ -1,3 +1,39 @@
+add_library(airplay_test_support INTERFACE)
+target_include_directories(airplay_test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(airplay_test_support INTERFACE airplay_app_lib)
+
+add_executable(DiagnosticRestartCoordinatorTest app/DiagnosticRestartCoordinatorTest.cpp)
+target_link_libraries(DiagnosticRestartCoordinatorTest PRIVATE airplay_test_support Qt6::Test Qt6::Network)
+add_test(NAME DiagnosticRestartCoordinatorTest COMMAND DiagnosticRestartCoordinatorTest)
+
+add_executable(DiagnosticLogFolderActionsTest platform/DiagnosticLogFolderActionsTest.cpp)
+target_link_libraries(DiagnosticLogFolderActionsTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME DiagnosticLogFolderActionsTest COMMAND DiagnosticLogFolderActionsTest)
+
+add_executable(DiagnosticLogSinkTest diagnostics/DiagnosticLogSinkTest.cpp)
+target_link_libraries(DiagnosticLogSinkTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticLogSinkTest COMMAND DiagnosticLogSinkTest)
+
+add_executable(DiagnosticActivationTest app/DiagnosticActivationTest.cpp)
+target_link_libraries(DiagnosticActivationTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticActivationTest COMMAND DiagnosticActivationTest)
+
+add_executable(QtDiagnosticMessageBridgeTest diagnostics/QtDiagnosticMessageBridgeTest.cpp)
+target_link_libraries(QtDiagnosticMessageBridgeTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME QtDiagnosticMessageBridgeTest COMMAND QtDiagnosticMessageBridgeTest)
+
+add_executable(DiagnosticSanitizerTest diagnostics/DiagnosticSanitizerTest.cpp)
+target_link_libraries(DiagnosticSanitizerTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticSanitizerTest COMMAND DiagnosticSanitizerTest)
+
+add_executable(DiagnosticSessionTest diagnostics/DiagnosticSessionTest.cpp)
+target_link_libraries(DiagnosticSessionTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticSessionTest COMMAND DiagnosticSessionTest)
+
+add_executable(ThirdPartyDiagnosticTranslatorTest diagnostics/ThirdPartyDiagnosticTranslatorTest.cpp)
+target_link_libraries(ThirdPartyDiagnosticTranslatorTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME ThirdPartyDiagnosticTranslatorTest COMMAND ThirdPartyDiagnosticTranslatorTest)
+
 add_executable(SettingsChangeDeferrerTest app/SettingsChangeDeferrerTest.cpp)
 target_link_libraries(SettingsChangeDeferrerTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsChangeDeferrerTest COMMAND SettingsChangeDeferrerTest)
@@ -75,9 +111,30 @@ add_executable(DependencyDiagnosticsTest platform/DependencyDiagnosticsTest.cpp)
 target_link_libraries(DependencyDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME DependencyDiagnosticsTest COMMAND DependencyDiagnosticsTest)
 
+add_executable(EnvironmentDiagnosticsTest platform/EnvironmentDiagnosticsTest.cpp)
+target_link_libraries(EnvironmentDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME EnvironmentDiagnosticsTest COMMAND EnvironmentDiagnosticsTest)
+
+add_executable(NetworkDiagnosticsMonitorTest platform/NetworkDiagnosticsMonitorTest.cpp)
+target_link_libraries(NetworkDiagnosticsMonitorTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME NetworkDiagnosticsMonitorTest COMMAND NetworkDiagnosticsMonitorTest)
+
 add_executable(MdnsPublisherTest platform/MdnsPublisherTest.cpp)
 target_link_libraries(MdnsPublisherTest PRIVATE airplay_app_lib Qt6::Test)
+target_include_directories(MdnsPublisherTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
+
+add_executable(MdnsServerAdapterTest platform/MdnsServerAdapterTest.cpp)
+target_link_libraries(MdnsServerAdapterTest PRIVATE airplay_app_lib Qt6::Test)
+target_include_directories(MdnsServerAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(AIRPLAY_WITH_UXPLAY)
+    get_target_property(_qmdns_test_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
+    if(_qmdns_test_inc)
+        target_include_directories(MdnsServerAdapterTest PRIVATE ${_qmdns_test_inc})
+    endif()
+    target_link_libraries(MdnsServerAdapterTest PRIVATE qmdnsengine)
+endif()
+add_test(NAME MdnsServerAdapterTest COMMAND MdnsServerAdapterTest)
 
 add_executable(DiscoveryRestartControllerTest backend/DiscoveryRestartControllerTest.cpp)
 target_link_libraries(DiscoveryRestartControllerTest PRIVATE airplay_app_lib Qt6::Test)
@@ -232,6 +289,14 @@ execute_process(
 )
 
 set(AIRPLAY_QT_TESTS
+    DiagnosticRestartCoordinatorTest
+    DiagnosticLogFolderActionsTest
+    DiagnosticLogSinkTest
+    DiagnosticActivationTest
+    QtDiagnosticMessageBridgeTest
+    DiagnosticSanitizerTest
+    DiagnosticSessionTest
+    ThirdPartyDiagnosticTranslatorTest
     SettingsChangeDeferrerTest
     SettingsApplyTypesTest
     SettingsApplyCoordinatorTest
@@ -248,7 +313,10 @@ set(AIRPLAY_QT_TESTS
     AspectRatioSizingTest
     WindowsWindowBehaviorTest
     DependencyDiagnosticsTest
+    EnvironmentDiagnosticsTest
+    NetworkDiagnosticsMonitorTest
     MdnsPublisherTest
+    MdnsServerAdapterTest
     DiscoveryRestartControllerTest
     ReceiverStatePolicyTest
     ReceiverConfigurationChangeTest
