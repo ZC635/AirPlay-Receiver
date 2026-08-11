@@ -23,6 +23,7 @@
 #endif
 
 #if AIRPLAY_WITH_UXPLAY
+#include "backend/VideoFrameBridge.h"
 #include "lib/raop.h"
 #include "lib/dnssd.h"
 #include "platform/MdnsPublishing.h"
@@ -1860,7 +1861,7 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
         QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
-        QVERIFY(receiver.m_videoFrameBridge != nullptr);
+        QTRY_VERIFY(receiver.m_videoFrameBridge != nullptr);
 
         auto appsinkHasOneFrameHandler = [&receiver] {
             GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
@@ -1889,6 +1890,93 @@ private slots:
 
         QVERIFY(receiver.m_videoFrameBridge != nullptr);
         QVERIFY(appsinkHasOneFrameHandler());
+
+        receiver.stop();
+#endif
+    }
+
+    void workerCodecSelectionAttachesFrameBridgeOnReceiverThread() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Worker Codec Thread Test";
+        config.videoSink = "appsink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        receiver.setVideoFrameCallback([](QImage) {});
+        receiver.start();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+
+        std::atomic_int result = -1;
+        const quint64 generation = receiver.callbackGenerationForUxPlayCallback();
+        std::thread callback([&] {
+            result.store(receiver.chooseVideoCodecFromCallback(false, generation));
+        });
+        callback.join();
+
+        QCOMPARE(result.load(), 0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QVERIFY(receiver.m_videoFrameBridge != nullptr);
+        QCOMPARE(receiver.m_videoFrameBridge->thread(), receiver.thread());
+
+        receiver.stop();
+#endif
+    }
+
+    void queuedWorkerCodecSelectionSkipsStaleGeneration() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Stale Codec Generation Test";
+        config.videoSink = "appsink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        receiver.setVideoFrameCallback([](QImage) {});
+        receiver.start();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+
+        std::atomic_int result = -1;
+        const quint64 generation = receiver.callbackGenerationForUxPlayCallback();
+        std::thread callback([&] {
+            result.store(receiver.chooseVideoCodecFromCallback(false, generation));
+        });
+        callback.join();
+
+        QCOMPARE(result.load(), 0);
+        receiver.m_callbackGeneration.fetch_add(1);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+
+        receiver.stop();
+#endif
+    }
+
+    void queuedWorkerCodecSelectionSkipsStoppedRenderer() {
+#if AIRPLAY_WITH_UXPLAY
+        UxPlayReceiverConfig config;
+        config.serverName = "AirPlay Receiver Stopped Codec Renderer Test";
+        config.videoSink = "appsink";
+        config.audioSink = "fakesink";
+        UxPlayReceiver receiver(config);
+        receiver.setVideoFrameCallback([](QImage) {});
+        receiver.start();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+
+        std::atomic_int result = -1;
+        const quint64 generation = receiver.callbackGenerationForUxPlayCallback();
+        std::thread callback([&] {
+            result.store(receiver.chooseVideoCodecFromCallback(false, generation));
+        });
+        callback.join();
+
+        QCOMPARE(result.load(), 0);
+        receiver.stopVideoPipelineForDisconnect(generation);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QVERIFY(receiver.m_videoFrameBridge == nullptr);
 
         receiver.stop();
 #endif

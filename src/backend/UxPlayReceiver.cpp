@@ -1309,7 +1309,20 @@ int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265, quint64 gen
         result = chooseVideoRendererCodec(false, video_is_h265);
         if (result == 0) {
             m_videoIsH265 = video_is_h265;
-            attachVideoFrameBridgeToCurrentPipeline();
+            QPointer<UxPlayReceiver> guardedReceiver(this);
+            QMetaObject::invokeMethod(this, [guardedReceiver, generation, video_is_h265] {
+                if (!guardedReceiver) {
+                    return;
+                }
+                guardedReceiver->m_callbackDispatch.runWithRendererStarted(generation, [&] {
+                    if (guardedReceiver->m_videoRendererStopped.load() ||
+                        !guardedReceiver->m_videoRendererInitialized ||
+                        guardedReceiver->m_videoIsH265 != video_is_h265) {
+                        return;
+                    }
+                    guardedReceiver->attachVideoFrameBridgeToCurrentPipeline();
+                });
+            }, Qt::QueuedConnection);
             recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
                 QStringLiteral("codec_selected"), {{QStringLiteral("codec"), video_is_h265
                     ? QStringLiteral("h265") : QStringLiteral("h264")},
