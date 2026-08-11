@@ -1,6 +1,29 @@
 cmake_minimum_required(VERSION 3.24)
 project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX RC)
 
+set(AIRPLAY_BUILD_ID "" CACHE STRING "Optional build identity for diagnostic logs")
+
+function(airplay_escape_cpp_string output input)
+    set(escaped "${input}")
+    string(REPLACE "\\" "\\\\" escaped "${escaped}")
+    string(REPLACE "\"" "\\\"" escaped "${escaped}")
+    string(REPLACE "\r" "\\r" escaped "${escaped}")
+    string(REPLACE "\n" "\\n" escaped "${escaped}")
+    string(REPLACE "\t" "\\t" escaped "${escaped}")
+    set(${output} "${escaped}" PARENT_SCOPE)
+endfunction()
+
+airplay_escape_cpp_string(_airplay_version_cpp "${PROJECT_VERSION}")
+airplay_escape_cpp_string(_airplay_build_id_cpp "${AIRPLAY_BUILD_ID}")
+# Keep identity strings out of compiler command lines, which can split or warn on cache values.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/app")
+file(CONFIGURE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/app/BuildIdentity.h"
+    CONTENT "#pragma once\n\nnamespace AirPlayBuildIdentity {\ninline constexpr char16_t version[] = u\"@_airplay_version_cpp@\";\ninline constexpr char16_t buildId[] = u\"@_airplay_build_id_cpp@\";\n}\n"
+    @ONLY
+    NEWLINE_STYLE LF
+)
+
 if(NOT WIN32)
     message(FATAL_ERROR "This project requires Windows")
 endif()
@@ -10,12 +33,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test Network)
 
 include(cmake/UxPlayDependency.cmake)
 
 add_library(airplay_app_lib
+    src/diagnostics/DiagnosticEvent.h
+    src/diagnostics/DiagnosticLogSink.cpp
+    src/diagnostics/DiagnosticLogSink.h
+    src/diagnostics/DiagnosticSanitizer.h
+    src/diagnostics/DiagnosticSanitizer.cpp
+    src/diagnostics/DiagnosticSession.h
+    src/diagnostics/DiagnosticSession.cpp
+    src/diagnostics/QtDiagnosticMessageBridge.h
+    src/diagnostics/QtDiagnosticMessageBridge.cpp
+    src/diagnostics/ThirdPartyDiagnosticTranslator.h
+    src/diagnostics/ThirdPartyDiagnosticTranslator.cpp
     src/app/AppSettings.cpp
+    src/app/DiagnosticActivation.cpp
+    src/app/DiagnosticActivation.h
+    src/app/DiagnosticRestartCoordinator.cpp
+    src/app/DiagnosticRestartCoordinator.h
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
     src/app/AppSettingsStore.h
@@ -71,6 +109,14 @@ add_library(airplay_app_lib
     src/backend/VideoQualitySettings.h
     src/platform/DependencyDiagnostics.cpp
     src/platform/DependencyDiagnostics.h
+    src/platform/DiagnosticLogFolderActions.cpp
+    src/platform/DiagnosticLogFolderActions.h
+    src/platform/EnvironmentDiagnostics.cpp
+    src/platform/EnvironmentDiagnostics.h
+    src/platform/NetworkDiagnosticsMonitor.cpp
+    src/platform/NetworkDiagnosticsMonitor.h
+    src/platform/WindowsEnvironmentDiagnostics.cpp
+    src/platform/WindowsEnvironmentDiagnostics.h
     src/platform/AspectRatioSizing.cpp
     src/platform/AspectRatioSizing.h
     src/platform/FakeHotkeyService.h
@@ -85,11 +131,18 @@ add_library(airplay_app_lib
     src/platform/WindowsHotkeyService.cpp
     src/platform/WindowsHotkeyService.h
 )
-target_include_directories(airplay_app_lib PUBLIC src)
-target_compile_definitions(airplay_app_lib PUBLIC AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>)
-target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets)
+target_include_directories(airplay_app_lib PUBLIC
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
+target_compile_definitions(airplay_app_lib PUBLIC
+    AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>
+)
+target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::Network)
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE
+        src/platform/MdnsServerAdapter.cpp
+        src/platform/MdnsServerAdapter.h
         src/backend/RecordingController.cpp
         src/backend/RecordingController.h
         src/backend/GstRecordingPipeline.cpp
@@ -106,7 +159,7 @@ if(AIRPLAY_WITH_UXPLAY)
     endif()
 endif()
 if(WIN32)
-    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi)
+    target_link_libraries(airplay_app_lib PRIVATE user32 dwmapi iphlpapi advapi32)
 endif()
 
 add_executable(airplay_receiver src/app/main.cpp src/app/app-icon.rc)

@@ -176,6 +176,17 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     hotkeyLayout->addWidget(table_);
     hotkeyLayout->addLayout(resetLayout);
 
+    auto *diagnosticsGroup = new QGroupBox("Diagnostics", this);
+    diagnosticsGroup->setObjectName("diagnosticsSettingsGroup");
+    auto *restartWithDiagnosticLoggingButton = new QPushButton(
+        "Restart with Diagnostic Logging", diagnosticsGroup);
+    restartWithDiagnosticLoggingButton->setObjectName("restartWithDiagnosticLoggingButton");
+    auto *openDiagnosticLogFolderButton = new QPushButton("Open Log Folder", diagnosticsGroup);
+    openDiagnosticLogFolderButton->setObjectName("openDiagnosticLogFolderButton");
+    auto *diagnosticsLayout = new QVBoxLayout(diagnosticsGroup);
+    diagnosticsLayout->addWidget(restartWithDiagnosticLoggingButton);
+    diagnosticsLayout->addWidget(openDiagnosticLogFolderButton);
+
     auto *buttons = new QDialogButtonBox(this);
     buttons->addButton(QDialogButtonBox::Cancel);
     buttons->addButton("Apply", QDialogButtonBox::AcceptRole);
@@ -187,6 +198,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     layout->addWidget(videoGroup);
     layout->addWidget(recordingGroup);
     layout->addWidget(hotkeyGroup);
+    layout->addWidget(diagnosticsGroup);
     layout->addWidget(buttons);
 
     connect(receiverNameEdit_, &QLineEdit::textChanged, this, [this] {
@@ -228,6 +240,16 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             QDir::fromNativeSeparators(recordingOutputDirectoryEdit_->text())));
         refreshPresentation();
     });
+    connect(restartWithDiagnosticLoggingButton, &QPushButton::clicked, this, [this] {
+        diagnosticActionError_.clear();
+        refreshPresentation();
+        emit restartWithDiagnosticLoggingRequested();
+    });
+    connect(openDiagnosticLogFolderButton, &QPushButton::clicked, this, [this] {
+        diagnosticActionError_.clear();
+        refreshPresentation();
+        emit openDiagnosticLogFolderRequested();
+    });
 }
 
 SettingsDialog::~SettingsDialog() = default;
@@ -256,6 +278,15 @@ AppSettings SettingsDialog::draftSettings() const {
 
 const AppSettings &SettingsDialog::committedBaseline() const {
     return committedBaseline_;
+}
+
+bool SettingsDialog::hasUnappliedChanges() const {
+    return unappliedChangeCount() > 0;
+}
+
+void SettingsDialog::presentDiagnosticActionError(QString error) {
+    diagnosticActionError_ = std::move(error);
+    refreshPresentation();
 }
 
 void SettingsDialog::presentApplyOutcome(const SettingsApplyOutcome &outcome) {
@@ -388,6 +419,9 @@ void SettingsDialog::refreshPresentation() {
     }
     if (!pathActionError_.isEmpty()) {
         lines.push_back(pathActionError_);
+    }
+    if (!diagnosticActionError_.isEmpty()) {
+        lines.push_back(diagnosticActionError_);
     }
     if (lines.isEmpty()) {
         summaryLabel_->clear();

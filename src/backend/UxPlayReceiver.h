@@ -12,6 +12,7 @@
 
 #include "backend/AirPlayReceiver.h"
 #include "backend/UxPlayCallbackDispatch.h"
+#include "diagnostics/DiagnosticLogSink.h"
 #if AIRPLAY_WITH_UXPLAY
 #include "backend/RecordingController.h"
 #include <gst/gst.h>
@@ -28,6 +29,7 @@ struct UxPlayReceiverConfig {
     int basePort = 0;
     VideoQualitySettings videoQuality;
     MdnsPublishing *mdnsPublisher = nullptr;
+    DiagnosticLogSink *diagnosticSink = &nullDiagnosticLogSink();
 #if AIRPLAY_WITH_UXPLAY
     RecordingControllerHooks recordingControllerHooks;
     std::function<void(const QString &)> rendererCallObserver;
@@ -90,6 +92,11 @@ public:
     void setVolumeFromUxPlayCallback(double volume, quint64 generation);
     void handleLogMessageFromUxPlayCallback(int level, const char *message);
     void handleLogMessageFromUxPlayCallback(int level, const char *message, quint64 generation);
+    static void reportClientRequestFromUxPlayCallback(void *cls, char *deviceId, char *model,
+                                                       char *name, bool *admit);
+    void handleClientRequestFromUxPlayCallback(const char *model, quint64 generation);
+    void handleConnectionInitializedFromUxPlayCallback(quint64 generation);
+    void handleConnectionResetFromUxPlayCallback(int reason, quint64 generation);
     void setMetadataFromUxPlayCallback(const void *buffer, int buflen);
     void setMetadataFromUxPlayCallback(const void *buffer, int buflen, quint64 generation);
     void setCoverArtFromUxPlayCallback(const void *buffer, int buflen);
@@ -126,13 +133,14 @@ signals:
     void progressUpdated(int positionSec, int durationSec);
 
 private:
+    void recordDiagnostic(DiagnosticEvent event) const noexcept;
     void setState(ReceiverState state);
     void setError(QString error);
 #if AIRPLAY_WITH_UXPLAY
     enum class BackendErrorSafety { CanFinalize, Broken };
     void cleanupUxPlay();
     void endRecordingSession(bool canFinalize, bool waitForIdle);
-    void handleBackendError(QString error, BackendErrorSafety safety);
+    void handleBackendError(QString error, BackendErrorSafety safety, QString diagnosticStage);
     void observeRendererCall(const QString &call) const;
     void installVideoSampleTap();
     void installAudioSampleTap();
@@ -145,6 +153,7 @@ private:
 #endif
 
     UxPlayReceiverConfig m_config;
+    DiagnosticLogSink *m_diagnosticSink = &nullDiagnosticLogSink();
     ReceiverState m_state = ReceiverState::Idle;
     QString m_error;
     std::atomic<double> m_volume = 1.0;
@@ -157,6 +166,7 @@ private:
     std::atomic_bool m_renderersStarted = false;
     std::atomic_bool m_videoRendererStopped = false;
     std::atomic_bool m_audioRendererStarted = false;
+    std::atomic_bool m_connectionResetReported = false;
     std::atomic_bool m_acceptingCallbacks = false;
     std::atomic_bool m_acceptingVideoTapSamples = false;
     std::atomic<quint64> m_callbackGeneration = 0;

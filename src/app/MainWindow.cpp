@@ -1,6 +1,7 @@
 #include "app/MainWindow.h"
 
 #include "app/AppSettingsStore.h"
+#include "app/DiagnosticRestartCoordinator.h"
 #include "app/SettingsApplyCoordinator.h"
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyTypes.h"
@@ -9,12 +10,14 @@
 #include "app/WindowStateStore.h"
 #include "backend/AirPlayReceiver.h"
 #include "platform/AspectRatioSizing.h"
+#include "platform/DiagnosticLogFolderActions.h"
 #include "platform/HotkeyService.h"
 #include "platform/RecordingPathActions.h"
 #include "platform/WindowsWindowBehavior.h"
 
 #include <algorithm>
 #include <QCloseEvent>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QGridLayout>
@@ -65,6 +68,35 @@ QString windowStatePathForSettingsPath(const QString &settingsPath) {
     return QFileInfo(settingsPath).absoluteDir().filePath(kWindowStateFileName);
 }
 
+class DefaultDiagnosticUiPrompts final : public DiagnosticUiPrompts {
+public:
+    bool confirmPrivacy(QWidget *parent, const QString &message) override {
+        return QMessageBox::question(parent, "Diagnostic Logging", message,
+                                     QMessageBox::Yes | QMessageBox::Cancel,
+                                     QMessageBox::Cancel) == QMessageBox::Yes;
+    }
+
+    bool confirmDiscardDraft(QWidget *parent, const QString &message) override {
+        return QMessageBox::question(parent, "Diagnostic Logging", message,
+                                     QMessageBox::Yes | QMessageBox::Cancel,
+                                     QMessageBox::Cancel) == QMessageBox::Yes;
+    }
+
+    bool confirmDisconnectMirroring(QWidget *parent, const QString &message) override {
+        return QMessageBox::question(parent, "Diagnostic Logging", message,
+                                     QMessageBox::Yes | QMessageBox::Cancel,
+                                     QMessageBox::Cancel) == QMessageBox::Yes;
+    }
+
+    void showRestartUnavailable(QWidget *parent, const QString &message) override {
+        QMessageBox::warning(parent, "Diagnostic Restart Unavailable", message, QMessageBox::Ok);
+    }
+
+    void showRestartFailure(QWidget *parent, const QString &message) override {
+        QMessageBox::critical(parent, "Diagnostic Restart Failed", message, QMessageBox::Ok);
+    }
+};
+
 }
 
 static void initializeAppResources() {
@@ -86,7 +118,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys, AirPlayRece
 
 MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
                        AirPlayReceiver *receiver, QString settingsPath,
-                       RecordingPathActions *recordingPathActions, QWidget *parent)
+                       RecordingPathActions *recordingPathActions, QWidget *parent,
+                       MainWindowRuntimeServices runtimeServices)
     : QMainWindow(parent),
       toolbar_(new ToolbarWidget(this)),
       statusLabel_(new QLabel("Ready for AirPlay", this)),
@@ -105,6 +138,33 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
         recordingPathActions_ = ownedRecordingPathActions_.get();
     } else {
         recordingPathActions_ = recordingPathActions;
+    }
+    if (runtimeServices.recordingPathActions != nullptr) {
+        recordingPathActions_ = runtimeServices.recordingPathActions;
+        ownedRecordingPathActions_.reset();
+    }
+    if (runtimeServices.diagnosticLogFolderActions == nullptr) {
+        ownedDiagnosticLogFolderActions_ = std::make_unique<DiagnosticLogFolderActions>(
+            QCoreApplication::applicationDirPath());
+        diagnosticLogFolderActions_ = ownedDiagnosticLogFolderActions_.get();
+    } else {
+        diagnosticLogFolderActions_ = runtimeServices.diagnosticLogFolderActions;
+    }
+    if (runtimeServices.diagnosticRestartCoordinator == nullptr) {
+        ownedDiagnosticRestartCoordinator_ = std::make_unique<DiagnosticRestartCoordinator>();
+        diagnosticRestartCoordinator_ = ownedDiagnosticRestartCoordinator_.get();
+    } else {
+        diagnosticRestartCoordinator_ = runtimeServices.diagnosticRestartCoordinator;
+    }
+    if (runtimeServices.diagnosticPrompts == nullptr) {
+        ownedDiagnosticPrompts_ = std::make_unique<DefaultDiagnosticUiPrompts>();
+        diagnosticPrompts_ = ownedDiagnosticPrompts_.get();
+    } else {
+        diagnosticPrompts_ = runtimeServices.diagnosticPrompts;
+    }
+    quitApplication_ = runtimeServices.quitApplication;
+    if (!quitApplication_) {
+        quitApplication_ = [] { QCoreApplication::quit(); };
     }
     initializeAppResources();
     setWindowIcon(QIcon(":/icons/app-icon.ico"));
@@ -223,9 +283,44 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     });
 
     restoreWindowState();
+    setDiagnosticLoggingActive(runtimeServices.diagnosticLoggingActive);
+
+    if (diagnosticRestartCoordinator_ != nullptr) {
+        connect(diagnosticRestartCoordinator_, &DiagnosticRestartCoordinator::childReady, this, [this] {
+            if (activeSettingsDialog_ != nullptr) {
+                activeSettingsDialog_->reject();
+            }
+            if (receiver_ != nullptr) {
+                receiver_->stop();
+            }
+            quitApplication_();
+        });
+        connect(diagnosticRestartCoordinator_, &DiagnosticRestartCoordinator::failed, this,
+                [this](const QString &error) {
+                    if (diagnosticPrompts_ != nullptr) {
+                        diagnosticPrompts_->showRestartFailure(this, error);
+                    }
+                });
+    }
 }
 
 MainWindow::~MainWindow() = default;
+
+void MainWindow::setDiagnosticLoggingActive(bool active) {
+    diagnosticLoggingActive_ = active;
+    setWindowTitle(diagnosticLoggingActive_
+        ? QStringLiteral("AirPlay Receiver [Diagnostic Logging]")
+        : QStringLiteral("AirPlay Receiver"));
+}
+
+void MainWindow::handleDiagnosticWriteFailure(QString error) {
+    if (diagnosticLoggingStopped_) {
+        return;
+    }
+    diagnosticLoggingStopped_ = true;
+    setDiagnosticLoggingActive(false);
+    emit diagnosticLoggingStopped(std::move(error));
+}
 
 bool MainWindow::isToolbarVisible() const {
     return !toolbar_->isHidden();
@@ -452,6 +547,10 @@ void MainWindow::updateReceiverState(ReceiverState state) {
 
 void MainWindow::showSettingsDialog() {
     SettingsDialog dialog(settings_, this, recordingPathActions_);
+    activeSettingsDialog_ = &dialog;
+    if (auto *restartButton = dialog.findChild<QPushButton *>("restartWithDiagnosticLoggingButton")) {
+        restartButton->setEnabled(!diagnosticLoggingActive_);
+    }
     connect(&dialog, &SettingsDialog::applyRequested, this, [this, &dialog](const AppSettings &draft) {
         const RecordingState recordingState = receiver_ == nullptr
             ? RecordingState::Idle : receiver_->recordingState();
@@ -466,7 +565,49 @@ void MainWindow::showSettingsDialog() {
         applyShortcutTooltips();
         dialog.presentApplyOutcome(outcome);
     });
+    connect(&dialog, &SettingsDialog::restartWithDiagnosticLoggingRequested, this,
+            [this, &dialog] { restartWithDiagnosticLogging(dialog); });
+    connect(&dialog, &SettingsDialog::openDiagnosticLogFolderRequested, this,
+            [this, &dialog] { openDiagnosticLogFolder(dialog); });
     dialog.exec();
+    activeSettingsDialog_.clear();
+}
+
+void MainWindow::restartWithDiagnosticLogging(SettingsDialog &dialog) {
+    const RecordingState recordingState = receiver_ == nullptr
+        ? recordingState_ : receiver_->recordingState();
+    if (recordingState == RecordingState::Recording || recordingState == RecordingState::Finalizing) {
+        if (diagnosticPrompts_ != nullptr) {
+            diagnosticPrompts_->showRestartUnavailable(
+                this, "Diagnostic restart is unavailable while a recording is active or being finalized. Finish or discard the recording, then try again.");
+        }
+        return;
+    }
+    if (diagnosticPrompts_ == nullptr || !diagnosticPrompts_->confirmPrivacy(
+            this, "Diagnostic logging records application, Windows, and privacy-filtered network information. Logs stay on this computer and are never uploaded automatically.")) {
+        return;
+    }
+    if (dialog.hasUnappliedChanges()) {
+        if (!diagnosticPrompts_->confirmDiscardDraft(
+                this, "Settings has unapplied changes. Restarting will discard them. Continue?")) {
+            return;
+        }
+    }
+    if (receiverSessionActive_ && (diagnosticPrompts_ == nullptr || !diagnosticPrompts_->confirmDisconnectMirroring(
+            this, "Restarting disconnects the current mirroring session. Continue?"))) {
+        return;
+    }
+    if (diagnosticRestartCoordinator_ != nullptr) {
+        diagnosticRestartCoordinator_->begin(QCoreApplication::applicationFilePath(),
+                                             QCoreApplication::applicationPid());
+    }
+}
+
+void MainWindow::openDiagnosticLogFolder(SettingsDialog &dialog) {
+    if (diagnosticLogFolderActions_ == nullptr) {
+        return;
+    }
+    dialog.presentDiagnosticActionError(diagnosticLogFolderActions_->ensureAndOpen());
 }
 
 std::optional<ReceiverApplyTiming> MainWindow::chooseReceiverApplyTiming(

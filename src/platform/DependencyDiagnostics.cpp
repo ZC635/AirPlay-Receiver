@@ -75,16 +75,20 @@ bool DependencyDiagnostics::shouldCheckStandaloneRuntime() {
 }
 
 QStringList DependencyDiagnostics::checkStandaloneRuntime(const QString &directory) {
-    const QStringList requiredPaths = playbackRuntimePaths();
+    return standaloneRuntimeSnapshot(directory).missingRelativePaths;
+}
 
-    QStringList missing;
+StandaloneRuntimeSnapshot DependencyDiagnostics::standaloneRuntimeSnapshot(const QString &directory) {
+    StandaloneRuntimeSnapshot snapshot;
+    snapshot.relativePaths = playbackRuntimePaths();
     const QDir baseDir(directory);
-    for (const QString &relativePath : requiredPaths) {
+    for (const QString &relativePath : snapshot.relativePaths) {
         if (!QFileInfo::exists(baseDir.filePath(relativePath))) {
-            missing.append(relativePath);
+            snapshot.missingRelativePaths.append(relativePath);
         }
     }
-    return missing;
+    snapshot.complete = snapshot.missingRelativePaths.isEmpty();
+    return snapshot;
 }
 
 bool DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(

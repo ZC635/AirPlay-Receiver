@@ -2,6 +2,7 @@
 
 #include <QComboBox>
 #include <QCheckBox>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFileInfo>
 #include <QGroupBox>
@@ -12,12 +13,20 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyTypes.h"
 #include "backend/VideoQualitySettings.h"
 #include "platform/RecordingPathActions.h"
 
 namespace {
+bool isAscii(const QString &text) {
+    return std::all_of(text.cbegin(), text.cend(), [](QChar character) {
+        return character.unicode() <= 0x7f;
+    });
+}
+
 class FakeRecordingPathActions final : public RecordingPathActions {
 public:
     QString chooseExistingDirectory(QWidget *parent,
@@ -441,13 +450,66 @@ private slots:
         }
 
         QCOMPARE(groupTitles,
-                 QStringList({"General", "Video", "Recording", "Hotkey Binding"}));
+                 QStringList({"General", "Video", "Recording", "Hotkey Binding", "Diagnostics"}));
         QVERIFY(dialog.findChild<QGroupBox *>("recordingSettingsGroup") != nullptr);
         QVERIFY(dialog.findChild<QComboBox *>("recordingFormatCombo") != nullptr);
         QVERIFY(dialog.findChild<QLineEdit *>("recordingOutputDirectoryEdit") != nullptr);
         QVERIFY(dialog.findChild<QPushButton *>("chooseRecordingDirectoryButton") != nullptr);
         QVERIFY(dialog.findChild<QPushButton *>("openRecordingDirectoryButton") != nullptr);
         QVERIFY(dialog.findChild<QCheckBox *>("showRecordingCompletionMessageCheckBox") != nullptr);
+    }
+
+    void diagnosticsActionsHaveRequiredLayoutTextAndSignals() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *layout = qobject_cast<QVBoxLayout *>(dialog.layout());
+        auto *group = dialog.findChild<QGroupBox *>("diagnosticsSettingsGroup");
+        auto *restart = dialog.findChild<QPushButton *>("restartWithDiagnosticLoggingButton");
+        auto *open = dialog.findChild<QPushButton *>("openDiagnosticLogFolderButton");
+        auto *buttons = dialog.findChild<QDialogButtonBox *>();
+        QVERIFY(layout != nullptr);
+        QVERIFY(group != nullptr);
+        QVERIFY(restart != nullptr);
+        QVERIFY(open != nullptr);
+        QVERIFY(buttons != nullptr);
+        QCOMPARE(restart->text(), QString("Restart with Diagnostic Logging"));
+        QCOMPARE(open->text(), QString("Open Log Folder"));
+        QVERIFY(isAscii(group->title()));
+        QVERIFY(isAscii(restart->text()));
+        QVERIFY(isAscii(open->text()));
+        QVERIFY(layout->indexOf(group) > layout->indexOf(dialog.findChild<QGroupBox *>("hotkeyBindingGroup")));
+        QVERIFY(layout->indexOf(group) < layout->indexOf(buttons));
+
+        QSignalSpy restartSpy(&dialog, &SettingsDialog::restartWithDiagnosticLoggingRequested);
+        QSignalSpy openSpy(&dialog, &SettingsDialog::openDiagnosticLogFolderRequested);
+        restart->click();
+        open->click();
+        QCOMPARE(restartSpy.count(), 1);
+        QCOMPARE(openSpy.count(), 1);
+    }
+
+    void diagnosticPresentationKeepsExistingErrorsAndTracksUnappliedDrafts() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        QVERIFY(summary != nullptr);
+        QVERIFY(receiver != nullptr);
+        QVERIFY(!dialog.hasUnappliedChanges());
+        receiver->setText("Draft receiver");
+        QVERIFY(dialog.hasUnappliedChanges());
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        SettingsApplyGlobalResult global;
+        global.persistence.targetPath = "C:/settings.json";
+        global.persistence.errorString = "access denied";
+        outcome.globalResult = global;
+        dialog.presentApplyOutcome(outcome);
+        dialog.presentDiagnosticActionError("Could not open diagnostic log folder");
+
+        QVERIFY(!summary->isHidden());
+        QVERIFY(summary->text().contains("Could not save C:/settings.json"));
+        QVERIFY(summary->text().contains("Could not open diagnostic log folder"));
+        QVERIFY(isAscii(summary->text()));
     }
 
     void initializesRecordingSettingsControls() {
