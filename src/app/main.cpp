@@ -49,6 +49,13 @@ struct StandaloneRuntimeDecision {
     QString result;
 };
 
+struct RuntimePathStartupDecision {
+    bool continueApplication = true;
+    QString title;
+    QString message;
+    QString abortReason;
+};
+
 DiagnosticStartupDecision diagnosticStartupDecision(
     const DiagnosticActivation &activation, bool sessionCreated,
     const QString &creationError) {
@@ -64,6 +71,31 @@ DiagnosticShutdownDecision diagnosticShutdownDecision(bool normalExit) {
 
 StandaloneRuntimeDecision diagnosticStandaloneRuntimeDecision(bool shouldCheck) {
     return {shouldCheck, shouldCheck ? QStringLiteral("checked") : QStringLiteral("skipped")};
+}
+
+RuntimePathStartupDecision runtimePathStartupDecision(
+    const RuntimePathCompatibility &compatibility) {
+    if (compatibility.compatible) {
+        return {};
+    }
+
+    return {false,
+            QStringLiteral("Unsupported application path"),
+            QStringLiteral(
+                "The current application folder uses characters unsupported by the current "
+                "Windows system language. Bundled GStreamer plugins cannot load from this "
+                "location.\n\nMove the entire extracted application folder to a short path "
+                "containing only English letters, numbers, spaces, hyphens, and underscores "
+                "(for example, C:\\AirPlay), then restart the application."),
+            QStringLiteral("unsupported_application_path")};
+}
+
+QMap<QString, QString> runtimePathCompatibilityFields(
+    const RuntimePathCompatibility &compatibility) {
+    return {{QStringLiteral("result"), compatibility.compatible ? QStringLiteral("yes") : QStringLiteral("no")},
+            {QStringLiteral("has_non_ascii"), compatibility.hasNonAscii ? QStringLiteral("yes") : QStringLiteral("no")},
+            {QStringLiteral("ansi_code_page"), QString::number(compatibility.ansiCodePage)},
+            {QStringLiteral("path_length"), QString::number(compatibility.pathLength)}};
 }
 
 bool diagnosticLoggingActiveForSession(bool sessionCreated, bool sessionActive) {
@@ -139,11 +171,12 @@ void closeDiagnosticSession(DiagnosticLogSink *sink,
 void abortDiagnosticSession(DiagnosticLogSink *sink,
                             std::optional<QtDiagnosticMessageBridge> &qtBridge,
                             std::unique_ptr<DiagnosticSession> &session,
-                            std::unique_ptr<NetworkDiagnosticsMonitor> &networkMonitor) {
+                            std::unique_ptr<NetworkDiagnosticsMonitor> &networkMonitor,
+                            const QString &reason) {
     const DiagnosticShutdownDecision decision = diagnosticShutdownDecision(false);
     if (decision.recordStartupAborted) {
         recordStartup(sink, QStringLiteral("startup_aborted"),
-                      {{QStringLiteral("reason"), QStringLiteral("missing_runtime")}}, true);
+                      {{QStringLiteral("reason"), reason}}, true);
     }
     if (networkMonitor) {
         networkMonitor->stop();
@@ -290,7 +323,8 @@ int main(int argc, char *argv[]) {
                 QStringLiteral("AirPlay Receiver dependencies missing"),
                 QString("This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again.")
                     .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
-            abortDiagnosticSession(sink, qtBridge, session, networkMonitor);
+            abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
+                                   QStringLiteral("missing_runtime"));
             return 1;
         }
     }
