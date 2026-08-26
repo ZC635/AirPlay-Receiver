@@ -29,6 +29,9 @@ private slots:
     void validSettingsObjectIsLoaded();
     void missingRuntimeAbortsWithoutNormalDiagnosticClose();
     void skippedStandaloneRuntimeAvoidsManifestEntries();
+    void incompatibleRuntimePathStopsWithActionableMessage();
+    void compatibleRuntimePathContinuesWithoutStartupError();
+    void runtimePathCompatibilityFieldsAvoidPathDisclosure();
     void inactiveCreatedSessionDoesNotEnableDiagnosticTitle();
     void queuedPreWindowFailureReachesOneConfiguredHandler();
 };
@@ -168,6 +171,38 @@ void DiagnosticActivationTest::skippedStandaloneRuntimeAvoidsManifestEntries() {
 
     QVERIFY(!decision.emitManifestEntries);
     QCOMPARE(decision.result, QString("skipped"));
+}
+
+void DiagnosticActivationTest::incompatibleRuntimePathStopsWithActionableMessage() {
+    const auto decision = runtimePathStartupDecision({false, true, 936, 42});
+
+    QVERIFY(!decision.continueApplication);
+    QCOMPARE(decision.title, QString("Unsupported application path"));
+    QVERIFY(decision.message.contains(QStringLiteral("GStreamer")));
+    QVERIFY(decision.message.contains(QStringLiteral("C:\\AirPlay")));
+    QCOMPARE(decision.abortReason, QString("unsupported_application_path"));
+}
+
+void DiagnosticActivationTest::compatibleRuntimePathContinuesWithoutStartupError() {
+    const auto decision = runtimePathStartupDecision({true, false, 936, 10});
+
+    QVERIFY(decision.continueApplication);
+    QVERIFY(decision.title.isEmpty());
+    QVERIFY(decision.message.isEmpty());
+    QVERIFY(decision.abortReason.isEmpty());
+}
+
+void DiagnosticActivationTest::runtimePathCompatibilityFieldsAvoidPathDisclosure() {
+    const QMap<QString, QString> fields = runtimePathCompatibilityFields({false, true, 936, 42});
+
+    QCOMPARE(fields.keys(), QStringList({QStringLiteral("ansi_code_page"),
+                                         QStringLiteral("has_non_ascii"),
+                                         QStringLiteral("path_length"),
+                                         QStringLiteral("result")}));
+    QCOMPARE(fields.value(QStringLiteral("result")), QStringLiteral("no"));
+    QCOMPARE(fields.value(QStringLiteral("has_non_ascii")), QStringLiteral("yes"));
+    QCOMPARE(fields.value(QStringLiteral("ansi_code_page")), QStringLiteral("936"));
+    QCOMPARE(fields.value(QStringLiteral("path_length")), QStringLiteral("42"));
 }
 
 void DiagnosticActivationTest::inactiveCreatedSessionDoesNotEnableDiagnosticTitle() {
