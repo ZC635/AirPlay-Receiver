@@ -137,6 +137,50 @@ private slots:
         QVERIFY(messages.join('\n').contains("UxPlay"));
     }
 
+    void runtimePathCompatibilityAcceptsAsciiPath() {
+        const QString path = QStringLiteral("C:\\AirPlay");
+        QString callbackPath;
+        quint32 callbackCodePage = 0;
+
+        const auto result = DependencyDiagnostics::checkRuntimePathCompatibility(
+            path, 936, [&](const QString &roundTripPath, quint32 codePage) {
+                callbackPath = roundTripPath;
+                callbackCodePage = codePage;
+                return true;
+            });
+
+        QVERIFY(result.compatible);
+        QVERIFY(!result.hasNonAscii);
+        QCOMPARE(result.ansiCodePage, quint32(936));
+        QCOMPARE(result.pathLength, qsizetype(10));
+        QCOMPARE(callbackPath, path);
+        QCOMPARE(callbackCodePage, quint32(936));
+    }
+
+    void runtimePathCompatibilityAcceptsNonAsciiPathThatRoundTrips() {
+        const QString path = QString::fromUtf8("C:\\\xE4\xBE\xBF\xE6\x90\xBA\xE7\x89\x88");
+
+        const auto result = DependencyDiagnostics::checkRuntimePathCompatibility(
+            path, 936, [](const QString &, quint32) { return true; });
+
+        QVERIFY(result.compatible);
+        QVERIFY(result.hasNonAscii);
+        QCOMPARE(result.ansiCodePage, quint32(936));
+        QCOMPARE(result.pathLength, path.size());
+    }
+
+    void runtimePathCompatibilityRejectsNonAsciiPathThatDoesNotRoundTrip() {
+        const QString path = QString::fromUtf8("C:\\AirPlay-\xF0\x9F\x98\x80");
+
+        const auto result = DependencyDiagnostics::checkRuntimePathCompatibility(
+            path, 936, [](const QString &, quint32) { return false; });
+
+        QVERIFY(!result.compatible);
+        QVERIFY(result.hasNonAscii);
+        QCOMPARE(result.ansiCodePage, quint32(936));
+        QCOMPARE(result.pathLength, path.size());
+    }
+
     void reportsMissingStandaloneRuntimeFiles() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

@@ -4,6 +4,12 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 
+#include <algorithm>
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
+
 #if AIRPLAY_WITH_UXPLAY
 #include <gst/gst.h>
 #endif
@@ -68,6 +74,87 @@ QStringList DependencyDiagnostics::checkRuntimeBasics() {
         "QMdnsEngine: install qmdnsengine runtime for mDNS discovery.",
         "UxPlay: build/runtime dependencies must be available for AirPlay receiver support."
     };
+}
+
+RuntimePathCompatibility DependencyDiagnostics::checkRuntimePathCompatibility(
+    const QString &path,
+    quint32 ansiCodePage,
+    const std::function<bool(const QString &, quint32)> &roundTrips) {
+    RuntimePathCompatibility result;
+    result.hasNonAscii = std::any_of(path.cbegin(), path.cend(), [](QChar codeUnit) {
+        return codeUnit.unicode() > 0x7f;
+    });
+    result.ansiCodePage = ansiCodePage;
+    result.pathLength = path.size();
+    result.compatible = path.isEmpty()
+        || (roundTrips && roundTrips(path, ansiCodePage));
+    return result;
+}
+
+RuntimePathCompatibility DependencyDiagnostics::checkRuntimePathCompatibility(
+    const QString &path) {
+#if defined(Q_OS_WIN)
+    return checkRuntimePathCompatibility(path, GetACP(), [](const QString &originalPath,
+                                                             quint32 ansiCodePage) {
+        const DWORD encodeFlags = ansiCodePage == CP_UTF8
+            ? WC_ERR_INVALID_CHARS
+            : WC_NO_BEST_FIT_CHARS;
+        BOOL usedDefaultChar = FALSE;
+        LPBOOL usedDefaultCharPointer = ansiCodePage == CP_UTF8
+            ? nullptr
+            : &usedDefaultChar;
+        const int encodedLength = WideCharToMultiByte(
+            ansiCodePage,
+            encodeFlags,
+            reinterpret_cast<LPCWCH>(originalPath.utf16()),
+            static_cast<int>(originalPath.size()),
+            nullptr,
+            0,
+            nullptr,
+            usedDefaultCharPointer);
+        if (encodedLength == 0 || usedDefaultChar) {
+            return false;
+        }
+
+        QByteArray encodedPath(encodedLength, Qt::Uninitialized);
+        if (WideCharToMultiByte(
+                ansiCodePage,
+                encodeFlags,
+                reinterpret_cast<LPCWCH>(originalPath.utf16()),
+                static_cast<int>(originalPath.size()),
+                encodedPath.data(),
+                encodedLength,
+                nullptr,
+                usedDefaultCharPointer) == 0
+            || usedDefaultChar) {
+            return false;
+        }
+
+        const DWORD decodeFlags = ansiCodePage == CP_UTF8 ? MB_ERR_INVALID_CHARS : 0;
+        const int decodedLength = MultiByteToWideChar(
+            ansiCodePage,
+            decodeFlags,
+            encodedPath.constData(),
+            encodedLength,
+            nullptr,
+            0);
+        if (decodedLength == 0) {
+            return false;
+        }
+
+        QString decodedPath(decodedLength, Qt::Uninitialized);
+        return MultiByteToWideChar(
+                   ansiCodePage,
+                   decodeFlags,
+                   encodedPath.constData(),
+                   encodedLength,
+                   reinterpret_cast<wchar_t *>(decodedPath.data()),
+                   decodedLength) != 0
+            && decodedPath == originalPath;
+    });
+#else
+    return checkRuntimePathCompatibility(path, 0, {});
+#endif
 }
 
 bool DependencyDiagnostics::shouldCheckStandaloneRuntime() {
