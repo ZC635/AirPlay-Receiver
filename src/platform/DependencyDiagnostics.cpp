@@ -5,6 +5,7 @@
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <limits>
 
 #if defined(Q_OS_WIN)
 #include <windows.h>
@@ -94,8 +95,23 @@ RuntimePathCompatibility DependencyDiagnostics::checkRuntimePathCompatibility(
 RuntimePathCompatibility DependencyDiagnostics::checkRuntimePathCompatibility(
     const QString &path) {
 #if defined(Q_OS_WIN)
-    return checkRuntimePathCompatibility(path, GetACP(), [](const QString &originalPath,
-                                                             quint32 ansiCodePage) {
+    return checkRuntimePathCompatibility(path, GetACP());
+#else
+    return checkRuntimePathCompatibility(path, 0);
+#endif
+}
+
+RuntimePathCompatibility DependencyDiagnostics::checkRuntimePathCompatibility(
+    const QString &path,
+    quint32 ansiCodePage) {
+#if defined(Q_OS_WIN)
+    if (path.size() > std::numeric_limits<int>::max()) {
+        return checkRuntimePathCompatibility(path, ansiCodePage, {});
+    }
+
+    return checkRuntimePathCompatibility(path, ansiCodePage,
+                                         [](const QString &originalPath,
+                                            quint32 ansiCodePage) {
         const DWORD encodeFlags = ansiCodePage == CP_UTF8
             ? WC_ERR_INVALID_CHARS
             : WC_NO_BEST_FIT_CHARS;
@@ -153,7 +169,7 @@ RuntimePathCompatibility DependencyDiagnostics::checkRuntimePathCompatibility(
             && decodedPath == originalPath;
     });
 #else
-    return checkRuntimePathCompatibility(path, 0, {});
+    return checkRuntimePathCompatibility(path, ansiCodePage, {});
 #endif
 }
 
