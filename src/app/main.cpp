@@ -291,6 +291,7 @@ int main(int argc, char *argv[]) {
                    {QStringLiteral("version"), QString::fromUtf16(AirPlayBuildIdentity::version)}}, true);
 
     std::unique_ptr<NetworkDiagnosticsMonitor> networkMonitor;
+#if AIRPLAY_WITH_UXPLAY
     const RuntimePathCompatibility runtimePathCompatibility =
         DependencyDiagnostics::checkRuntimePathCompatibility(
             QCoreApplication::applicationDirPath());
@@ -304,6 +305,7 @@ int main(int argc, char *argv[]) {
                                runtimePathDecision.abortReason);
         return 1;
     }
+#endif
 
     if (shouldCollectEnvironmentDiagnostics(session && session->isActive())) {
         const EnvironmentSnapshot environmentSnapshot = EnvironmentDiagnostics::collect(

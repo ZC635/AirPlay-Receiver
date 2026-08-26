@@ -17,7 +17,7 @@ public static class AirPlayRuntimePathNative {
 
 if ([AirPlayRuntimePathNative]::GetACP() -eq 65001) {
     Write-Host "Skipping runtime-path compatibility process test because ACP is UTF-8."
-    exit 0
+    exit 77
 }
 
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
@@ -27,6 +27,7 @@ if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
 $emoji = [string][char]0xD83D + [char]0xDE00
 $tempPath = Join-Path ([System.IO.Path]::GetTempPath()) (
     "airplay-runtime-path-" + $emoji + "-" + [System.Guid]::NewGuid().ToString("N"))
+$process = $null
 
 try {
     New-Item -ItemType Directory -Path $tempPath -ErrorAction Stop | Out-Null
@@ -45,9 +46,15 @@ try {
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     [void]$process.Start()
-    $process.WaitForExit()
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit(10000)) {
+        $process.Kill()
+        $process.WaitForExit()
+        throw "Timed out waiting 10 seconds for runtime-path compatibility process to exit."
+    }
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
 
     if ($process.ExitCode -ne 3) {
         throw "Expected exit code 3, got $($process.ExitCode). Stdout: $stdout Stderr: $stderr"
@@ -59,7 +66,10 @@ try {
         throw "Expected path rejection before GStreamer probing. Stderr: $stderr"
     }
 } finally {
+    if ($null -ne $process) {
+        $process.Dispose()
+    }
     if ([System.IO.Directory]::Exists($tempPath)) {
-        Remove-Item -LiteralPath $tempPath -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempPath -Recurse -Force -ErrorAction Stop
     }
 }
