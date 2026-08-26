@@ -298,6 +298,7 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     set_tests_properties(RuntimePathCompatibilityProcessTest PROPERTIES
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+        SKIP_RETURN_CODE 77
         TIMEOUT 30
     )
 endif()
