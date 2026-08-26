@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QtGlobal>
 
 #include <functional>
 
@@ -22,11 +23,23 @@ struct StandaloneRuntimeSnapshot {
     QStringList missingRelativePaths;
 };
 
+struct RuntimePathCompatibility {
+    bool compatible = false;
+    bool hasNonAscii = false;
+    quint32 ansiCodePage = 0;
+    qsizetype pathLength = 0;
+};
+
 class DependencyDiagnostics {
 public:
     static DiagnosticResult checkExecutable(const QString &name);
     static DiagnosticResult checkEnvironmentVariable(const QString &name);
     static QStringList checkRuntimeBasics();
+    static RuntimePathCompatibility checkRuntimePathCompatibility(const QString &path);
+    static RuntimePathCompatibility checkRuntimePathCompatibility(
+        const QString &path,
+        quint32 ansiCodePage,
+        const std::function<bool(const QString &, quint32)> &roundTrips);
     static bool shouldCheckStandaloneRuntime();
     static StandaloneRuntimeSnapshot standaloneRuntimeSnapshot(const QString &directory);
     static QStringList checkStandaloneRuntime(const QString &directory);
