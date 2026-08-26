@@ -288,6 +288,20 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
+if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
+    add_test(
+        NAME RuntimePathCompatibilityProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/RuntimePathCompatibilityProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+    )
+    set_tests_properties(RuntimePathCompatibilityProcessTest PROPERTIES
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+        TIMEOUT 30
+    )
+endif()
+
 set(AIRPLAY_QT_TESTS
     DiagnosticRestartCoordinatorTest
     DiagnosticLogFolderActionsTest

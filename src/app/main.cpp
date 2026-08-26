@@ -199,6 +199,19 @@ int main(int argc, char *argv[]) {
     if (verifyRecordingRuntime) {
         QCoreApplication app(argc, argv);
 #if AIRPLAY_WITH_UXPLAY
+        const RuntimePathCompatibility runtimePathCompatibility =
+            DependencyDiagnostics::checkRuntimePathCompatibility(
+                QCoreApplication::applicationDirPath());
+        const RuntimePathStartupDecision runtimePathDecision =
+            runtimePathStartupDecision(runtimePathCompatibility);
+        if (!runtimePathDecision.continueApplication) {
+            QTextStream(stderr)
+                << "Portable runtime verification failed: unsupported application path. "
+                   "Move the entire extracted application folder to a short path such as "
+                   "C:\\AirPlay."
+                << Qt::endl;
+            return 3;
+        }
         DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
             QCoreApplication::applicationDirPath());
         const RecordingCapabilityDiagnostics diagnostics =
@@ -278,6 +291,20 @@ int main(int argc, char *argv[]) {
                    {QStringLiteral("version"), QString::fromUtf16(AirPlayBuildIdentity::version)}}, true);
 
     std::unique_ptr<NetworkDiagnosticsMonitor> networkMonitor;
+    const RuntimePathCompatibility runtimePathCompatibility =
+        DependencyDiagnostics::checkRuntimePathCompatibility(
+            QCoreApplication::applicationDirPath());
+    recordStartup(sink, QStringLiteral("runtime_path_compatibility"),
+                  runtimePathCompatibilityFields(runtimePathCompatibility), true);
+    const RuntimePathStartupDecision runtimePathDecision =
+        runtimePathStartupDecision(runtimePathCompatibility);
+    if (!runtimePathDecision.continueApplication) {
+        QMessageBox::critical(nullptr, runtimePathDecision.title, runtimePathDecision.message);
+        abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
+                               runtimePathDecision.abortReason);
+        return 1;
+    }
+
     if (shouldCollectEnvironmentDiagnostics(session && session->isActive())) {
         const EnvironmentSnapshot environmentSnapshot = EnvironmentDiagnostics::collect(
             windowsEnvironmentDiagnosticProviders(), 3000);
