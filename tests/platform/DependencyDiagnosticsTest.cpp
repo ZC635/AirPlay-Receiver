@@ -7,6 +7,10 @@
 #include <QTemporaryDir>
 #include <QTextStream>
 
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
+
 #include "platform/DependencyDiagnostics.h"
 
 namespace {
@@ -157,6 +161,22 @@ private slots:
         QCOMPARE(callbackCodePage, quint32(936));
     }
 
+    void runtimePathCompatibilityAcceptsEmptyPathWithoutCallingCallback() {
+        bool callbackCalled = false;
+
+        const auto result = DependencyDiagnostics::checkRuntimePathCompatibility(
+            QString(), 936, [&](const QString &, quint32) {
+                callbackCalled = true;
+                return false;
+            });
+
+        QVERIFY(result.compatible);
+        QVERIFY(!result.hasNonAscii);
+        QCOMPARE(result.ansiCodePage, quint32(936));
+        QCOMPARE(result.pathLength, qsizetype(0));
+        QVERIFY(!callbackCalled);
+    }
+
     void runtimePathCompatibilityAcceptsNonAsciiPathThatRoundTrips() {
         const QString path = QString::fromUtf8("C:\\\xE4\xBE\xBF\xE6\x90\xBA\xE7\x89\x88");
 
@@ -179,6 +199,40 @@ private slots:
         QVERIFY(result.hasNonAscii);
         QCOMPARE(result.ansiCodePage, quint32(936));
         QCOMPARE(result.pathLength, path.size());
+    }
+
+    void runtimePathCompatibilityRoundTripsEmojiWithUtf8() {
+#if defined(Q_OS_WIN)
+        const QString path = QString::fromUtf8("C:\\AirPlay-\xF0\x9F\x98\x80");
+
+        const auto result = DependencyDiagnostics::checkRuntimePathCompatibility(path, CP_UTF8);
+
+        QVERIFY(result.compatible);
+        QVERIFY(result.hasNonAscii);
+        QCOMPARE(result.ansiCodePage, quint32(CP_UTF8));
+        QCOMPARE(result.pathLength, path.size());
+#else
+        QSKIP("Windows-only conversion test");
+#endif
+    }
+
+    void runtimePathCompatibilityUsesLegacyCodePageWithoutBestFitFallback() {
+#if defined(Q_OS_WIN)
+        const QString representablePath = QString::fromUtf8("C:\\\xC3\xA9");
+        const QString emojiPath = QString::fromUtf8("C:\\AirPlay-\xF0\x9F\x98\x80");
+        const QString chinesePath = QString::fromUtf8("C:\\\xE4\xBE\xBF\xE6\x90\xBA\xE7\x89\x88");
+
+        const auto representable = DependencyDiagnostics::checkRuntimePathCompatibility(
+            representablePath, 1252);
+        const auto emoji = DependencyDiagnostics::checkRuntimePathCompatibility(emojiPath, 1252);
+        const auto chinese = DependencyDiagnostics::checkRuntimePathCompatibility(chinesePath, 1252);
+
+        QVERIFY(representable.compatible);
+        QVERIFY(!emoji.compatible);
+        QVERIFY(!chinese.compatible);
+#else
+        QSKIP("Windows-only conversion test");
+#endif
     }
 
     void reportsMissingStandaloneRuntimeFiles() {

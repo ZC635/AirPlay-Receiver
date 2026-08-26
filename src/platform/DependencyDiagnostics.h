@@ -38,6 +38,9 @@ public:
     static RuntimePathCompatibility checkRuntimePathCompatibility(const QString &path);
     static RuntimePathCompatibility checkRuntimePathCompatibility(
         const QString &path,
+        quint32 ansiCodePage);
+    static RuntimePathCompatibility checkRuntimePathCompatibility(
+        const QString &path,
         quint32 ansiCodePage,
         const std::function<bool(const QString &, quint32)> &roundTrips);
     static bool shouldCheckStandaloneRuntime();
