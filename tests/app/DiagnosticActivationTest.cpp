@@ -32,6 +32,9 @@ private slots:
     void incompatibleRuntimePathStopsWithActionableMessage();
     void compatibleRuntimePathContinuesWithoutStartupError();
     void runtimePathCompatibilityFieldsAvoidPathDisclosure();
+    void incompletePortableManifestSkipsGStreamerSetupAndProbe();
+    void completePortableManifestConfiguresGStreamerBeforeProbing();
+    void skippedPortableManifestConfiguresGStreamerBeforeProbing();
     void missingCorePluginsInNonAsciiPathReportsPathLoadFailure();
     void missingCorePluginsInAsciiPathReportsPluginLoadFailure();
     void readyCorePluginsContinueStartup();
@@ -207,6 +210,64 @@ void DiagnosticActivationTest::runtimePathCompatibilityFieldsAvoidPathDisclosure
     QCOMPARE(fields.value(QStringLiteral("has_non_ascii")), QStringLiteral("yes"));
     QCOMPARE(fields.value(QStringLiteral("ansi_code_page")), QStringLiteral("936"));
     QCOMPARE(fields.value(QStringLiteral("path_length")), QStringLiteral("42"));
+}
+
+void DiagnosticActivationTest::incompletePortableManifestSkipsGStreamerSetupAndProbe() {
+    QStringList calls;
+
+    const bool continues = runPortableGStreamerStartupSequence(
+        true,
+        [&calls] {
+            calls << QStringLiteral("manifest");
+            return false;
+        },
+        [&calls] { calls << QStringLiteral("configure"); },
+        [&calls] {
+            calls << QStringLiteral("probe");
+            return true;
+        });
+
+    QVERIFY(!continues);
+    QCOMPARE(calls, QStringList({QStringLiteral("manifest")}));
+}
+
+void DiagnosticActivationTest::completePortableManifestConfiguresGStreamerBeforeProbing() {
+    QStringList calls;
+
+    const bool continues = runPortableGStreamerStartupSequence(
+        true,
+        [&calls] {
+            calls << QStringLiteral("manifest");
+            return true;
+        },
+        [&calls] { calls << QStringLiteral("configure"); },
+        [&calls] {
+            calls << QStringLiteral("probe");
+            return true;
+        });
+
+    QVERIFY(continues);
+    QCOMPARE(calls, QStringList({QStringLiteral("manifest"), QStringLiteral("configure"),
+                                 QStringLiteral("probe")}));
+}
+
+void DiagnosticActivationTest::skippedPortableManifestConfiguresGStreamerBeforeProbing() {
+    QStringList calls;
+
+    const bool continues = runPortableGStreamerStartupSequence(
+        false,
+        [&calls] {
+            calls << QStringLiteral("manifest");
+            return false;
+        },
+        [&calls] { calls << QStringLiteral("configure"); },
+        [&calls] {
+            calls << QStringLiteral("probe");
+            return true;
+        });
+
+    QVERIFY(continues);
+    QCOMPARE(calls, QStringList({QStringLiteral("configure"), QStringLiteral("probe")}));
 }
 
 void DiagnosticActivationTest::missingCorePluginsInNonAsciiPathReportsPathLoadFailure() {

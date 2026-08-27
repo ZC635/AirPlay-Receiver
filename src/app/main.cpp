@@ -81,6 +81,18 @@ StandaloneRuntimeDecision diagnosticStandaloneRuntimeDecision(bool shouldCheck) 
     return {shouldCheck, shouldCheck ? QStringLiteral("checked") : QStringLiteral("skipped")};
 }
 
+bool runPortableGStreamerStartupSequence(
+    bool shouldCheckManifest,
+    const std::function<bool()> &verifyManifest,
+    const std::function<void()> &configureGStreamerEnvironment,
+    const std::function<bool()> &probeCorePlugins) {
+    if (shouldCheckManifest && !verifyManifest()) {
+        return false;
+    }
+    configureGStreamerEnvironment();
+    return probeCorePlugins();
+}
+
 RuntimePathStartupDecision runtimePathStartupDecision(
     const RuntimePathCompatibility &compatibility) {
     if (compatibility.compatible) {
@@ -374,28 +386,28 @@ int main(int argc, char *argv[]) {
     }
 
 #if AIRPLAY_WITH_UXPLAY
-    const bool gstreamerEnvironmentConfigured =
-        DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
-            QCoreApplication::applicationDirPath());
-    recordStartup(sink, QStringLiteral("gstreamer_package_environment"),
-                  {{QStringLiteral("result"), gstreamerEnvironmentConfigured ? QStringLiteral("yes") : QStringLiteral("no")}},
-                  true);
-
     const StandaloneRuntimeDecision runtimeDecision = diagnosticStandaloneRuntimeDecision(
         DependencyDiagnostics::shouldCheckStandaloneRuntime());
     if (!runtimeDecision.emitManifestEntries) {
         recordStartup(sink, QStringLiteral("standalone_runtime_check"),
                       {{QStringLiteral("result"), runtimeDecision.result}}, true);
-    } else {
-        const StandaloneRuntimeSnapshot runtimeSnapshot =
-            DependencyDiagnostics::standaloneRuntimeSnapshot(QCoreApplication::applicationDirPath());
-        for (const QString &relativeName : runtimeSnapshot.relativePaths) {
-            const bool present = !runtimeSnapshot.missingRelativePaths.contains(relativeName);
-            recordStartup(sink, QStringLiteral("runtime_manifest_entry"),
-                          {{QStringLiteral("relative_name"), relativeName},
-                           {QStringLiteral("result"), present ? QStringLiteral("present") : QStringLiteral("missing")}});
-        }
-        if (!runtimeSnapshot.complete) {
+    }
+
+    const bool gstreamerStartupReady = runPortableGStreamerStartupSequence(
+        runtimeDecision.emitManifestEntries,
+        [&] {
+            const StandaloneRuntimeSnapshot runtimeSnapshot =
+                DependencyDiagnostics::standaloneRuntimeSnapshot(
+                    QCoreApplication::applicationDirPath());
+            for (const QString &relativeName : runtimeSnapshot.relativePaths) {
+                const bool present = !runtimeSnapshot.missingRelativePaths.contains(relativeName);
+                recordStartup(sink, QStringLiteral("runtime_manifest_entry"),
+                              {{QStringLiteral("relative_name"), relativeName},
+                               {QStringLiteral("result"), present ? QStringLiteral("present") : QStringLiteral("missing")}});
+            }
+            if (runtimeSnapshot.complete) {
+                return true;
+            }
             QMessageBox::critical(
                 nullptr,
                 QStringLiteral("AirPlay Receiver dependencies missing"),
@@ -403,22 +415,35 @@ int main(int argc, char *argv[]) {
                     .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
             abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
                                    QStringLiteral("missing_runtime"));
-            return 1;
-        }
-    }
-
-    const GStreamerPluginReadiness pluginReadiness =
-        DependencyDiagnostics::checkGStreamerPluginReadiness();
-    const GStreamerPluginStartupDecision pluginDecision =
-        gstreamerPluginStartupDecision(pluginReadiness, runtimePathCompatibility.hasNonAscii);
-    recordStartup(sink, "gstreamer_plugin_readiness",
-                  gstreamerPluginReadinessFields(pluginReadiness,
-                                                  runtimePathCompatibility.hasNonAscii,
-                                                  pluginDecision.reason), true);
-    if (!pluginDecision.continueApplication) {
-        QMessageBox::critical(nullptr, pluginDecision.title, pluginDecision.message);
-        abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
-                               pluginDecision.abortReason);
+            return false;
+        },
+        [&] {
+            const bool gstreamerEnvironmentConfigured =
+                DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+                    QCoreApplication::applicationDirPath());
+            recordStartup(sink, QStringLiteral("gstreamer_package_environment"),
+                          {{QStringLiteral("result"), gstreamerEnvironmentConfigured ? QStringLiteral("yes") : QStringLiteral("no")}},
+                          true);
+        },
+        [&] {
+            const GStreamerPluginReadiness pluginReadiness =
+                DependencyDiagnostics::checkGStreamerPluginReadiness();
+            const GStreamerPluginStartupDecision pluginDecision =
+                gstreamerPluginStartupDecision(pluginReadiness,
+                                                runtimePathCompatibility.hasNonAscii);
+            recordStartup(sink, "gstreamer_plugin_readiness",
+                          gstreamerPluginReadinessFields(pluginReadiness,
+                                                          runtimePathCompatibility.hasNonAscii,
+                                                          pluginDecision.reason), true);
+            if (pluginDecision.continueApplication) {
+                return true;
+            }
+            QMessageBox::critical(nullptr, pluginDecision.title, pluginDecision.message);
+            abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
+                                   pluginDecision.abortReason);
+            return false;
+        });
+    if (!gstreamerStartupReady) {
         return 1;
     }
 
