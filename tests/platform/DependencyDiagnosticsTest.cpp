@@ -141,6 +141,26 @@ private slots:
         QVERIFY(messages.join('\n').contains("UxPlay"));
     }
 
+    void gstreamerPluginReadinessAcceptsCompleteCoreSet() {
+        const QStringList available{"app", "libav", "playback", "autodetect", "videoparsersbad"};
+        const auto result = DependencyDiagnostics::checkGStreamerPluginReadiness(
+            [&](const QString &plugin) { return available.contains(plugin); });
+
+        QVERIFY(result.ready);
+        QVERIFY(result.missingPlugins.isEmpty());
+        QVERIFY(result.initializationError.isEmpty());
+    }
+
+    void gstreamerPluginReadinessReportsMissingPluginsInStableOrder() {
+        const auto result = DependencyDiagnostics::checkGStreamerPluginReadiness(
+            [](const QString &plugin) { return plugin == QStringLiteral("playback"); });
+
+        QVERIFY(!result.ready);
+        QCOMPARE(result.missingPlugins,
+                 QStringList({"app", "libav", "autodetect", "videoparsersbad"}));
+        QVERIFY(result.initializationError.isEmpty());
+    }
+
     void runtimePathCompatibilityAcceptsAsciiPath() {
         const QString path = QStringLiteral("C:\\AirPlay");
         QString callbackPath;

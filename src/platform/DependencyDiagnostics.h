@@ -17,6 +17,12 @@ struct RecordingCapabilityDiagnostics {
     QStringList missingFactories;
 };
 
+struct GStreamerPluginReadiness {
+    bool ready = false;
+    QStringList missingPlugins;
+    QString initializationError;
+};
+
 struct StandaloneRuntimeSnapshot {
     bool complete = false;
     QStringList relativePaths;
@@ -48,6 +54,9 @@ public:
     static QStringList checkStandaloneRuntime(const QString &directory);
     static bool configurePackageLocalGStreamerEnvironment(
         const QString &applicationDirectory);
+    static GStreamerPluginReadiness checkGStreamerPluginReadiness();
+    static GStreamerPluginReadiness checkGStreamerPluginReadiness(
+        const std::function<bool(const QString &)> &pluginAvailable);
     static RecordingCapabilityDiagnostics checkRecordingCapabilities(
         bool requireBothEncoders);
     static RecordingCapabilityDiagnostics checkRecordingCapabilities(
