@@ -56,6 +56,14 @@ struct RuntimePathStartupDecision {
     QString abortReason;
 };
 
+struct GStreamerPluginStartupDecision {
+    bool continueApplication = true;
+    QString title;
+    QString message;
+    QString abortReason;
+    QString reason = QStringLiteral("ready");
+};
+
 DiagnosticStartupDecision diagnosticStartupDecision(
     const DiagnosticActivation &activation, bool sessionCreated,
     const QString &creationError) {
@@ -96,6 +104,36 @@ QMap<QString, QString> runtimePathCompatibilityFields(
             {QStringLiteral("has_non_ascii"), compatibility.hasNonAscii ? QStringLiteral("yes") : QStringLiteral("no")},
             {QStringLiteral("ansi_code_page"), QString::number(compatibility.ansiCodePage)},
             {QStringLiteral("path_length"), QString::number(compatibility.pathLength)}};
+}
+
+GStreamerPluginStartupDecision gstreamerPluginStartupDecision(
+    const GStreamerPluginReadiness &readiness, bool hasNonAscii) {
+    if (readiness.ready) return {};
+    const QString missing = readiness.missingPlugins.isEmpty()
+        ? QStringLiteral("GStreamer initialization")
+        : readiness.missingPlugins.join(QStringLiteral(", "));
+    if (hasNonAscii) {
+        return {false,
+                QStringLiteral("GStreamer plugins unavailable"),
+                QStringLiteral("Required GStreamer plugins could not be loaded from the current application folder:\n\n%1\n\nMove the entire extracted folder to a short path containing only English letters, numbers, spaces, hyphens, and underscores, for example C:\\AirPlay, then restart the application.").arg(missing),
+                QStringLiteral("gstreamer_plugin_path_load_failure"),
+                QStringLiteral("path_load_failure")};
+    }
+    return {false,
+            QStringLiteral("GStreamer plugins unavailable"),
+            QStringLiteral("Required GStreamer plugins could not be loaded:\n\n%1\n\nRe-extract the portable package. If the problem persists, restart with diagnostic logging and report the generated log.").arg(missing),
+            QStringLiteral("gstreamer_plugin_load_failure"),
+            QStringLiteral("plugin_load_failure")};
+}
+
+QMap<QString, QString> gstreamerPluginReadinessFields(
+    const GStreamerPluginReadiness &readiness, bool hasNonAscii,
+    const QString &reason) {
+    return {{QStringLiteral("result"), readiness.ready ? QStringLiteral("yes") : QStringLiteral("no")},
+            {QStringLiteral("missing_count"), QString::number(readiness.missingPlugins.size())},
+            {QStringLiteral("missing_plugins"), readiness.missingPlugins.join(QLatin1Char(','))},
+            {QStringLiteral("has_non_ascii"), hasNonAscii ? QStringLiteral("yes") : QStringLiteral("no")},
+            {QStringLiteral("reason"), reason}};
 }
 
 bool diagnosticLoggingActiveForSession(bool sessionCreated, bool sessionActive) {
@@ -214,6 +252,17 @@ int main(int argc, char *argv[]) {
         }
         DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
             QCoreApplication::applicationDirPath());
+        const GStreamerPluginReadiness pluginReadiness =
+            DependencyDiagnostics::checkGStreamerPluginReadiness();
+        if (!pluginReadiness.ready) {
+            QTextStream(stderr)
+                << "Portable runtime verification failed; missing GStreamer plugins: "
+                << (pluginReadiness.missingPlugins.isEmpty()
+                        ? QStringLiteral("initialization failed")
+                        : pluginReadiness.missingPlugins.join(QStringLiteral(", ")))
+                << Qt::endl;
+            return 4;
+        }
         const RecordingCapabilityDiagnostics diagnostics =
             DependencyDiagnostics::checkRecordingCapabilities(true);
         if (diagnostics.canRecord) {
@@ -356,6 +405,21 @@ int main(int argc, char *argv[]) {
                                    QStringLiteral("missing_runtime"));
             return 1;
         }
+    }
+
+    const GStreamerPluginReadiness pluginReadiness =
+        DependencyDiagnostics::checkGStreamerPluginReadiness();
+    const GStreamerPluginStartupDecision pluginDecision =
+        gstreamerPluginStartupDecision(pluginReadiness, runtimePathCompatibility.hasNonAscii);
+    recordStartup(sink, "gstreamer_plugin_readiness",
+                  gstreamerPluginReadinessFields(pluginReadiness,
+                                                  runtimePathCompatibility.hasNonAscii,
+                                                  pluginDecision.reason), true);
+    if (!pluginDecision.continueApplication) {
+        QMessageBox::critical(nullptr, pluginDecision.title, pluginDecision.message);
+        abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
+                               pluginDecision.abortReason);
+        return 1;
     }
 
     const RecordingCapabilityDiagnostics recordingDiagnostics =
