@@ -301,6 +301,18 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
         SKIP_RETURN_CODE 77
         TIMEOUT 30
     )
+    add_test(
+        NAME GStreamerPluginReadinessProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerPluginReadinessProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+    )
+    set_tests_properties(GStreamerPluginReadinessProcessTest PROPERTIES
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:C:\\msys64\\ucrt64\\bin"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 120
+    )
 endif()
 
 set(AIRPLAY_QT_TESTS
