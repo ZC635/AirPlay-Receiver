@@ -32,6 +32,10 @@ private slots:
     void incompatibleRuntimePathStopsWithActionableMessage();
     void compatibleRuntimePathContinuesWithoutStartupError();
     void runtimePathCompatibilityFieldsAvoidPathDisclosure();
+    void missingCorePluginsInNonAsciiPathReportsPathLoadFailure();
+    void missingCorePluginsInAsciiPathReportsPluginLoadFailure();
+    void readyCorePluginsContinueStartup();
+    void pluginReadinessFieldsAreBoundedAndPathFree();
     void inactiveCreatedSessionDoesNotEnableDiagnosticTitle();
     void queuedPreWindowFailureReachesOneConfiguredHandler();
 };
@@ -203,6 +207,49 @@ void DiagnosticActivationTest::runtimePathCompatibilityFieldsAvoidPathDisclosure
     QCOMPARE(fields.value(QStringLiteral("has_non_ascii")), QStringLiteral("yes"));
     QCOMPARE(fields.value(QStringLiteral("ansi_code_page")), QStringLiteral("936"));
     QCOMPARE(fields.value(QStringLiteral("path_length")), QStringLiteral("42"));
+}
+
+void DiagnosticActivationTest::missingCorePluginsInNonAsciiPathReportsPathLoadFailure() {
+    const GStreamerPluginReadiness readiness{
+        false, {"app", "libav", "playback", "autodetect", "videoparsersbad"}, {}};
+    const auto decision = gstreamerPluginStartupDecision(readiness, true);
+
+    QVERIFY(!decision.continueApplication);
+    QCOMPARE(decision.title, QString("GStreamer plugins unavailable"));
+    QVERIFY(decision.message.contains(QString("app, libav, playback, autodetect, videoparsersbad")));
+    QVERIFY(decision.message.contains(QStringLiteral("C:\\AirPlay")));
+    QCOMPARE(decision.reason, QString("path_load_failure"));
+    QCOMPARE(decision.abortReason, QString("gstreamer_plugin_path_load_failure"));
+}
+
+void DiagnosticActivationTest::missingCorePluginsInAsciiPathReportsPluginLoadFailure() {
+    const GStreamerPluginReadiness readiness{false, {"app", "libav"}, {}};
+    const auto decision = gstreamerPluginStartupDecision(readiness, false);
+
+    QVERIFY(!decision.continueApplication);
+    QVERIFY(decision.message.contains(QString("re-extract"), Qt::CaseInsensitive));
+    QCOMPARE(decision.reason, QString("plugin_load_failure"));
+    QCOMPARE(decision.abortReason, QString("gstreamer_plugin_load_failure"));
+}
+
+void DiagnosticActivationTest::readyCorePluginsContinueStartup() {
+    const auto decision = gstreamerPluginStartupDecision({true, {}, {}}, true);
+
+    QVERIFY(decision.continueApplication);
+    QCOMPARE(decision.reason, QString("ready"));
+}
+
+void DiagnosticActivationTest::pluginReadinessFieldsAreBoundedAndPathFree() {
+    const GStreamerPluginReadiness readiness{false, {"app", "libav"}, {}};
+    const auto decision = gstreamerPluginStartupDecision(readiness, true);
+    const auto fields = gstreamerPluginReadinessFields(readiness, true, decision.reason);
+
+    QCOMPARE(fields.value("result"), QString("no"));
+    QCOMPARE(fields.value("missing_count"), QString("2"));
+    QCOMPARE(fields.value("missing_plugins"), QString("app,libav"));
+    QCOMPARE(fields.value("has_non_ascii"), QString("yes"));
+    QCOMPARE(fields.value("reason"), QString("path_load_failure"));
+    QVERIFY(!fields.values().join(' ').contains(QStringLiteral("C:\\")));
 }
 
 void DiagnosticActivationTest::inactiveCreatedSessionDoesNotEnableDiagnosticTitle() {
