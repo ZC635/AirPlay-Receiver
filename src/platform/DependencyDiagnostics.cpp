@@ -52,6 +52,10 @@ QStringList requiredRecordingFactories() {
         "filesink", "identity",
     };
 }
+
+QStringList requiredUxPlayPlugins() {
+    return {"app", "libav", "playback", "autodetect", "videoparsersbad"};
+}
 }
 
 DiagnosticResult DependencyDiagnostics::checkExecutable(const QString &name) {
@@ -235,6 +239,45 @@ bool DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
     setPath("GST_PLUGIN_SCANNER", scanner);
     setPath("GST_PLUGIN_SCANNER_1_0", scanner);
     return true;
+}
+
+GStreamerPluginReadiness DependencyDiagnostics::checkGStreamerPluginReadiness(
+    const std::function<bool(const QString &)> &pluginAvailable) {
+    GStreamerPluginReadiness result;
+    for (const QString &plugin : requiredUxPlayPlugins()) {
+        if (!pluginAvailable || !pluginAvailable(plugin)) {
+            result.missingPlugins.append(plugin);
+        }
+    }
+    result.ready = result.missingPlugins.isEmpty();
+    return result;
+}
+
+GStreamerPluginReadiness DependencyDiagnostics::checkGStreamerPluginReadiness() {
+#if AIRPLAY_WITH_UXPLAY
+    GError *error = nullptr;
+    if (!gst_init_check(nullptr, nullptr, &error)) {
+        GStreamerPluginReadiness result;
+        result.initializationError = error && error->message
+            ? QString::fromUtf8(error->message)
+            : QStringLiteral("GStreamer initialization failed");
+        g_clear_error(&error);
+        return result;
+    }
+    return checkGStreamerPluginReadiness([](const QString &name) {
+        GstPlugin *plugin = gst_registry_find_plugin(
+            gst_registry_get(), name.toUtf8().constData());
+        if (!plugin) {
+            return false;
+        }
+        gst_object_unref(plugin);
+        return true;
+    });
+#else
+    GStreamerPluginReadiness result;
+    result.initializationError = QStringLiteral("GStreamer support is not built");
+    return result;
+#endif
 }
 
 RecordingCapabilityDiagnostics DependencyDiagnostics::checkRecordingCapabilities(
