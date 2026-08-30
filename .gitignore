@@ -37,6 +37,7 @@ ui_*.h
 *.tmp
 .env
 local.settings.json
+temp
 
 # Documentation (plans, design notes)
 docs/
