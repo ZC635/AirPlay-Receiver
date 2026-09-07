@@ -1,5 +1,7 @@
 # AirPlay Receiver
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 AirPlay Receiver is a Windows desktop receiver for native iPhone AirPlay Screen Mirroring. It advertises itself over mDNS, receives mirroring streams, displays the mirrored video, plays synchronized audio, records mirrored content to MP4, and provides a compact toolbar for volume, always-on-top, aspect-ratio, video-fit, recording, settings, and configurable global shortcuts.
 
 This project was developed with assistance from OpenCode, Codex, and DeepSeek. It builds on UxPlay and GStreamer for AirPlay protocol handling and media playback, with a Qt-based Windows desktop interface around the receiver experience.
@@ -7,6 +9,12 @@ This project was developed with assistance from OpenCode, Codex, and DeepSeek. I
 ## Platform Scope
 
 This project is Windows-only. The application, build scripts, tests, and runtime packaging intentionally target Windows 10/11 and may use Windows-native APIs when they produce a better receiver experience. Cross-platform compatibility is not a project goal.
+
+## Language
+
+By default, the application follows the Windows system language. If that language is unsupported or its translation is missing, the interface falls back to English. Open **Settings > General > Language**, select **System Default**, **English**, or **Simplified Chinese**, then click **Apply**; the open interface changes immediately without restarting.
+
+Future language catalogs may be incomplete. They are accepted, and each missing translation is displayed in English.
 
 ## Quick Start
 

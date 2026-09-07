@@ -107,6 +107,24 @@ private slots:
         QCOMPARE(settings.receiverName(), QString("AirPlay Receiver"));
     }
 
+    void defaultsToSystemLanguage() {
+        QCOMPARE(AppSettings::defaults().language(), QString("system"));
+    }
+
+    void emptyLanguageNormalizesToSystem() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setLanguage("   ");
+
+        QCOMPARE(settings.language(), QString("system"));
+    }
+
+    void languageTagIsTrimmedButNotRestricted() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setLanguage("  fr-CA  ");
+
+        QCOMPARE(settings.language(), QString("fr-CA"));
+    }
+
     void storesTrimmedReceiverName() {
         AppSettings settings = AppSettings::defaults();
         settings.setReceiverName("  Living Room PC  ");

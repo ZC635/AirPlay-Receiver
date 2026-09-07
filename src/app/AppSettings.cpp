@@ -60,6 +60,17 @@ void AppSettings::setReceiverName(QString name) {
     receiverName_ = std::move(name).trimmed();
 }
 
+QString AppSettings::language() const {
+    return language_;
+}
+
+void AppSettings::setLanguage(QString language) {
+    language_ = std::move(language).trimmed();
+    if (language_.isEmpty()) {
+        language_ = QStringLiteral("system");
+    }
+}
+
 bool AppSettings::aspectRatioLock() const {
     return aspectRatioLock_;
 }

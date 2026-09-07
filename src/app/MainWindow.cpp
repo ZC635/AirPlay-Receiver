@@ -2,6 +2,7 @@
 
 #include "app/AppSettingsStore.h"
 #include "app/DiagnosticRestartCoordinator.h"
+#include "app/LanguageManager.h"
 #include "app/SettingsApplyCoordinator.h"
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyTypes.h"
@@ -19,6 +20,7 @@
 #include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QIcon>
@@ -68,32 +70,43 @@ QString windowStatePathForSettingsPath(const QString &settingsPath) {
     return QFileInfo(settingsPath).absoluteDir().filePath(kWindowStateFileName);
 }
 
+QString mainWindowText(const char *sourceText) {
+    return QCoreApplication::translate("MainWindow", sourceText);
+}
+
 class DefaultDiagnosticUiPrompts final : public DiagnosticUiPrompts {
 public:
     bool confirmPrivacy(QWidget *parent, const QString &message) override {
-        return QMessageBox::question(parent, "Diagnostic Logging", message,
+        return QMessageBox::question(parent,
+                                     mainWindowText(QT_TRANSLATE_NOOP("MainWindow", "Diagnostic Logging")), message,
                                      QMessageBox::Yes | QMessageBox::Cancel,
                                      QMessageBox::Cancel) == QMessageBox::Yes;
     }
 
     bool confirmDiscardDraft(QWidget *parent, const QString &message) override {
-        return QMessageBox::question(parent, "Diagnostic Logging", message,
+        return QMessageBox::question(parent,
+                                     mainWindowText(QT_TRANSLATE_NOOP("MainWindow", "Diagnostic Logging")), message,
                                      QMessageBox::Yes | QMessageBox::Cancel,
                                      QMessageBox::Cancel) == QMessageBox::Yes;
     }
 
     bool confirmDisconnectMirroring(QWidget *parent, const QString &message) override {
-        return QMessageBox::question(parent, "Diagnostic Logging", message,
+        return QMessageBox::question(parent,
+                                     mainWindowText(QT_TRANSLATE_NOOP("MainWindow", "Diagnostic Logging")), message,
                                      QMessageBox::Yes | QMessageBox::Cancel,
                                      QMessageBox::Cancel) == QMessageBox::Yes;
     }
 
     void showRestartUnavailable(QWidget *parent, const QString &message) override {
-        QMessageBox::warning(parent, "Diagnostic Restart Unavailable", message, QMessageBox::Ok);
+        QMessageBox::warning(parent,
+                             mainWindowText(QT_TRANSLATE_NOOP("MainWindow", "Diagnostic Restart Unavailable")),
+                             message, QMessageBox::Ok);
     }
 
     void showRestartFailure(QWidget *parent, const QString &message) override {
-        QMessageBox::critical(parent, "Diagnostic Restart Failed", message, QMessageBox::Ok);
+        QMessageBox::critical(parent,
+                              mainWindowText(QT_TRANSLATE_NOOP("MainWindow", "Diagnostic Restart Failed")),
+                              message, QMessageBox::Ok);
     }
 };
 
@@ -122,11 +135,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
                        MainWindowRuntimeServices runtimeServices)
     : QMainWindow(parent),
       toolbar_(new ToolbarWidget(this)),
-      statusLabel_(new QLabel("Ready for AirPlay", this)),
+      statusLabel_(new QLabel(this)),
       videoSurface_(new VideoSurfaceWidget(this)),
       settings_(std::move(settings)),
       hotkeys_(hotkeys),
       receiver_(receiver),
+      languageManager_(runtimeServices.languageManager),
       settingsPath_(std::move(settingsPath)) {
     if (!settingsPath_.isEmpty()) {
         settingsStore_ = std::make_unique<AppSettingsStore>(settingsPath_);
@@ -168,7 +182,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     }
     initializeAppResources();
     setWindowIcon(QIcon(":/icons/app-icon.ico"));
-    setWindowTitle("AirPlay Receiver");
+    updateWindowTitle();
     resize(960, 540);
     windowStatePath_ = windowStatePathForSettingsPath(settingsPath_);
     alwaysOnTopEnabled_ = windowFlags().testFlag(Qt::WindowStaysOnTopHint);
@@ -177,6 +191,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     statusLabel_->setAlignment(Qt::AlignCenter);
     statusLabel_->setStyleSheet("color: black; background: transparent;");
     statusLabel_->setAttribute(Qt::WA_TranslucentBackground, true);
+    setStatus(StatusKind::Ready);
     makeNativeOverlay(statusLabel_);
     makeNativeOverlay(toolbar_);
 
@@ -192,7 +207,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     raiseNativeOverlay(statusLabel_);
     raiseNativeOverlay(toolbar_);
 
-    applyShortcutTooltips();
+    retranslateUi();
 
     connect(toolbar_, &ToolbarWidget::volumeChanged, this, &MainWindow::setReceiverVolume);
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
@@ -215,13 +230,13 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
         updateReceiverState(receiver_->state());
         connect(receiver_, &AirPlayReceiver::stateChanged, this, &MainWindow::updateReceiverState);
         connect(receiver_, &AirPlayReceiver::errorChanged, this, [this](const QString &error) {
-            currentError_ = error;
-            if (currentError_.isEmpty() && receiver_ != nullptr) {
+            statusDetail_ = error;
+            if (statusDetail_.isEmpty() && receiver_ != nullptr) {
                 updateReceiverState(receiver_->state());
-            } else if (currentError_.isEmpty()) {
-                statusLabel_->setText("Ready for AirPlay");
+            } else if (statusDetail_.isEmpty()) {
+                setStatus(StatusKind::Ready);
             } else {
-                statusLabel_->setText(currentError_);
+                setStatus(StatusKind::ReceiverError, statusDetail_);
             }
         });
         connect(receiver_, &AirPlayReceiver::volumeChanged, this, &MainWindow::syncVolumeFromReceiver);
@@ -268,7 +283,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
         connect(hotkeys_, &HotkeyService::activated, this, &MainWindow::handleShortcut);
     }
     if (!hotkeyFailures.isEmpty()) {
-        statusLabel_->setText(formatHotkeyRegistrationFailures(hotkeyFailures));
+        startupHotkeyFailures_ = hotkeyFailures;
+        setStatus(StatusKind::HotkeyRegistrationFailures);
     }
 
     connect(&deferrer_, &SettingsChangeDeferrer::receiverConfigurationReady, this,
@@ -306,11 +322,68 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
 
 MainWindow::~MainWindow() = default;
 
+void MainWindow::changeEvent(QEvent *event) {
+    if (event->type() == QEvent::LanguageChange) {
+        retranslateUi();
+    }
+    QMainWindow::changeEvent(event);
+}
+
+void MainWindow::retranslateUi() {
+    setDiagnosticLoggingActive(diagnosticLoggingActive_);
+    refreshStatus();
+    applyShortcutTooltips();
+    updateRecordingUi();
+}
+
+void MainWindow::updateWindowTitle() {
+    setWindowTitle(diagnosticLoggingActive_
+        ? QStringLiteral("AirPlay Receiver") + tr(" [Diagnostic Logging]")
+        : QStringLiteral("AirPlay Receiver"));
+}
+
+void MainWindow::setStatus(StatusKind kind, QString detail) {
+    statusKind_ = kind;
+    statusDetail_ = std::move(detail);
+    refreshStatus();
+}
+
+void MainWindow::refreshStatus() {
+    switch (statusKind_) {
+    case StatusKind::Ready:
+        statusLabel_->setText(tr("Ready for AirPlay"));
+        break;
+    case StatusKind::Connecting:
+        statusLabel_->setText(tr("Connecting"));
+        break;
+    case StatusKind::Connected:
+        statusLabel_->setText(tr("Connected"));
+        break;
+    case StatusKind::ReceiverError:
+        statusLabel_->setText(statusDetail_.isEmpty()
+                                  ? tr("Ready for AirPlay")
+                                  : tr("Receiver error: %1").arg(statusDetail_));
+        break;
+    case StatusKind::SettingsSaveFailed:
+        statusLabel_->setText(tr("Could not save settings"));
+        break;
+    case StatusKind::NoRecordableContent:
+        statusLabel_->setText(tr("No recordable mirrored content"));
+        break;
+    case StatusKind::RecordingStartFailed:
+        statusLabel_->setText(statusDetail_.isEmpty()
+                                  ? tr("Could not start recording")
+                                  : tr("Could not start recording: %1").arg(statusDetail_));
+        break;
+    case StatusKind::HotkeyRegistrationFailures:
+        statusLabel_->setText(formatHotkeyRegistrationFailures(startupHotkeyFailures_));
+        break;
+    }
+}
+
 void MainWindow::setDiagnosticLoggingActive(bool active) {
     diagnosticLoggingActive_ = active;
-    setWindowTitle(diagnosticLoggingActive_
-        ? QStringLiteral("AirPlay Receiver [Diagnostic Logging]")
-        : QStringLiteral("AirPlay Receiver"));
+    updateWindowTitle();
 }
 
 void MainWindow::handleDiagnosticWriteFailure(QString error) {
@@ -409,11 +482,11 @@ void MainWindow::applyShortcutTooltips() {
     const QString aspectShortcut = settings_.shortcutFor(ShortcutAction::ToggleAspectRatio).toString(QKeySequence::NativeText);
     const QString videoFitShortcut = settings_.shortcutFor(ShortcutAction::ToggleVideoFit).toString(QKeySequence::NativeText);
     const QString recordingShortcut = settings_.shortcutFor(ShortcutAction::ToggleRecording).toString(QKeySequence::NativeText);
-    toolbar_->setVolumeShortcutTooltip(QString("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
-    toolbar_->setAlwaysOnTopShortcutTooltip(QString("Pin: %1").arg(pinShortcut));
-    toolbar_->setAspectRatioShortcutTooltip(QString("Aspect: %1").arg(aspectShortcut));
-    toolbar_->setVideoFitShortcutTooltip(QString("Fit: %1").arg(videoFitShortcut));
-    toolbar_->setRecordingShortcutTooltip(QString("Record: %1").arg(recordingShortcut));
+    toolbar_->setVolumeShortcutTooltip(tr("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
+    toolbar_->setAlwaysOnTopShortcutTooltip(tr("Pin: %1").arg(pinShortcut));
+    toolbar_->setAspectRatioShortcutTooltip(tr("Aspect: %1").arg(aspectShortcut));
+    toolbar_->setVideoFitShortcutTooltip(tr("Fit: %1").arg(videoFitShortcut));
+    toolbar_->setRecordingShortcutTooltip(tr("Record: %1").arg(recordingShortcut));
 }
 
 QVector<MainWindow::HotkeyRegistrationFailure> MainWindow::registerHotkeys() {
@@ -432,11 +505,11 @@ QVector<MainWindow::HotkeyRegistrationFailure> MainWindow::registerHotkeys() {
     return failures;
 }
 
-QString MainWindow::formatHotkeyRegistrationFailures(const QVector<HotkeyRegistrationFailure> &failures) {
+QString MainWindow::formatHotkeyRegistrationFailures(const QVector<HotkeyRegistrationFailure> &failures) const {
     QStringList details;
     for (const auto &failure : failures) {
         const HotkeyError error = failure.result.error.value_or(
-            HotkeyError{std::nullopt, QStringLiteral("Unknown error.")});
+            HotkeyError{std::nullopt, tr("Unknown error.")});
         QString reason = error.message;
         if (error.nativeCode.has_value()) {
             reason += QStringLiteral(" [%1]").arg(*error.nativeCode);
@@ -444,7 +517,7 @@ QString MainWindow::formatHotkeyRegistrationFailures(const QVector<HotkeyRegistr
         details.append(QStringLiteral("%1 (%2)")
                            .arg(settingsFieldDisplayName(SettingsFieldId::shortcut(failure.action)), reason));
     }
-    return QStringLiteral("Could not register shortcuts: %1").arg(details.join(QStringLiteral("; ")));
+    return tr("Could not register shortcuts: %1").arg(details.join(QStringLiteral("; ")));
 }
 
 bool MainWindow::saveSettings() const {
@@ -492,7 +565,7 @@ void MainWindow::setReceiverVolume(int value) {
         receiver_->setVolume(volumeGainFromSliderPercent(clamped));
     }
     if (changed && !saveSettings()) {
-        statusLabel_->setText("Could not save settings");
+        setStatus(StatusKind::SettingsSaveFailed);
     }
 }
 
@@ -505,12 +578,13 @@ void MainWindow::syncVolumeFromReceiver(double volume) {
         toolbar_->setVolume(clamped);
     }
     if (changed && !saveSettings()) {
-        statusLabel_->setText("Could not save settings");
+        setStatus(StatusKind::SettingsSaveFailed);
     }
 }
 
 void MainWindow::updateReceiverState(ReceiverState state) {
     const bool wasSessionActive = receiverSessionActive_;
+    receiverState_ = state;
     receiverConnected_ = state == ReceiverState::Connected;
     receiverSessionActive_ = state == ReceiverState::Connecting || state == ReceiverState::Connected;
     const bool showToolbar = !receiverConnected_;
@@ -523,13 +597,14 @@ void MainWindow::updateReceiverState(ReceiverState state) {
 
     switch (state) {
     case ReceiverState::Connecting:
-        statusLabel_->setText("Connecting");
+        setStatus(StatusKind::Connecting);
         break;
     case ReceiverState::Connected:
-        statusLabel_->setText("Connected");
+        setStatus(StatusKind::Connected);
         break;
     case ReceiverState::Error:
-        statusLabel_->setText(currentError_.isEmpty() ? QString("Ready for AirPlay") : currentError_);
+        setStatus(statusDetail_.isEmpty() ? StatusKind::Ready : StatusKind::ReceiverError,
+                  statusDetail_);
         break;
     case ReceiverState::Idle:
     case ReceiverState::Starting:
@@ -538,7 +613,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
             clearDecodedFrameSizeForAspectLock();
             videoSurface_->reset();
         }
-        statusLabel_->setText("Ready for AirPlay");
+        setStatus(StatusKind::Ready);
         break;
     }
 
@@ -552,6 +627,7 @@ void MainWindow::showSettingsDialog() {
         restartButton->setEnabled(!diagnosticLoggingActive_);
     }
     connect(&dialog, &SettingsDialog::applyRequested, this, [this, &dialog](const AppSettings &draft) {
+        const QString previousLanguage = settings_.language();
         const RecordingState recordingState = receiver_ == nullptr
             ? RecordingState::Idle : receiver_->recordingState();
         const SettingsApplyPlan plan = settingsApplyCoordinator_->plan(
@@ -562,6 +638,13 @@ void MainWindow::showSettingsDialog() {
         }
         const SettingsApplyOutcome outcome = settingsApplyCoordinator_->execute(plan, *timing);
         settings_ = outcome.committedSettings;
+        if (!outcome.globalResult.has_value() && settings_.language() != previousLanguage
+            && languageManager_ != nullptr) {
+            languageManager_->apply(settings_.language());
+            QEvent languageChange(QEvent::LanguageChange);
+            QCoreApplication::sendEvent(&dialog, &languageChange);
+            retranslateUi();
+        }
         applyShortcutTooltips();
         dialog.presentApplyOutcome(outcome);
     });
@@ -579,22 +662,22 @@ void MainWindow::restartWithDiagnosticLogging(SettingsDialog &dialog) {
     if (recordingState == RecordingState::Recording || recordingState == RecordingState::Finalizing) {
         if (diagnosticPrompts_ != nullptr) {
             diagnosticPrompts_->showRestartUnavailable(
-                this, "Diagnostic restart is unavailable while a recording is active or being finalized. Finish or discard the recording, then try again.");
+                this, tr("Diagnostic restart is unavailable while a recording is active or being finalized. Finish or discard the recording, then try again."));
         }
         return;
     }
     if (diagnosticPrompts_ == nullptr || !diagnosticPrompts_->confirmPrivacy(
-            this, "Diagnostic logging records application, Windows, and privacy-filtered network information. Logs stay on this computer and are never uploaded automatically.")) {
+            this, tr("Diagnostic logging records application, Windows, and privacy-filtered network information. Logs stay on this computer and are never uploaded automatically."))) {
         return;
     }
     if (dialog.hasUnappliedChanges()) {
         if (!diagnosticPrompts_->confirmDiscardDraft(
-                this, "Settings has unapplied changes. Restarting will discard them. Continue?")) {
+                this, tr("Settings has unapplied changes. Restarting will discard them. Continue?"))) {
             return;
         }
     }
     if (receiverSessionActive_ && (diagnosticPrompts_ == nullptr || !diagnosticPrompts_->confirmDisconnectMirroring(
-            this, "Restarting disconnects the current mirroring session. Continue?"))) {
+            this, tr("Restarting disconnects the current mirroring session. Continue?")))) {
         return;
     }
     if (diagnosticRestartCoordinator_ != nullptr) {
@@ -616,11 +699,11 @@ std::optional<ReceiverApplyTiming> MainWindow::chooseReceiverApplyTiming(
         return ReceiverApplyTiming::Immediate;
     }
 
-    QMessageBox prompt(QMessageBox::Question, "Apply receiver configuration",
-                       "Applying receiver configuration now will disconnect the connected device.",
+    QMessageBox prompt(QMessageBox::Question, tr("Apply receiver configuration"),
+                       tr("Applying receiver configuration now will disconnect the connected device."),
                        QMessageBox::NoButton, this);
-    auto *applyNow = prompt.addButton("Disconnect and apply now", QMessageBox::AcceptRole);
-    auto *afterDisconnect = prompt.addButton("Apply after disconnect", QMessageBox::ActionRole);
+    auto *applyNow = prompt.addButton(tr("Disconnect and apply now"), QMessageBox::AcceptRole);
+    auto *afterDisconnect = prompt.addButton(tr("Apply after disconnect"), QMessageBox::ActionRole);
     prompt.addButton(QMessageBox::Cancel);
     prompt.exec();
     if (prompt.clickedButton() == applyNow) {
@@ -638,20 +721,25 @@ void MainWindow::presentDeferredReceiverApplyFailure(const SettingsApplyOutcome 
         if (!isFailureStatus(field.status)) {
             continue;
         }
-        QString line = QString("%1: attempted %2. %3")
+        const QString reason = field.userReason.isEmpty() ? field.reason : field.userReason.render();
+        const QString recoveryError = field.userRecoveryError.isEmpty()
+            ? field.recoveryError : field.userRecoveryError.render();
+        QString line = tr("%1: attempted %2. %3")
                            .arg(settingsFieldDisplayName(field.field),
-                                formatSettingsFieldValue(field.attemptedValue), field.reason);
+                                formatSettingsFieldValue(field.attemptedValue), reason);
         if (field.status == SettingsFieldStatus::ApplyFailedRolledBack) {
-            line += " Rollback succeeded.";
-        } else if (!field.recoveryError.isEmpty()) {
-            line += QString(" Recovery failed: %1").arg(field.recoveryError);
+            line += tr(" Rollback succeeded.");
+        } else if (!field.userRecoveryError.isEmpty()) {
+            line += QStringLiteral(" ") + recoveryError;
+        } else if (!recoveryError.isEmpty()) {
+            line += tr(" Recovery failed: %1").arg(recoveryError);
         } else if (field.status == SettingsFieldStatus::RecoveryFailed) {
-            line += " Recovery could not be confirmed.";
+            line += tr(" Recovery could not be confirmed.");
         }
         lines.append(line);
     }
     if (!lines.isEmpty()) {
-        QMessageBox::critical(this, "Deferred receiver configuration failed", lines.join("\n\n"),
+        QMessageBox::critical(this, tr("Deferred receiver configuration failed"), lines.join("\n\n"),
                               QMessageBox::Ok);
     }
 }
@@ -674,7 +762,7 @@ void MainWindow::applyAspectRatioLock(bool enabled) {
     settings_.setAspectRatioLock(enabled);
     toolbar_->setAspectRatioChecked(enabled);
     if (changed && !saveSettings()) {
-        statusLabel_->setText("Could not save settings");
+        setStatus(StatusKind::SettingsSaveFailed);
     }
     if (enabled && videoWidth_ > 0 && videoHeight_ > 0) {
         enforceAspectRatio();
@@ -700,14 +788,14 @@ void MainWindow::applyVideoFitMode(bool enabled) {
         videoSurface_->setVideoFitMode(enabled);
     }
     if (changed && !saveSettings()) {
-        statusLabel_->setText("Could not save settings");
+        setStatus(StatusKind::SettingsSaveFailed);
     }
 }
 
 void MainWindow::toggleRecording() {
     QPointer<AirPlayReceiver> receiver = receiver_;
     if (receiver == nullptr) {
-        statusLabel_->setText("No recordable mirrored content");
+        setStatus(StatusKind::NoRecordableContent);
         updateRecordingUi();
         return;
     }
@@ -715,7 +803,7 @@ void MainWindow::toggleRecording() {
     switch (receiver->recordingState()) {
     case RecordingState::Idle: {
         if (!receiver->recordingAvailable()) {
-            statusLabel_->setText("No recordable mirrored content");
+            setStatus(StatusKind::NoRecordableContent);
             updateRecordingUi();
             return;
         }
@@ -730,9 +818,7 @@ void MainWindow::toggleRecording() {
             activeRecordingSession_ = true;
             suppressRecordingCompletion_ = false;
         } else {
-            statusLabel_->setText(result.error.isEmpty()
-                                      ? QString("Could not start recording")
-                                      : result.error);
+            setStatus(StatusKind::RecordingStartFailed, result.error);
         }
         updateRecordingUi();
         return;
@@ -800,8 +886,9 @@ void MainWindow::handleRecordingFailed(const QString &error) {
         return;
     }
     QMessageBox::critical(
-        this, "Recording failed",
-        error.isEmpty() ? QString("Recording failed for an unknown reason") : error,
+        this, tr("Recording failed"),
+        error.isEmpty() ? tr("Recording failed for an unknown reason")
+                        : tr("Recording failed: %1").arg(error),
         QMessageBox::Ok);
     if (recordingReturnedIdlePendingResult_) {
         recordingReturnedIdlePendingResult_ = false;
@@ -815,19 +902,20 @@ void MainWindow::showRecordingCompletion(const RecordingResult &result) {
     const QString nativePath = QDir::toNativeSeparators(
         QFileInfo(result.finalPath).absoluteFilePath());
     const QString text = hasWarning
-        ? QString("Recording saved to:\n%1\n\n%2").arg(nativePath, result.warning)
-        : QString("Recording saved to:\n%1").arg(nativePath);
+        ? tr("Recording saved to:\n%1\n\n%2").arg(nativePath, result.warning)
+        : tr("Recording saved to:\n%1").arg(nativePath);
     QMessageBox box(hasWarning ? QMessageBox::Warning : QMessageBox::Information,
-                    hasWarning ? "Recording saved with warning" : "Recording saved",
+                    hasWarning ? tr("Recording saved with warning") : tr("Recording saved"),
                     text, QMessageBox::Ok, this);
-    auto *openFolder = box.addButton("Open Folder", QMessageBox::AcceptRole);
+    auto *openFolder = box.addButton(tr("Open Folder"), QMessageBox::AcceptRole);
     box.exec();
     if (box.clickedButton() != openFolder || recordingPathActions_ == nullptr) {
         return;
     }
     const QString error = recordingPathActions_->revealFile(result.finalPath);
     if (!error.isEmpty()) {
-        QMessageBox::warning(this, "Could not open recording", error, QMessageBox::Ok);
+        QMessageBox::warning(this, tr("Could not open recording"),
+                             tr("Could not open recording: %1").arg(error), QMessageBox::Ok);
     }
 }
 
@@ -839,8 +927,8 @@ bool MainWindow::confirmDiscardRecordingOnExit() {
 
     exitConfirmationActive_ = true;
     const auto answer = QMessageBox::warning(
-        this, "Discard recording?",
-        "A recording is still active or being saved. Discard it and exit?",
+        this, tr("Discard recording?"),
+        tr("A recording is still active or being saved. Discard it and exit?"),
         QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
     exitConfirmationActive_ = false;
     if (answer != QMessageBox::Discard) {
