@@ -1,12 +1,15 @@
 #include "app/SettingsApplyCoordinator.h"
 
 #include "app/SettingsChangeDeferrer.h"
+#include "app/UiMessage.h"
 #include "backend/AirPlayReceiver.h"
 #include "platform/HotkeyService.h"
 #include "platform/WindowsHotkeyService.h"
 
 #include <algorithm>
 #include <QHash>
+
+#include <utility>
 
 namespace {
 
@@ -24,12 +27,19 @@ SettingsFieldResult *mutableResultForField(QVector<SettingsFieldResult> *results
     return nullptr;
 }
 
-void markValidationFailure(SettingsFieldResult *result, const QString &reason) {
+UiMessage delayedMessage(const char *source, QStringList arguments = {}) {
+    return UiMessage::translated(QStringLiteral("SettingsApplyCoordinator"),
+                                 QString::fromLatin1(source), std::move(arguments));
+}
+
+void markValidationFailure(SettingsFieldResult *result, const QString &reason,
+                           const char *source, QStringList arguments = {}) {
     if (result == nullptr) {
         return;
     }
     result->status = SettingsFieldStatus::ValidationFailed;
     result->reason = reason;
+    result->userReason = delayedMessage(source, std::move(arguments));
 }
 
 bool isReceiverField(const SettingsFieldId &field) {
@@ -77,10 +87,18 @@ void setHotkeyFailure(SettingsFieldResult *fieldResult, const HotkeyRegistration
         fieldResult->nativeErrorCode = registration.error->nativeCode;
     }
     fieldResult->reason = QStringLiteral("%1 could not be registered: %2").arg(action, directError);
+    fieldResult->userReason = registration.error.has_value()
+        ? delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut registration failed: %1"),
+                         {registration.error->message})
+        : delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut registration failed."));
 
     if (registration.previousRestored) {
         fieldResult->status = SettingsFieldStatus::ApplyFailedRolledBack;
         fieldResult->reason += QStringLiteral(" The previous shortcut was restored.");
+        fieldResult->userReason = registration.error.has_value()
+            ? delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut registration failed: %1. Previous shortcut was restored."),
+                             {registration.error->message})
+            : delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut registration failed. Previous shortcut was restored."));
         return;
     }
 
@@ -88,9 +106,19 @@ void setHotkeyFailure(SettingsFieldResult *fieldResult, const HotkeyRegistration
     fieldResult->recoveryError = QStringLiteral(
         "The previous shortcut could not be restored; %1 currently has no confirmed global shortcut.")
         .arg(action);
+    fieldResult->userRecoveryError = delayedMessage(
+        QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut restoration could not be confirmed."));
     if (registration.recoveryError.has_value()) {
         fieldResult->recoveryError += QStringLiteral(" Recovery failed: %1")
             .arg(describeHotkeyError(*registration.recoveryError));
+        fieldResult->userRecoveryError = registration.recoveryError->nativeCode.has_value()
+            ? delayedMessage(
+                  QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut restoration failed: %1 (native error %2)"),
+                  {registration.recoveryError->message,
+                   QString::number(*registration.recoveryError->nativeCode)})
+            : delayedMessage(
+                  QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut restoration failed: %1"),
+                  {registration.recoveryError->message});
     }
 }
 
@@ -103,6 +131,17 @@ QString compensationFailureDescription(const HotkeyRegistrationResult &registrat
         details.append(describeHotkeyError(*registration.recoveryError));
     }
     return details.isEmpty() ? QString() : QStringLiteral(" Details: %1").arg(details.join("; "));
+}
+
+QString rawHotkeyFailureDetails(const HotkeyRegistrationResult &registration) {
+    QStringList details;
+    if (registration.error.has_value() && !registration.error->message.isEmpty()) {
+        details.append(registration.error->message);
+    }
+    if (registration.recoveryError.has_value() && !registration.recoveryError->message.isEmpty()) {
+        details.append(registration.recoveryError->message);
+    }
+    return details.join(QStringLiteral("; "));
 }
 
 bool batchChangesField(const ReceiverConfigurationBatchRequest &batch,
@@ -191,6 +230,8 @@ void markReceiverFieldsDeferred(SettingsApplyOutcome *outcome,
         if (batchChangesField(batch, fieldResult.field)) {
             fieldResult.status = SettingsFieldStatus::Deferred;
             fieldResult.reason = QStringLiteral("Receiver configuration will be applied when its blocker clears.");
+            fieldResult.userReason = delayedMessage(
+                QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver configuration will be applied when its blocker clears."));
         }
     }
     outcome->airPlayDeferred = true;
@@ -214,12 +255,19 @@ void markReceiverRecoveryFailure(SettingsApplyOutcome *outcome,
         fieldResult.status = SettingsFieldStatus::RecoveryFailed;
         fieldResult.reason = QStringLiteral("Receiver configuration apply failed: %1. Known saved state is %2.")
             .arg(applyError, knownSavedState);
+        fieldResult.userReason = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver configuration could not be applied: %1"),
+            {applyError});
         fieldResult.recoveryError = QStringLiteral(
             "Receiver restoration failed: %1. Known runtime state is %2 and cannot be confirmed.")
             .arg(result.recoveryError.isEmpty()
                      ? QStringLiteral("the rollback configuration did not complete")
                      : result.recoveryError,
                  runtime);
+        fieldResult.userRecoveryError = result.recoveryError.isEmpty()
+            ? delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver restoration could not be confirmed."))
+            : delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver restoration failed: %1"),
+                             {result.recoveryError});
     }
 }
 
@@ -237,6 +285,9 @@ void markReceiverRollback(SettingsApplyOutcome *outcome,
             fieldResult.reason = QStringLiteral(
                 "Receiver configuration apply failed: %1. The previous receiver configuration was restored.")
                 .arg(applyError);
+            fieldResult.userReason = delayedMessage(
+                QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver configuration could not be applied: %1. Previous receiver configuration was restored."),
+                {applyError});
         }
     }
 }
@@ -260,10 +311,16 @@ void markReceiverCompensationFailure(SettingsApplyOutcome *outcome,
         fieldResult.reason = QStringLiteral(
             "Receiver configuration apply failed: %1. Known saved state is %2; the compensating save did not complete.")
             .arg(applyError, describeRequestedConfiguration(batch));
+        fieldResult.userReason = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver configuration could not be applied: %1"),
+            {applyError});
         fieldResult.recoveryError = QStringLiteral(
             "Receiver runtime rollback completed. Known runtime state is %1. Compensating JSON save failed: %2. "
             "The saved state cannot be confirmed.")
             .arg(runtime, compensation.errorString);
+        fieldResult.userRecoveryError = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Compensating settings save failed: %1"),
+            {compensation.errorString});
     }
 }
 
@@ -284,10 +341,14 @@ void markUnavailableReceiverCompensated(SettingsApplyOutcome *outcome,
         fieldResult.reason = QStringLiteral(
             "Receiver configuration did not start: %1. The saved state was restored to %2.")
             .arg(unavailable.applyError, describeRollbackConfiguration(batch));
+        fieldResult.userReason = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver configuration did not start. The saved state was restored."));
         fieldResult.recoveryError = runtimeUnavailable
             ? QStringLiteral("The receiver is unavailable; runtime state is unconfirmed.")
             : QStringLiteral("No receiver operation was scheduled. Known runtime state is %1 and is unchanged.")
                   .arg(runtime);
+        fieldResult.userRecoveryError = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver runtime state could not be confirmed."));
     }
 }
 
@@ -310,11 +371,16 @@ void markUnavailableReceiverCompensationFailure(
         fieldResult.reason = QStringLiteral(
             "Receiver configuration did not start: %1. The requested JSON was saved, but restoring it failed.")
             .arg(unavailable.applyError);
+        fieldResult.userReason = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver configuration did not start. The requested settings were saved, but restoring them failed."));
         fieldResult.recoveryError = QStringLiteral(
             "Compensating JSON save failed: %1. The saved state cannot be confirmed. Known runtime state is %2%3.")
             .arg(compensation.errorString, runtime,
                  runtimeUnavailable ? QStringLiteral(" (receiver unavailable)")
                                   : QStringLiteral(" (unchanged because no receiver operation was scheduled)"));
+        fieldResult.userRecoveryError = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Compensating settings save failed: %1"),
+            {compensation.errorString});
     }
 }
 
@@ -381,7 +447,8 @@ SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
     if (candidate.receiverName().trimmed().isEmpty()) {
         markValidationFailure(mutableResultForField(&result.validationResults,
                                                     SettingsFieldId::receiverName()),
-                              QStringLiteral("Receiver name cannot be empty."));
+                              QStringLiteral("Receiver name cannot be empty."),
+                              QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Receiver name cannot be empty."));
     }
 
     QHash<QString, QVector<SettingsFieldId>> shortcutFieldsBySequence;
@@ -393,17 +460,20 @@ SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
         const QKeySequence sequence(candidate.shortcutFor(*field.shortcutAction));
         SettingsFieldResult *fieldResult = mutableResultForField(&result.validationResults, field);
         if (sequence.isEmpty()) {
-            markValidationFailure(fieldResult, QStringLiteral("Shortcut cannot be empty."));
+            markValidationFailure(fieldResult, QStringLiteral("Shortcut cannot be empty."),
+                                  QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut cannot be empty."));
             continue;
         }
         if (sequence.count() > 1) {
             markValidationFailure(fieldResult,
-                                  QStringLiteral("Shortcut must use a single key combination."));
+                                  QStringLiteral("Shortcut must use a single key combination."),
+                                  QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut must use a single key combination."));
             continue;
         }
         if (!WindowsHotkeyService::toNativeHotkey(sequence).has_value()) {
             markValidationFailure(fieldResult,
-                                  QStringLiteral("Shortcut is not supported as a Windows global hotkey."));
+                                  QStringLiteral("Shortcut is not supported as a Windows global hotkey."),
+                                  QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut is not supported as a Windows global hotkey."));
             continue;
         }
 
@@ -420,7 +490,9 @@ SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
         const QString reason = QStringLiteral("Shortcut %1 is assigned to more than one action.")
                                    .arg(duplicate.toString(QKeySequence::NativeText));
         for (const SettingsFieldId &field : sequence.value()) {
-            markValidationFailure(mutableResultForField(&result.validationResults, field), reason);
+            markValidationFailure(mutableResultForField(&result.validationResults, field), reason,
+                                  QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut %1 is assigned to more than one action."),
+                                  {duplicate.toString(QKeySequence::NativeText)});
         }
     }
 
@@ -636,8 +708,15 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
         }
         fieldResult->status = SettingsFieldStatus::RecoveryFailed;
         fieldResult->reason = QStringLiteral("Not committed because the settings file could not be saved.");
+        fieldResult->userReason = delayedMessage(
+            QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Not committed because the settings file could not be saved."));
         fieldResult->recoveryError = QStringLiteral("Baseline shortcut restoration failed for %1.")
             .arg(shortcutDescription(*fieldResult)) + compensationFailureDescription(restoration);
+        const QString rawDetails = rawHotkeyFailureDetails(restoration);
+        fieldResult->userRecoveryError = rawDetails.isEmpty()
+            ? delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut restoration failed."))
+            : delayedMessage(QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Shortcut restoration failed: %1"),
+                             {rawDetails});
     }
 
     for (SettingsFieldResult &fieldResult : outcome.fieldResults) {
@@ -648,6 +727,8 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
             && fieldResult.status != SettingsFieldStatus::RecoveryFailed) {
             fieldResult.status = SettingsFieldStatus::ApplyFailedRolledBack;
             fieldResult.reason = QStringLiteral("Not committed because the settings file could not be saved.");
+            fieldResult.userReason = delayedMessage(
+                QT_TRANSLATE_NOOP("SettingsApplyCoordinator", "Not committed because the settings file could not be saved."));
         } else if (!fieldsDiffer(plan.baseline, plan.candidate, fieldResult.field)) {
             fieldResult.status = SettingsFieldStatus::Unchanged;
         }

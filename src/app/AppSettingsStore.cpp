@@ -110,6 +110,10 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     if (!receiverName.isEmpty()) {
         settings.setReceiverName(receiverName);
     }
+    const QJsonValue language = root.value("language");
+    if (language.isString()) {
+        settings.setLanguage(language.toString());
+    }
     for (const ShortcutBinding &binding : settings.shortcuts()) {
         const QString value = shortcuts.value(shortcutActionKey(binding.action)).toString();
         if (!value.isEmpty()) {
@@ -181,6 +185,7 @@ AppSettingsSaveResult AppSettingsStore::save(const AppSettings &settings) const 
 
     QJsonObject root;
     root.insert("receiverName", settings.receiverName());
+    root.insert("language", settings.language());
     root.insert("shortcuts", shortcuts);
     root.insert("volume", settings.volume());
     root.insert("aspectRatioLock", settings.aspectRatioLock());

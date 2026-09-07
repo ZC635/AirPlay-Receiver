@@ -1,10 +1,47 @@
 #include <QtTest/QtTest>
 
+#include <QTranslator>
+
 #include <algorithm>
 #include <variant>
 
 #include "app/AppSettings.h"
 #include "app/SettingsApplyTypes.h"
+
+namespace {
+
+class BooleanValueTranslator final : public QTranslator {
+public:
+    QString translate(const char *context, const char *sourceText,
+                      const char *disambiguation = nullptr, int n = -1) const override {
+        Q_UNUSED(disambiguation);
+        Q_UNUSED(n);
+        if (qstrcmp(context, "SettingsFields") == 0) {
+            if (qstrcmp(sourceText, "Enabled") == 0) {
+                return QString::fromUtf8(u8"已启用");
+            }
+            if (qstrcmp(sourceText, "Disabled") == 0) {
+                return QString::fromUtf8(u8"已禁用");
+            }
+        }
+        return {};
+    }
+};
+
+class InstalledTranslator final {
+public:
+    explicit InstalledTranslator(QTranslator *translator) : translator_(translator) {
+        QCoreApplication::installTranslator(translator_);
+    }
+    ~InstalledTranslator() {
+        QCoreApplication::removeTranslator(translator_);
+    }
+
+private:
+    QTranslator *translator_;
+};
+
+} // namespace
 
 class SettingsApplyTypesTest : public QObject {
     Q_OBJECT
@@ -12,10 +49,11 @@ class SettingsApplyTypesTest : public QObject {
 private slots:
     void containsEverySettingsDialogField() {
         const QVector<SettingsFieldId> fields = allSettingsFields();
-        QCOMPARE(fields.size(), 13);
+        QCOMPARE(fields.size(), 14);
         QCOMPARE(std::count_if(fields.cbegin(), fields.cend(), [](const SettingsFieldId &id) {
             return id.kind == SettingsFieldKind::Shortcut;
         }), 7);
+        QVERIFY(fields.contains(SettingsFieldId::language()));
     }
 
     void copiesOnlyRequestedField() {
@@ -33,6 +71,7 @@ private slots:
         const QVector<SettingsFieldId> fields = allSettingsFields();
         const QVector<SettingsFieldId> expected = {
             SettingsFieldId::receiverName(),
+            SettingsFieldId::language(),
             SettingsFieldId::videoResolution(),
             SettingsFieldId::videoFrameRate(),
             SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
@@ -47,7 +86,7 @@ private slots:
             SettingsFieldId::recordingCompletionNotification(),
         };
         const QStringList expectedNames = {
-            "Receiver name", "Resolution", "Frame rate", "Toggle always on top",
+            "Receiver name", "Language", "Resolution", "Frame rate", "Toggle always on top",
             "Volume up", "Volume down", "Toggle toolbar", "Toggle aspect ratio",
             "Toggle video fit", "Toggle recording", "Format", "Output folder",
             "Show a message when recording completes",
@@ -78,11 +117,14 @@ private slots:
         settings.setShortcut(ShortcutAction::ToggleAspectRatio, QKeySequence("Ctrl+Shift+R"));
         settings.setShortcut(ShortcutAction::ToggleVideoFit, QKeySequence("Ctrl+Shift+F"));
         settings.setShortcut(ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Shift+G"));
+        settings.setLanguage("zh-CN");
         settings.setRecordingOutputDirectory("field-value-recordings");
         settings.setShowRecordingCompletionMessage(false);
 
         QCOMPARE(std::get<QString>(settingsFieldValue(settings, SettingsFieldId::receiverName())),
                  QString("Desk Receiver"));
+        QCOMPARE(std::get<QString>(settingsFieldValue(settings, SettingsFieldId::language())),
+                 QString("zh-CN"));
         QCOMPARE(std::get<VideoResolution>(settingsFieldValue(settings, SettingsFieldId::videoResolution())),
                  VideoResolution::P720);
         QCOMPARE(std::get<VideoFrameRate>(settingsFieldValue(settings, SettingsFieldId::videoFrameRate())),
@@ -114,6 +156,7 @@ private slots:
                 candidate.setShortcut(*field.shortcutAction, QKeySequence("Ctrl+Shift+K"));
             }
         }
+        candidate.setLanguage("zh-CN");
         candidate.setRecordingOutputDirectory("copy-field-recordings");
         candidate.setShowRecordingCompletionMessage(false);
 
@@ -147,6 +190,18 @@ private slots:
         QCOMPARE(destination.videoQuality().frameRate, VideoFrameRate::Fps60);
     }
 
+    void copiesLanguageIndependently() {
+        AppSettings source = AppSettings::defaults();
+        AppSettings destination = AppSettings::defaults();
+        source.setLanguage("zh-CN");
+        destination.setReceiverName("Destination");
+
+        copySettingsField(source, SettingsFieldId::language(), &destination);
+
+        QCOMPARE(destination.language(), QString("zh-CN"));
+        QCOMPARE(destination.receiverName(), QString("Destination"));
+    }
+
     void formatsEverySupportedValue() {
         QCOMPARE(formatSettingsFieldValue(SettingsFieldValue(QString("Desk Receiver"))),
                  QString("Desk Receiver"));
@@ -161,6 +216,16 @@ private slots:
         QCOMPARE(formatSettingsFieldValue(SettingsFieldValue(RecordingFormat::Mp4)), QString("MP4"));
         QCOMPARE(formatSettingsFieldValue(SettingsFieldValue(true)), QString("Enabled"));
         QCOMPARE(formatSettingsFieldValue(SettingsFieldValue(false)), QString("Disabled"));
+    }
+
+    void translatesBooleanValuesThroughStableContext() {
+        BooleanValueTranslator translator;
+        const InstalledTranslator installed(&translator);
+
+        QCOMPARE(formatSettingsFieldValue(SettingsFieldValue(true)),
+                 QString::fromUtf8(u8"已启用"));
+        QCOMPARE(formatSettingsFieldValue(SettingsFieldValue(false)),
+                 QString::fromUtf8(u8"已禁用"));
     }
 
     void findsResultsAndClassifiesFailureStatuses() {
