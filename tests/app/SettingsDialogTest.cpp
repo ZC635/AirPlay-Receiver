@@ -4,19 +4,28 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QGroupBox>
+#include <QHash>
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QScreen>
 #include <QTableWidget>
+#include <QTranslator>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyTypes.h"
+#include "app/LanguageManager.h"
+#include "app/UiMessage.h"
 #include "backend/VideoQualitySettings.h"
 #include "platform/RecordingPathActions.h"
 
@@ -54,17 +63,202 @@ public:
     QString openError;
     QString revealError;
 };
+
+class SettingsDialogTranslator final : public QTranslator {
+public:
+    QString translate(const char *context, const char *sourceText,
+                      const char *disambiguation = nullptr, int n = -1) const override {
+        Q_UNUSED(disambiguation);
+        Q_UNUSED(n);
+
+        const QString key = QString::fromLatin1(context) + QChar('\x1f')
+            + QString::fromLatin1(sourceText);
+        return translations.value(key);
+    }
+
+    QHash<QString, QString> translations = {
+        {QStringLiteral("SettingsDialog\u001fSettings"), QStringLiteral("设置")},
+        {QStringLiteral("SettingsDialog\u001fGeneral"), QStringLiteral("常规")},
+        {QStringLiteral("SettingsDialog\u001fLanguage"), QStringLiteral("语言")},
+        {QStringLiteral("SettingsDialog\u001fApply"), QStringLiteral("应用")},
+        {QStringLiteral("SettingsDialog\u001fCancel"), QStringLiteral("取消")},
+        {QStringLiteral("SettingsDialog\u001fApply incomplete; setting count: %n. Correct the highlighted fields."),
+         QStringLiteral("应用未完成：1 项设置。请更正突出显示的字段。")},
+        {QStringLiteral("SettingsFields\u001fReceiver name"), QStringLiteral("接收器名称")},
+        {QStringLiteral("Task8\u001fApp-owned failure: %1"), QStringLiteral("应用错误：%1")},
+        {QStringLiteral("Task8\u001fRecovery did not complete: %1"), QStringLiteral("恢复未完成：%1")},
+        {QStringLiteral("SettingsDialog\u001f Recovery failed: %1"), QStringLiteral(" 恢复失败：%1")},
+        {QStringLiteral("SettingsDialog\u001f%1 (%2): %3"), QStringLiteral("%1 (%2)：%3")},
+    };
+};
+
+class InstalledTranslator final {
+public:
+    explicit InstalledTranslator(QTranslator *translator)
+        : translator_(translator) {
+        QCoreApplication::installTranslator(translator_);
+    }
+
+    ~InstalledTranslator() {
+        QCoreApplication::removeTranslator(translator_);
+    }
+
+private:
+    QTranslator *translator_;
+};
 }
 
 class SettingsDialogTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void comboBoxesIgnoreWheelWithoutChangingSelection() {
+        SettingsDialog dialog(AppSettings::defaults());
+        dialog.show();
+        const auto combos = dialog.findChildren<QComboBox *>();
+        QCOMPARE(combos.size(), 4);
+        for (auto *combo : combos) {
+            combo->setCurrentIndex(0);
+            combo->setFocus();
+            for (const int delta : {-120, 120}) {
+                const QPointF position(combo->rect().center());
+                QWheelEvent wheel(position, combo->mapToGlobal(position.toPoint()),
+                                  QPoint(), QPoint(0, delta), Qt::NoButton,
+                                  Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(combo, &wheel);
+                QCOMPARE(combo->currentIndex(), 0);
+                QVERIFY(!wheel.isAccepted());
+            }
+            if (combo->count() > 1) {
+                QTest::keyClick(combo, Qt::Key_Down);
+                QCOMPARE(combo->currentIndex(), 1);
+            }
+        }
+    }
+
+    void languageSelectionIsExposedAndDrafted() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setLanguage("zh-CN");
+        SettingsDialog dialog(settings);
+        auto *language = dialog.findChild<QComboBox *>("languageCombo");
+        const QVector<LanguageOption> supported = LanguageManager::supportedLanguages();
+
+        QVERIFY(language != nullptr);
+        QCOMPARE(language->count(), supported.size() + 1);
+        QCOMPARE(language->itemData(0).toString(), QString("system"));
+        for (int index = 0; index < supported.size(); ++index) {
+            QCOMPARE(language->itemData(index + 1).toString(), supported.at(index).id);
+            QCOMPARE(language->itemText(index + 1), supported.at(index).nativeName);
+        }
+        QCOMPARE(language->currentData().toString(), QString("zh-CN"));
+
+        language->setCurrentIndex(language->findData("en"));
+        QCOMPARE(dialog.draftSettings().language(), QString("en"));
+    }
+
+    void languageChangeRetranslatesWithoutLosingDraftOrNonLanguageErrors() {
+        AppSettings settings = AppSettings::defaults();
+        settings.setLanguage("zh-CN");
+        SettingsDialog dialog(settings);
+        auto *language = dialog.findChild<QComboBox *>("languageCombo");
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *receiverError = dialog.findChild<QLabel *>("receiverNameError");
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        auto *general = dialog.findChild<QGroupBox *>("generalSettingsGroup");
+        auto *apply = dialog.findChild<QPushButton *>("applySettingsButton");
+        auto *cancel = dialog.findChild<QPushButton *>("cancelSettingsButton");
+        auto *languageLabel = dialog.findChild<QLabel *>("languageLabel");
+        auto *receiverNameLabel = dialog.findChild<QLabel *>("receiverNameLabel");
+        auto *videoResolutionLabel = dialog.findChild<QLabel *>("videoResolutionLabel");
+        auto *videoFrameRateLabel = dialog.findChild<QLabel *>("videoFrameRateLabel");
+        auto *recordingFormatLabel = dialog.findChild<QLabel *>("recordingFormatLabel");
+        auto *recordingOutputFolderLabel = dialog.findChild<QLabel *>("recordingOutputFolderLabel");
+        QVERIFY(language != nullptr);
+        QVERIFY(receiver != nullptr);
+        QVERIFY(receiverError != nullptr);
+        QVERIFY(summary != nullptr);
+        QVERIFY(general != nullptr);
+        QVERIFY(apply != nullptr);
+        QVERIFY(cancel != nullptr);
+        QVERIFY(languageLabel != nullptr);
+        QVERIFY(receiverNameLabel != nullptr);
+        QVERIFY(videoResolutionLabel != nullptr);
+        QVERIFY(videoFrameRateLabel != nullptr);
+        QVERIFY(recordingFormatLabel != nullptr);
+        QVERIFY(recordingOutputFolderLabel != nullptr);
+
+        receiver->setText("Draft receiver");
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = settings;
+        outcome.fieldResults = {
+            {SettingsFieldId::receiverName(), QString("Draft receiver"),
+             SettingsFieldStatus::ValidationFailed, "not allowed"},
+            {SettingsFieldId::language(), QString("zh-CN"),
+             SettingsFieldStatus::ValidationFailed, "not available"},
+        };
+        dialog.presentApplyOutcome(outcome);
+        QVERIFY(!receiverError->isHidden());
+
+        language->setCurrentIndex(language->findData("en"));
+        QVERIFY(!receiverError->isHidden());
+        QVERIFY(summary->text().contains("Apply incomplete; setting count: 1."));
+        QVERIFY(dialog.hasUnappliedChanges());
+
+        SettingsDialogTranslator translator;
+        const InstalledTranslator installedTranslator(&translator);
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&dialog, &languageChange);
+
+        QCOMPARE(dialog.windowTitle(), QString("设置"));
+        QCOMPARE(general->title(), QString("常规"));
+        QCOMPARE(languageLabel->text(), QString("语言"));
+        QCOMPARE(apply->text(), QString("应用"));
+        QCOMPARE(cancel->text(), QString("取消"));
+        QCOMPARE(summary->text(), QString("应用未完成：1 项设置。请更正突出显示的字段。"));
+        QCOMPARE(receiver->text(), QString("Draft receiver"));
+        QCOMPARE(language->currentData().toString(), QString("en"));
+        QVERIFY(!receiverError->isHidden());
+        QVERIFY(dialog.hasUnappliedChanges());
+    }
+
+    void delayedFieldErrorsRetranslateAndKeepRawDetails() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *receiverError = dialog.findChild<QLabel *>("receiverNameError");
+        QVERIFY(receiverError != nullptr);
+
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        SettingsFieldResult result{SettingsFieldId::receiverName(), QString("Receiver"),
+                                   SettingsFieldStatus::RecoveryFailed,
+                                   "App-owned failure: third-party detail", 123,
+                                   "third-party recovery detail"};
+        result.userReason = UiMessage::translated("Task8", "App-owned failure: %1",
+                                                  {"third-party detail"});
+        result.userRecoveryError = UiMessage::translated("Task8", "Recovery did not complete: %1",
+                                                         {"third-party recovery detail"});
+        outcome.fieldResults = {result};
+        dialog.presentApplyOutcome(outcome);
+        QCOMPARE(receiverError->text(),
+                 QString("Receiver name (Receiver): App-owned failure: third-party detail"
+                         " (native error 123) Recovery did not complete: third-party recovery detail"));
+
+        SettingsDialogTranslator translator;
+        const InstalledTranslator installedTranslator(&translator);
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&dialog, &languageChange);
+
+        QCOMPARE(receiverError->text(),
+                 QString("接收器名称 (Receiver)：应用错误：third-party detail"
+                         " (native error 123) 恢复未完成：third-party recovery detail"));
+    }
+
     void summaryAppearsAboveEverySettingsGroup() {
         SettingsDialog dialog(AppSettings::defaults());
         auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
-        auto *layout = qobject_cast<QVBoxLayout *>(dialog.layout());
+        auto *content = dialog.findChild<QScrollArea *>("settingsContentScrollArea");
         QVERIFY(summary != nullptr);
+        QVERIFY(content != nullptr);
+        auto *layout = qobject_cast<QVBoxLayout *>(content->widget()->layout());
         QVERIFY(layout != nullptr);
         QCOMPARE(layout->indexOf(summary), 0);
         QVERIFY(layout->indexOf(dialog.findChild<QGroupBox *>("generalSettingsGroup")) > 0);
@@ -313,7 +507,7 @@ private slots:
         QVERIFY(summary != nullptr);
 
         receiver->setText("Unapplied receiver");
-        QVERIFY(summary->text().contains("1 setting has unapplied changes."));
+        QVERIFY(summary->text().contains("Unapplied change count: 1."));
         open->click();
         QVERIFY(summary->text().contains(actions.openError));
         receiver->setText("Other receiver");
@@ -337,7 +531,7 @@ private slots:
         };
         dialog.presentApplyOutcome(partial);
         QCOMPARE(summary->text(),
-                 QString("Some settings were applied. 2 settings were not applied; correct the highlighted fields."));
+                 QString("Some settings were applied. Apply incomplete; setting count: 2. Correct the highlighted fields."));
 
         SettingsApplyOutcome persistence;
         persistence.committedSettings = AppSettings::defaults();
@@ -425,7 +619,7 @@ private slots:
         QVERIFY(shortcutStatus->text().contains("12345"));
         QVERIFY(shortcutStatus->text().contains("previous binding could not be restored"));
         QVERIFY(summary->text().contains("Could not save C:\\path\\airplay-settings.json"));
-        QVERIFY(summary->text().contains("Recovery failure requires attention"));
+        QVERIFY(summary->text().contains("Recovery requires attention; issue count: 1."));
         QVERIFY(!summary->text().contains("correct the highlighted fields"));
         QVERIFY(!summary->text().contains("Previous setting was restored"));
     }
@@ -441,7 +635,9 @@ private slots:
         SettingsDialog dialog(AppSettings::defaults());
 
         QStringList groupTitles;
-        auto *layout = qobject_cast<QVBoxLayout *>(dialog.layout());
+        auto *content = dialog.findChild<QScrollArea *>("settingsContentScrollArea");
+        QVERIFY(content != nullptr);
+        auto *layout = qobject_cast<QVBoxLayout *>(content->widget()->layout());
         QVERIFY(layout != nullptr);
         for (int index = 0; index < layout->count(); ++index) {
             if (auto *group = qobject_cast<QGroupBox *>(layout->itemAt(index)->widget())) {
@@ -461,11 +657,13 @@ private slots:
 
     void diagnosticsActionsHaveRequiredLayoutTextAndSignals() {
         SettingsDialog dialog(AppSettings::defaults());
-        auto *layout = qobject_cast<QVBoxLayout *>(dialog.layout());
+        auto *content = dialog.findChild<QScrollArea *>("settingsContentScrollArea");
         auto *group = dialog.findChild<QGroupBox *>("diagnosticsSettingsGroup");
         auto *restart = dialog.findChild<QPushButton *>("restartWithDiagnosticLoggingButton");
         auto *open = dialog.findChild<QPushButton *>("openDiagnosticLogFolderButton");
         auto *buttons = dialog.findChild<QDialogButtonBox *>();
+        QVERIFY(content != nullptr);
+        auto *layout = qobject_cast<QVBoxLayout *>(content->widget()->layout());
         QVERIFY(layout != nullptr);
         QVERIFY(group != nullptr);
         QVERIFY(restart != nullptr);
@@ -477,7 +675,7 @@ private slots:
         QVERIFY(isAscii(restart->text()));
         QVERIFY(isAscii(open->text()));
         QVERIFY(layout->indexOf(group) > layout->indexOf(dialog.findChild<QGroupBox *>("hotkeyBindingGroup")));
-        QVERIFY(layout->indexOf(group) < layout->indexOf(buttons));
+        QVERIFY(dialog.layout()->indexOf(content) < dialog.layout()->indexOf(buttons));
 
         QSignalSpy restartSpy(&dialog, &SettingsDialog::restartWithDiagnosticLoggingRequested);
         QSignalSpy openSpy(&dialog, &SettingsDialog::openDiagnosticLogFolderRequested);
@@ -676,7 +874,7 @@ private slots:
         QVERIFY(!chooseError->isHidden());
         choose->click();
         QVERIFY(!chooseError->text().contains("Could not open recording directory"));
-        QVERIFY(chooseError->text().contains("1 setting has unapplied changes."));
+        QVERIFY(chooseError->text().contains("Unapplied change count: 1."));
     }
 
     void validationThenPathFailureThenOpenSuccessKeepsValidationVisible() {
@@ -693,15 +891,15 @@ private slots:
         outcome.fieldResults = {{SettingsFieldId::receiverName(), QString("Invalid"),
                                  SettingsFieldStatus::ValidationFailed, "not allowed"}};
         dialog.presentApplyOutcome(outcome);
-        QVERIFY(error->text().contains("1 setting was not applied"));
+        QVERIFY(error->text().contains("Apply incomplete; setting count: 1."));
 
         open->click();
-        QVERIFY(error->text().contains("1 setting was not applied"));
+        QVERIFY(error->text().contains("Apply incomplete; setting count: 1."));
         QVERIFY(error->text().contains(actions.openError));
 
         actions.openError.clear();
         open->click();
-        QVERIFY(error->text().contains("1 setting was not applied"));
+        QVERIFY(error->text().contains("Apply incomplete; setting count: 1."));
         QVERIFY(!error->text().contains("Path action failed"));
         QVERIFY(!error->isHidden());
     }
@@ -726,11 +924,11 @@ private slots:
         outcome.fieldResults = {{SettingsFieldId::receiverName(), QString("Invalid"),
                                  SettingsFieldStatus::ValidationFailed, "not allowed"}};
         dialog.presentApplyOutcome(outcome);
-        QVERIFY(error->text().contains("1 setting was not applied"));
+        QVERIFY(error->text().contains("Apply incomplete; setting count: 1."));
         QVERIFY(error->text().contains(actions.openError));
 
         choose->click();
-        QVERIFY(error->text().contains("1 setting was not applied"));
+        QVERIFY(error->text().contains("Apply incomplete; setting count: 1."));
         QVERIFY(!error->text().contains("Path action failed"));
         QVERIFY(!error->isHidden());
     }
@@ -767,6 +965,77 @@ private slots:
         QVERIFY(dialog.findChild<QGroupBox *>("hotkeyBindingGroup") != nullptr);
         QVERIFY(dialog.findChild<QLineEdit *>("receiverNameEdit") != nullptr);
         QVERIFY(dialog.findChild<QPushButton *>("resetHotkeysButton") != nullptr);
+    }
+
+    void keepsApplyAndCancelReachableAtCompactHeight() {
+        SettingsDialog dialog(AppSettings::defaults());
+        dialog.resize(800, 500);
+        dialog.show();
+        QTest::qWait(0);
+
+        auto *content = dialog.findChild<QScrollArea *>("settingsContentScrollArea");
+        auto *apply = dialog.findChild<QPushButton *>("applySettingsButton");
+        auto *cancel = dialog.findChild<QPushButton *>("cancelSettingsButton");
+        QVERIFY(content != nullptr);
+        QVERIFY(apply != nullptr);
+        QVERIFY(cancel != nullptr);
+
+        QVERIFY(dialog.height() <= 500);
+        QVERIFY(content->widgetResizable());
+        QCOMPARE(content->horizontalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
+        QVERIFY(content->verticalScrollBar()->maximum() > 0);
+        QVERIFY(dialog.rect().contains(apply->mapTo(&dialog, apply->rect().center())));
+        QVERIFY(dialog.rect().contains(cancel->mapTo(&dialog, cancel->rect().center())));
+    }
+
+    void shortcutRowsRemainExpandedAtCompactHeight() {
+        SettingsDialog dialog(AppSettings::defaults());
+        dialog.resize(800, 500);
+        dialog.show();
+        QTest::qWait(0);
+        auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
+        QVERIFY(table != nullptr);
+        QCOMPARE(table->rowCount(), 7);
+        QCOMPARE(table->verticalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
+        QCOMPARE(table->verticalScrollBar()->maximum(), 0);
+        QVERIFY(table->viewport()->rect().contains(
+            table->visualItemRect(table->item(6, 0))));
+    }
+
+    void shortcutScrollingStartsAfterTenRows() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *table = dialog.findChild<QTableWidget *>("shortcutTable");
+        QVERIFY(table != nullptr);
+        table->setRowCount(10);
+        dialog.presentDiagnosticActionError({});
+        dialog.show();
+        QTest::qWait(0);
+        QCOMPARE(table->verticalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
+        QCOMPARE(table->verticalScrollBar()->maximum(), 0);
+        const int tenRowHeight = table->height();
+        table->setRowCount(11);
+        dialog.presentDiagnosticActionError({});
+        QTest::qWait(0);
+        QCOMPARE(table->height(), tenRowHeight);
+        QCOMPARE(table->verticalScrollBarPolicy(), Qt::ScrollBarAsNeeded);
+        QVERIFY(table->verticalScrollBar()->maximum() > 0);
+    }
+
+    void initialWindowFitsAvailableScreen() {
+        SettingsDialog dialog(AppSettings::defaults());
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+
+        auto *screen = dialog.screen();
+        auto *apply = dialog.findChild<QPushButton *>("applySettingsButton");
+        auto *cancel = dialog.findChild<QPushButton *>("cancelSettingsButton");
+        QVERIFY(screen != nullptr);
+        QVERIFY(apply != nullptr);
+        QVERIFY(cancel != nullptr);
+
+        QVERIFY(dialog.frameGeometry().height() <= screen->availableGeometry().height());
+        QVERIFY(dialog.rect().contains(apply->mapTo(&dialog, apply->rect().center())));
+        QVERIFY(dialog.rect().contains(cancel->mapTo(&dialog, cancel->rect().center())));
     }
 
     void exposesAcceptedReceiverName() {

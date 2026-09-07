@@ -5,6 +5,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QTranslator>
 #include <QFile>
 #include <QUuid>
 
@@ -32,6 +33,7 @@ private slots:
     void coordinatedChildWaitsForParentAfterReady();
     void coordinatedChildExitsForHandoffFailures();
     void sessionFailureSendsBoundedSanitizedErrorAndExits();
+    void sessionFailureLocalizesOuterTextAndKeepsRawDetail();
     void normalCloseWritesSessionSummaryMarkers();
     void childWaitFailureClosesHandleAndRecordsHandoffFailure();
     void rejectsParentPidsOutsideWindowsHandleRange();
@@ -62,6 +64,20 @@ void connectAndWrite(const QString &token, const QByteArray &line) {
 }
 
 } // namespace
+
+class DiagnosticActivationTranslator final : public QTranslator {
+public:
+    QString translate(const char *context, const char *sourceText,
+                      const char *disambiguation = nullptr, int n = -1) const override {
+        Q_UNUSED(disambiguation);
+        Q_UNUSED(n);
+        if (QString::fromLatin1(context) == QStringLiteral("DiagnosticActivation")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Diagnostic logging could not be initialized: %1")) {
+            return QStringLiteral("无法初始化诊断日志：%1");
+        }
+        return {};
+    }
+};
 
 void DiagnosticRestartCoordinatorTest::startsChildWithPrivateHandshakeArguments() {
     QStringList arguments;
@@ -283,6 +299,22 @@ void DiagnosticRestartCoordinatorTest::sessionFailureSendsBoundedSanitizedErrorA
     QVERIFY(line.endsWith('\n'));
     QVERIFY(line.size() <= 1024);
     QVERIFY(!line.contains('\r'));
+}
+
+void DiagnosticRestartCoordinatorTest::sessionFailureLocalizesOuterTextAndKeepsRawDetail() {
+    const DiagnosticActivation activation = DiagnosticActivation::parse(
+        {"app", "--diagnostic-log", "--diagnostic-parent-pid=1234", "--diagnostic-ready-token=private"}, {});
+    QByteArray line;
+    DiagnosticChildGateOperations operations;
+    operations.sendReadyLine = [&line](const QString &, const QByteArray &value, QString *) { line = value; return true; };
+
+    DiagnosticActivationTranslator translator;
+    QCoreApplication::installTranslator(&translator);
+    QCOMPARE(runDiagnosticChildGate(activation, nullptr, QStringLiteral("raw session detail"), operations),
+             DiagnosticChildGateResult::ExitChild);
+    QCoreApplication::removeTranslator(&translator);
+
+    QCOMPARE(QString::fromUtf8(line), QStringLiteral("ERROR\t无法初始化诊断日志：raw session detail\n"));
 }
 
 void DiagnosticRestartCoordinatorTest::normalCloseWritesSessionSummaryMarkers() {

@@ -3,12 +3,54 @@
 #include "app/AppSettingsStore.h"
 #include "app/SettingsApplyCoordinator.h"
 #include "app/SettingsChangeDeferrer.h"
+#include "app/UiMessage.h"
 #include "backend/FakeAirPlayReceiver.h"
 #include "platform/FakeHotkeyService.h"
 
 #include <QHash>
+#include <QCoreApplication>
+#include <QTranslator>
 
 namespace {
+
+class Task8Translator final : public QTranslator {
+public:
+    QString translate(const char *context, const char *sourceText,
+                      const char *disambiguation = nullptr, int n = -1) const override {
+        Q_UNUSED(disambiguation);
+        Q_UNUSED(n);
+        if (QString::fromLatin1(context) == QStringLiteral("SettingsApplyCoordinator")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Receiver name cannot be empty.")) {
+            return QStringLiteral("接收器名称不能为空。");
+        }
+        if (QString::fromLatin1(context) == QStringLiteral("SettingsApplyCoordinator")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Shortcut registration failed: %1")) {
+            return QStringLiteral("快捷键注册失败：%1");
+        }
+        if (QString::fromLatin1(context) == QStringLiteral("SettingsApplyCoordinator")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Shortcut registration failed: %1. Previous shortcut was restored.")) {
+            return QStringLiteral("快捷键注册失败：%1。已恢复上一个快捷键。");
+        }
+        if (QString::fromLatin1(context) == QStringLiteral("SettingsApplyCoordinator")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Receiver configuration could not be applied: %1")) {
+            return QStringLiteral("接收器配置无法应用：%1");
+        }
+        if (QString::fromLatin1(context) == QStringLiteral("SettingsApplyCoordinator")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Receiver restoration failed: %1")) {
+            return QStringLiteral("接收器恢复失败：%1");
+        }
+        if (QString::fromLatin1(context) == QStringLiteral("SettingsApplyCoordinator")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Shortcut restoration failed: %1 (native error %2)")) {
+            return QStringLiteral("快捷键恢复失败：%1（原生错误 %2）");
+        }
+        if (QString::fromLatin1(context) == QStringLiteral("SettingsApplyCoordinator")
+            && QString::fromLatin1(sourceText) == QStringLiteral("Receiver configuration did not start. The saved state was restored.")) {
+            return QStringLiteral("接收器配置未启动。已恢复保存的状态。");
+        }
+        return {};
+    }
+
+};
 
 class CountingPersistence final : public SettingsPersistence {
 public:
@@ -159,9 +201,10 @@ private slots:
         const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
                                            .plan(baseline, candidate, true, RecordingState::Idle);
 
-        QCOMPARE(plan.validationResults.size(), 13);
+        QCOMPARE(plan.validationResults.size(), 14);
         verifyValidationFailure(plan, SettingsFieldId::receiverName(),
                                 QStringLiteral("Receiver name cannot be empty."));
+        verifyValid(plan, SettingsFieldId::language());
         verifyValid(plan, SettingsFieldId::videoFrameRate());
         QVERIFY(plan.validChangedReceiverFields
                 == QVector<SettingsFieldId>{SettingsFieldId::videoFrameRate()});
@@ -245,6 +288,7 @@ private slots:
         const QString duplicateReason = QStringLiteral("Shortcut Ctrl+Alt+B is assigned to more than one action.");
         verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), duplicateReason);
         verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleRecording), duplicateReason);
+        verifyValid(plan, SettingsFieldId::language());
         verifyValid(plan, SettingsFieldId::videoResolution());
         verifyValid(plan, SettingsFieldId::videoFrameRate());
         verifyValid(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleAspectRatio));
@@ -312,6 +356,58 @@ private slots:
                 == QVector<SettingsFieldId>{SettingsFieldId::videoFrameRate()});
     }
 
+    void languageOnlyChangeDoesNotRequestReceiverTimingDecision() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setLanguage("zh-CN");
+
+        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
+                                           .plan(baseline, candidate, true, RecordingState::Idle);
+
+        QVERIFY(!plan.requiresReceiverTimingDecision);
+        QVERIFY(plan.validChangedReceiverFields.isEmpty());
+        verifyValid(plan, SettingsFieldId::language());
+    }
+
+    void languagePersistsAsIndependentField() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setLanguage("zh-CN");
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(persistence.saved.constFirst().language(), QString("zh-CN"));
+        QCOMPARE(outcome.committedSettings.language(), QString("zh-CN"));
+        verifyStatus(outcome, SettingsFieldId::language(), SettingsFieldStatus::Applied);
+        QVERIFY(outcome.mayClose);
+    }
+
+    void languagePersistenceFailureRollsBackCommittedLanguage() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setLanguage("zh-CN");
+        RecordingSettingsPersistence persistence;
+        persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                                      QFileDevice::WriteError, "Disk full"});
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QCOMPARE(outcome.committedSettings.language(), QString("system"));
+        verifyStatus(outcome, SettingsFieldId::language(),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        QVERIFY(outcome.globalResult.has_value());
+        QVERIFY(!outcome.mayClose);
+    }
+
     void planCopiesRecordingIdleState() {
         const AppSettings settings = AppSettings::defaults();
         const SettingsApplyCoordinator coordinator(nullptr, nullptr, nullptr, nullptr);
@@ -324,6 +420,7 @@ private slots:
         const AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
         candidate.setReceiverName("Desk Receiver");
+        candidate.setLanguage("zh-CN");
         candidate.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
         candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
         candidate.setRecordingOutputDirectory("C:/Temp/AirPlay");
@@ -344,12 +441,13 @@ private slots:
                     == settingsFieldValue(candidate, field));
         }
         QVERIFY(std::holds_alternative<QString>(plan.validationResults.at(0).attemptedValue));
-        QVERIFY(std::holds_alternative<VideoResolution>(plan.validationResults.at(1).attemptedValue));
-        QVERIFY(std::holds_alternative<VideoFrameRate>(plan.validationResults.at(2).attemptedValue));
-        QVERIFY(std::holds_alternative<QKeySequence>(plan.validationResults.at(3).attemptedValue));
-        QVERIFY(std::holds_alternative<RecordingFormat>(plan.validationResults.at(10).attemptedValue));
-        QVERIFY(std::holds_alternative<QString>(plan.validationResults.at(11).attemptedValue));
-        QVERIFY(std::holds_alternative<bool>(plan.validationResults.at(12).attemptedValue));
+        QCOMPARE(std::get<QString>(plan.validationResults.at(1).attemptedValue), QString("zh-CN"));
+        QVERIFY(std::holds_alternative<VideoResolution>(plan.validationResults.at(2).attemptedValue));
+        QVERIFY(std::holds_alternative<VideoFrameRate>(plan.validationResults.at(3).attemptedValue));
+        QVERIFY(std::holds_alternative<QKeySequence>(plan.validationResults.at(4).attemptedValue));
+        QVERIFY(std::holds_alternative<RecordingFormat>(plan.validationResults.at(11).attemptedValue));
+        QVERIFY(std::holds_alternative<QString>(plan.validationResults.at(12).attemptedValue));
+        QVERIFY(std::holds_alternative<bool>(plan.validationResults.at(13).attemptedValue));
     }
 
     void planDoesNotInvokeDependenciesAndAllowsNullDependencies() {
@@ -368,7 +466,7 @@ private slots:
         QVERIFY(!deferrer.hasPendingReceiverConfiguration());
         const SettingsApplyPlan nullPlan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
                                                 .plan(settings, settings, false, RecordingState::Idle);
-        QCOMPARE(nullPlan.validationResults.size(), 13);
+        QCOMPARE(nullPlan.validationResults.size(), 14);
     }
 
     void oneShortcutFailureDoesNotRollbackAnotherShortcut() {
@@ -1204,6 +1302,110 @@ private slots:
             coordinator.plan(baseline, baseline, false, RecordingState::Idle),
             ReceiverApplyTiming::Immediate);
         QVERIFY(success.mayClose);
+    }
+    void validationReasonRendersUsingCurrentTranslator() {
+        AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName(QString());
+
+        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
+                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const SettingsFieldResult &result = requireResult(plan, SettingsFieldId::receiverName());
+        QCOMPARE(result.reason, QString("Receiver name cannot be empty."));
+        QCOMPARE(result.userReason.render(), QString("Receiver name cannot be empty."));
+
+        Task8Translator translator;
+        QCoreApplication::installTranslator(&translator);
+        QCOMPARE(result.userReason.render(), QString("接收器名称不能为空。"));
+        QCoreApplication::removeTranslator(&translator);
+    }
+
+    void delayedShortcutAndReceiverReasonsTranslateWithoutEnglishFragments() {
+        AppSettings baseline = AppSettings::defaults();
+        AppSettings shortcutCandidate = baseline;
+        shortcutCandidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        hotkeys.responses = {{false, false, HotkeyError{87, "Raw registration detail"}, true}};
+        SettingsApplyCoordinator shortcutCoordinator(&hotkeys, nullptr, nullptr, nullptr);
+        const SettingsApplyOutcome shortcutOutcome = shortcutCoordinator.execute(
+            shortcutCoordinator.plan(baseline, shortcutCandidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &shortcutResult = requireResult(
+            shortcutOutcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop));
+
+        AppSettings receiverCandidate = baseline;
+        receiverCandidate.setReceiverName("New Receiver");
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.requestedConfigurationRestartError = "Raw apply detail";
+        receiver.rollbackConfigurationRestartError = "Raw recovery detail";
+        SettingsApplyCoordinator receiverCoordinator(nullptr, nullptr, &receiver, nullptr);
+        const SettingsApplyOutcome receiverOutcome = receiverCoordinator.execute(
+            receiverCoordinator.plan(baseline, receiverCandidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &receiverResult = requireResult(receiverOutcome, SettingsFieldId::receiverName());
+
+        QCOMPARE(shortcutResult.userReason.render(),
+                 QString("Shortcut registration failed: Raw registration detail. Previous shortcut was restored."));
+        QCOMPARE(receiverResult.userReason.render(),
+                 QString("Receiver configuration could not be applied: Raw apply detail"));
+        QCOMPARE(receiverResult.userRecoveryError.render(),
+                 QString("Receiver restoration failed: Raw recovery detail"));
+
+        Task8Translator translator;
+        QCoreApplication::installTranslator(&translator);
+        QCOMPARE(shortcutResult.userReason.render(), QString("快捷键注册失败：Raw registration detail。已恢复上一个快捷键。"));
+        QCOMPARE(receiverResult.userReason.render(), QString("接收器配置无法应用：Raw apply detail"));
+        QCOMPARE(receiverResult.userRecoveryError.render(), QString("接收器恢复失败：Raw recovery detail"));
+        QCoreApplication::removeTranslator(&translator);
+    }
+
+    void unavailableDeferrerReasonRetranslatesWithoutUnavailableDetail() {
+        AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setReceiverName("New Receiver");
+        FakeAirPlayReceiver receiver;
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
+            ReceiverApplyTiming::AfterDisconnect);
+        const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
+        QCOMPARE(result.reason,
+                 QString("Receiver configuration did not start: Receiver configuration deferrer is unavailable. The saved state was restored to receiver name 'AirPlay Receiver', 1080p, 30 fps."));
+        QCOMPARE(result.userReason.render(),
+                 QString("Receiver configuration did not start. The saved state was restored."));
+
+        Task8Translator translator;
+        QCoreApplication::installTranslator(&translator);
+        QCOMPARE(result.userReason.render(), QString("接收器配置未启动。已恢复保存的状态。"));
+        QCoreApplication::removeTranslator(&translator);
+    }
+
+    void delayedShortcutRecoveryIncludesNativeCodeAfterTranslation() {
+        AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+        RecordingHotkeyService hotkeys;
+        hotkeys.seed(baseline);
+        hotkeys.responses = {{false, false, HotkeyError{87, "Raw candidate detail"}, false,
+                              HotkeyError{88, "Raw recovery detail"}}};
+        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+        const SettingsFieldResult &result = requireResult(
+            outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop));
+        QCOMPARE(result.userRecoveryError.render(),
+                 QString("Shortcut restoration failed: Raw recovery detail (native error 88)"));
+
+        Task8Translator translator;
+        QCoreApplication::installTranslator(&translator);
+        QCOMPARE(result.userRecoveryError.render(), QString("快捷键恢复失败：Raw recovery detail（原生错误 88）"));
+        QCoreApplication::removeTranslator(&translator);
     }
 };
 

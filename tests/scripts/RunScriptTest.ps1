@@ -25,6 +25,21 @@ if (-not (Test-Path -LiteralPath $buildScript)) {
 }
 
 $buildContent = Get-Content -LiteralPath $buildScript -Raw
+$requiredLinguistDependencies = @(
+    '"qt6-tools"',
+    '"qt6-declarative"',
+    '"qt6-translations"',
+    'Join-Path $BinPath "lupdate.exe"',
+    'Join-Path $BinPath "lrelease.exe"',
+    'Join-Path $BinPath "Qt6Qml.dll"',
+    'share\qt6\translations\qtbase_zh_CN.qm'
+)
+foreach ($dependency in $requiredLinguistDependencies) {
+    if (-not $buildContent.Contains($dependency)) {
+        throw "scripts\build.ps1 must require $dependency so lupdate can run."
+    }
+}
+
 $registryBlockStartsPortableOnly = $buildContent -match 'if \(\$IsPortable\) \{\s*Write-Host "  Generating GStreamer registry cache\.\.\."'
 if ($registryBlockStartsPortableOnly) {
     throw "scripts\build.ps1 must generate the GStreamer registry for every deployed standalone build, not only portable builds."

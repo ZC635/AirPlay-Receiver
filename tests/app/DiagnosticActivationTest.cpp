@@ -2,12 +2,53 @@
 
 #include <QFile>
 #include <QTemporaryDir>
+#include <QTranslator>
 
 #include "app/DiagnosticActivation.h"
+#include "app/LanguageManager.h"
 
 #define main diagnosticActivationTestMain
 #include "app/main.cpp"
 #undef main
+
+namespace {
+
+class StartupTranslator final : public QTranslator {
+public:
+    QString translate(const char *context, const char *sourceText,
+                      const char *disambiguation = nullptr, int n = -1) const override {
+        Q_UNUSED(disambiguation);
+        Q_UNUSED(n);
+        if (QString::fromLatin1(context) != QStringLiteral("Startup")) {
+            return {};
+        }
+        const QString source = QString::fromLatin1(sourceText);
+        if (source == QStringLiteral("Diagnostic logging could not be started: %1")) {
+            return QString::fromUtf8(u8"无法启动诊断日志：%1");
+        }
+        if (source == QStringLiteral("Diagnostic logging stopped: %1")) {
+            return QString::fromUtf8(u8"诊断日志已停止：%1");
+        }
+        return {};
+    }
+};
+
+class InstalledTranslator final {
+public:
+    explicit InstalledTranslator(QTranslator *translator)
+        : translator_(translator) {
+        QCoreApplication::installTranslator(translator_);
+    }
+
+    ~InstalledTranslator() {
+        QCoreApplication::removeTranslator(translator_);
+    }
+
+private:
+    QTranslator *translator_;
+};
+
+} // namespace
 
 class DiagnosticActivationTest final : public QObject {
     Q_OBJECT
@@ -27,6 +68,9 @@ private slots:
     void missingSettingsFileIsDefaulted();
     void invalidSettingsFileIsDefaulted();
     void validSettingsObjectIsLoaded();
+    void savedChineseLanguageIsAppliedBeforeDiagnosticStartupDecision();
+    void missingStartupCatalogFallsBackToEnglishAndRecordsOneDiagnosticEvent();
+    void diagnosticLoggingBodiesTranslateWithoutChangingRawDetails();
     void missingRuntimeAbortsWithoutNormalDiagnosticClose();
     void skippedStandaloneRuntimeAvoidsManifestEntries();
     void incompatibleRuntimePathStopsWithActionableMessage();
@@ -163,6 +207,75 @@ void DiagnosticActivationTest::validSettingsObjectIsLoaded() {
     file.close();
 
     QVERIFY(settingsFileContainsObject(file.fileName()));
+}
+
+void DiagnosticActivationTest::savedChineseLanguageIsAppliedBeforeDiagnosticStartupDecision() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    AppSettings saved = AppSettings::defaults();
+    saved.setLanguage(QStringLiteral("zh-CN"));
+    QVERIFY(AppSettingsStore(directory.filePath("airplay-settings.json")).save(saved).success);
+
+    int settingsLoadCount = 0;
+    const StartupSettings startupSettings = loadStartupSettings(
+        directory.path(), [&settingsLoadCount](const QString &settingsPath) {
+            ++settingsLoadCount;
+            return AppSettingsStore(settingsPath).loadOrDefaults();
+        });
+    QCOMPARE(startupSettings.settingsPath, directory.filePath("airplay-settings.json"));
+    QVERIFY(startupSettings.settingsLoaded);
+    QCOMPARE(settingsLoadCount, 1);
+    QCOMPARE(startupSettings.settings.language(), QStringLiteral("zh-CN"));
+
+    LanguageManager languageManager(QCoreApplication::instance(), nullptr,
+                                    [] { return std::make_unique<QTranslator>(); },
+                                    [](QTranslator *, const QString &) { return true; });
+    const std::optional<TranslationLoadFailure> failure =
+        applyStartupLanguage(languageManager, startupSettings.settings);
+
+    QVERIFY(!failure.has_value());
+    QCOMPARE(languageManager.selection(), QStringLiteral("zh-CN"));
+    QCOMPARE(languageManager.effectiveLanguage(), QStringLiteral("zh-CN"));
+    QVERIFY(diagnosticStartupDecision(
+                DiagnosticActivation{true, DiagnosticActivationSource::CommandArgument}, true, {})
+                .loggingActive);
+}
+
+void DiagnosticActivationTest::missingStartupCatalogFallsBackToEnglishAndRecordsOneDiagnosticEvent() {
+    class CapturingSink final : public DiagnosticLogSink {
+    public:
+        void record(DiagnosticEvent event) override { events.append(std::move(event)); }
+        QList<DiagnosticEvent> events;
+    } sink;
+    AppSettings settings = AppSettings::defaults();
+    settings.setLanguage(QStringLiteral("zh-CN"));
+    LanguageManager languageManager(QCoreApplication::instance(), nullptr,
+                                    [] { return std::make_unique<QTranslator>(); },
+                                    [](QTranslator *, const QString &) { return false; });
+
+    const std::optional<TranslationLoadFailure> failure = applyStartupLanguage(languageManager, settings);
+
+    QVERIFY(failure.has_value());
+    QCOMPARE(languageManager.effectiveLanguage(), QStringLiteral("en"));
+    QCOMPARE(QCoreApplication::translate("Startup", "Diagnostic logging unavailable"),
+             QStringLiteral("Diagnostic logging unavailable"));
+    recordStartupLanguageFailure(&sink, failure);
+    QCOMPARE(sink.events.size(), 1);
+    QCOMPARE(sink.events.constFirst().name, QStringLiteral("translation_load_failed"));
+    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("requested_language")),
+             QStringLiteral("zh-CN"));
+    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("resource_path")),
+             QStringLiteral(":/i18n/airplay_zh_CN.qm"));
+}
+
+void DiagnosticActivationTest::diagnosticLoggingBodiesTranslateWithoutChangingRawDetails() {
+    StartupTranslator translator;
+    const InstalledTranslator installedTranslator(&translator);
+
+    QCOMPARE(diagnosticLoggingUnavailableMessage(QStringLiteral("access denied")),
+             QString::fromUtf8(u8"无法启动诊断日志：access denied"));
+    QCOMPARE(diagnosticLoggingStoppedMessage(QStringLiteral("disk full")),
+             QString::fromUtf8(u8"诊断日志已停止：disk full"));
 }
 
 void DiagnosticActivationTest::missingRuntimeAbortsWithoutNormalDiagnosticClose() {

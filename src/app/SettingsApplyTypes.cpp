@@ -1,29 +1,13 @@
 #include "app/SettingsApplyTypes.h"
 
+#include "app/ShortcutActionText.h"
+
+#include <QCoreApplication>
+
 #include <algorithm>
 #include <type_traits>
 
 namespace {
-
-QString shortcutDisplayName(ShortcutAction action) {
-    switch (action) {
-    case ShortcutAction::ToggleAlwaysOnTop:
-        return "Toggle always on top";
-    case ShortcutAction::VolumeUp:
-        return "Volume up";
-    case ShortcutAction::VolumeDown:
-        return "Volume down";
-    case ShortcutAction::ToggleToolbar:
-        return "Toggle toolbar";
-    case ShortcutAction::ToggleAspectRatio:
-        return "Toggle aspect ratio";
-    case ShortcutAction::ToggleVideoFit:
-        return "Toggle video fit";
-    case ShortcutAction::ToggleRecording:
-        return "Toggle recording";
-    }
-    return "Shortcut";
-}
 
 QString formatVideoResolution(VideoResolution resolution) {
     switch (resolution) {
@@ -63,6 +47,10 @@ SettingsFieldId SettingsFieldId::receiverName() {
     return {SettingsFieldKind::ReceiverName, std::nullopt};
 }
 
+SettingsFieldId SettingsFieldId::language() {
+    return {SettingsFieldKind::Language, std::nullopt};
+}
+
 SettingsFieldId SettingsFieldId::videoResolution() {
     return {SettingsFieldKind::VideoResolution, std::nullopt};
 }
@@ -98,6 +86,7 @@ bool operator!=(const SettingsFieldId &left, const SettingsFieldId &right) {
 QVector<SettingsFieldId> allSettingsFields() {
     return {
         SettingsFieldId::receiverName(),
+        SettingsFieldId::language(),
         SettingsFieldId::videoResolution(),
         SettingsFieldId::videoFrameRate(),
         SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop),
@@ -117,6 +106,8 @@ SettingsFieldValue settingsFieldValue(const AppSettings &settings, const Setting
     switch (field.kind) {
     case SettingsFieldKind::ReceiverName:
         return settings.receiverName();
+    case SettingsFieldKind::Language:
+        return settings.language();
     case SettingsFieldKind::VideoResolution:
         return settings.videoQuality().resolution;
     case SettingsFieldKind::VideoFrameRate:
@@ -145,6 +136,9 @@ void copySettingsField(const AppSettings &source,
     switch (field.kind) {
     case SettingsFieldKind::ReceiverName:
         destination->setReceiverName(source.receiverName());
+        return;
+    case SettingsFieldKind::Language:
+        destination->setLanguage(source.language());
         return;
     case SettingsFieldKind::VideoResolution: {
         VideoQualitySettings quality = destination->videoQuality();
@@ -179,19 +173,24 @@ void copySettingsField(const AppSettings &source,
 QString settingsFieldDisplayName(const SettingsFieldId &field) {
     switch (field.kind) {
     case SettingsFieldKind::ReceiverName:
-        return "Receiver name";
+        return QCoreApplication::translate("SettingsFields", "Receiver name");
+    case SettingsFieldKind::Language:
+        return QCoreApplication::translate("SettingsFields", "Language");
     case SettingsFieldKind::VideoResolution:
-        return "Resolution";
+        return QCoreApplication::translate("SettingsFields", "Resolution");
     case SettingsFieldKind::VideoFrameRate:
-        return "Frame rate";
+        return QCoreApplication::translate("SettingsFields", "Frame rate");
     case SettingsFieldKind::Shortcut:
-        return field.shortcutAction.has_value() ? shortcutDisplayName(*field.shortcutAction) : "Shortcut";
+        return field.shortcutAction.has_value()
+            ? shortcutActionDisplayName(*field.shortcutAction)
+            : QCoreApplication::translate("SettingsFields", "Shortcut");
     case SettingsFieldKind::RecordingFormat:
-        return "Format";
+        return QCoreApplication::translate("SettingsFields", "Format");
     case SettingsFieldKind::RecordingOutputDirectory:
-        return "Output folder";
+        return QCoreApplication::translate("SettingsFields", "Output folder");
     case SettingsFieldKind::RecordingCompletionNotification:
-        return "Show a message when recording completes";
+        return QCoreApplication::translate("SettingsFields",
+                                           "Show a message when recording completes");
     }
     return {};
 }
@@ -210,7 +209,9 @@ QString formatSettingsFieldValue(const SettingsFieldValue &value) {
         } else if constexpr (std::is_same_v<ValueType, RecordingFormat>) {
             return formatRecordingFormat(fieldValue);
         } else {
-            return fieldValue ? "Enabled" : "Disabled";
+            return fieldValue
+                ? QCoreApplication::translate("SettingsFields", "Enabled")
+                : QCoreApplication::translate("SettingsFields", "Disabled");
         }
     }, value);
 }

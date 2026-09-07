@@ -3,6 +3,7 @@
 #include "diagnostics/DiagnosticSanitizer.h"
 
 #include <QFileInfo>
+#include <QCoreApplication>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QProcess>
@@ -12,6 +13,10 @@
 #include <memory>
 
 namespace {
+
+QString localized(const char *source) {
+    return QCoreApplication::translate("DiagnosticRestartCoordinator", source);
+}
 
 constexpr int kHandshakeTimeoutMs = 10000;
 constexpr qsizetype kMaximumLineBytes = 1024;
@@ -61,7 +66,7 @@ DiagnosticRestartCoordinator::DiagnosticRestartCoordinator(DiagnosticRestartOper
     connect(&d->server, &QLocalServer::newConnection, this,
             &DiagnosticRestartCoordinator::acceptConnection);
     connect(&d->timer, &QTimer::timeout, this, [this] {
-        fail(QStringLiteral("Diagnostic restart timed out waiting for the child process."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart timed out waiting for the child process.")));
     });
 }
 
@@ -74,13 +79,13 @@ bool DiagnosticRestartCoordinator::begin(const QString &executablePath, qint64 p
         return false;
     }
     if (executablePath.isEmpty() || parentPid <= 0) {
-        fail(QStringLiteral("Diagnostic restart could not be started."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart could not be started.")));
         return false;
     }
 
     d->token = d->operations.createToken();
     if (d->token.isEmpty() || !d->server.listen(d->token)) {
-        fail(QStringLiteral("Diagnostic restart could not create its private handoff channel."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart could not create its private handoff channel.")));
         return false;
     }
     d->active = true;
@@ -92,7 +97,7 @@ bool DiagnosticRestartCoordinator::begin(const QString &executablePath, qint64 p
     };
     QString startError;
     if (!d->operations.startDetached(executablePath, arguments, &startError)) {
-        fail(QStringLiteral("Diagnostic restart could not start the child process."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart could not start the child process.")));
         return false;
     }
     return true;
@@ -107,18 +112,18 @@ void DiagnosticRestartCoordinator::acceptConnection() {
     if (d->socket != nullptr) {
         while (QLocalSocket *extra = d->server.nextPendingConnection())
             extra->deleteLater();
-        fail(QStringLiteral("Diagnostic restart received an invalid child response."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart received an invalid child response.")));
         return;
     }
     d->socket = d->server.nextPendingConnection();
     if (d->socket == nullptr) {
-        fail(QStringLiteral("Diagnostic restart received an invalid child response."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart received an invalid child response.")));
         return;
     }
     connect(d->socket, &QLocalSocket::readyRead, this, &DiagnosticRestartCoordinator::readConnection);
     connect(d->socket, &QLocalSocket::disconnected, this, [this] {
         if (d->active)
-            fail(QStringLiteral("Diagnostic restart received an incomplete child response."));
+            fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart received an incomplete child response.")));
     });
 }
 
@@ -127,14 +132,14 @@ void DiagnosticRestartCoordinator::readConnection() {
         return;
     d->input.append(d->socket->readAll());
     if (d->input.size() > kMaximumLineBytes) {
-        fail(QStringLiteral("Diagnostic restart received an oversized child response."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart received an oversized child response.")));
         return;
     }
     const int newline = d->input.indexOf('\n');
     if (newline < 0)
         return;
     if (newline != d->input.size() - 1) {
-        fail(QStringLiteral("Diagnostic restart received an invalid child response."));
+        fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart received an invalid child response.")));
         return;
     }
     if (d->input == QByteArrayLiteral("READY\n")) {
@@ -144,11 +149,11 @@ void DiagnosticRestartCoordinator::readConnection() {
     if (d->input.startsWith(QByteArrayLiteral("ERROR\t"))) {
         const QString childError = QString::fromUtf8(d->input.mid(6, d->input.size() - 7));
         fail(safeFailure(childError).isEmpty()
-                 ? QStringLiteral("Diagnostic child could not initialize logging.")
+                 ? localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic child could not initialize logging."))
                  : safeFailure(childError));
         return;
     }
-    fail(QStringLiteral("Diagnostic restart received an invalid child response."));
+    fail(localized(QT_TRANSLATE_NOOP("DiagnosticRestartCoordinator", "Diagnostic restart received an invalid child response.")));
 }
 
 void DiagnosticRestartCoordinator::finishReady() {

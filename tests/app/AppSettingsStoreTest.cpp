@@ -384,6 +384,33 @@ private slots:
         QCOMPARE(loaded.receiverName(), QString("Desk Receiver"));
     }
 
+    void missingLanguageFieldUsesSystem() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write(R"({"receiverName":"Legacy Receiver"})") > 0);
+        file.close();
+
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().language(), QString("system"));
+    }
+
+    void languageRoundTrips() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setLanguage("zh-CN");
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings).success);
+
+        QCOMPARE(store.loadOrDefaults().language(), QString("zh-CN"));
+    }
+
     void malformedReceiverNameFallsBackToDefault() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

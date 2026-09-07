@@ -19,6 +19,7 @@
 #include "app/AppSettingsStore.h"
 #include "app/BuildIdentity.h"
 #include "app/DiagnosticActivation.h"
+#include "app/LanguageManager.h"
 #include "app/MainWindow.h"
 #include "app/RecordingStartupCleanup.h"
 #include "backend/AirPlayReceiver.h"
@@ -64,6 +65,45 @@ struct GStreamerPluginStartupDecision {
     QString reason = QStringLiteral("ready");
 };
 
+struct StartupSettings {
+    QString settingsPath;
+    bool settingsLoaded = false;
+    AppSettings settings = AppSettings::defaults();
+};
+
+struct TranslationLoadFailure {
+    QString requestedLanguage;
+    QString resourcePath;
+};
+
+QString startupText(const char *sourceText) {
+    return QCoreApplication::translate("Startup", sourceText);
+}
+
+QString diagnosticLoggingUnavailableMessage(const QString &error) {
+    if (error.isEmpty()) {
+        return startupText(QT_TRANSLATE_NOOP(
+            "Startup", "Diagnostic logging could not be started."));
+    }
+    return startupText(QT_TRANSLATE_NOOP(
+        "Startup", "Diagnostic logging could not be started: %1")).arg(error);
+}
+
+QString diagnosticLoggingStoppedMessage(const QString &error) {
+    if (error.isEmpty()) {
+        return startupText(QT_TRANSLATE_NOOP("Startup", "Diagnostic logging stopped."));
+    }
+    return startupText(QT_TRANSLATE_NOOP(
+        "Startup", "Diagnostic logging stopped: %1")).arg(error);
+}
+
+void showDiagnosticLoggingStoppedWarning(const QString &error) {
+    QMessageBox::warning(nullptr,
+                         startupText(QT_TRANSLATE_NOOP(
+                             "Startup", "Diagnostic logging stopped")),
+                         diagnosticLoggingStoppedMessage(error));
+}
+
 DiagnosticStartupDecision diagnosticStartupDecision(
     const DiagnosticActivation &activation, bool sessionCreated,
     const QString &creationError) {
@@ -100,13 +140,13 @@ RuntimePathStartupDecision runtimePathStartupDecision(
     }
 
     return {false,
-            QStringLiteral("Unsupported application path"),
-            QStringLiteral(
-                "The current application folder uses characters unsupported by the current "
+            startupText(QT_TRANSLATE_NOOP("Startup", "Unsupported application path")),
+            startupText(QT_TRANSLATE_NOOP(
+                "Startup", "The current application folder uses characters unsupported by the current "
                 "Windows system language. Bundled GStreamer plugins cannot load from this "
                 "location.\n\nMove the entire extracted application folder to a short path "
                 "containing only English letters, numbers, spaces, hyphens, and underscores "
-                "(for example, C:\\AirPlay), then restart the application."),
+                "(for example, C:\\AirPlay), then restart the application.")),
             QStringLiteral("unsupported_application_path")};
 }
 
@@ -126,14 +166,14 @@ GStreamerPluginStartupDecision gstreamerPluginStartupDecision(
         : readiness.missingPlugins.join(QStringLiteral(", "));
     if (hasNonAscii) {
         return {false,
-                QStringLiteral("GStreamer plugins unavailable"),
-                QStringLiteral("Required GStreamer plugins could not be loaded from the current application folder:\n\n%1\n\nMove the entire extracted folder to a short path containing only English letters, numbers, spaces, hyphens, and underscores, for example C:\\AirPlay, then restart the application.").arg(missing),
+                startupText(QT_TRANSLATE_NOOP("Startup", "GStreamer plugins unavailable")),
+                startupText(QT_TRANSLATE_NOOP("Startup", "Required GStreamer plugins could not be loaded from the current application folder:\n\n%1\n\nMove the entire extracted folder to a short path containing only English letters, numbers, spaces, hyphens, and underscores, for example C:\\AirPlay, then restart the application.")).arg(missing),
                 QStringLiteral("gstreamer_plugin_path_load_failure"),
                 QStringLiteral("path_load_failure")};
     }
     return {false,
-            QStringLiteral("GStreamer plugins unavailable"),
-            QStringLiteral("Required GStreamer plugins could not be loaded:\n\n%1\n\nRe-extract the portable package. If the problem persists, restart with diagnostic logging and report the generated log.").arg(missing),
+            startupText(QT_TRANSLATE_NOOP("Startup", "GStreamer plugins unavailable")),
+            startupText(QT_TRANSLATE_NOOP("Startup", "Required GStreamer plugins could not be loaded:\n\n%1\n\nRe-extract the portable package. If the problem persists, restart with diagnostic logging and report the generated log.")).arg(missing),
             QStringLiteral("gstreamer_plugin_load_failure"),
             QStringLiteral("plugin_load_failure")};
 }
@@ -194,6 +234,40 @@ bool settingsFileContainsObject(const QString &settingsPath) {
     QFile file(settingsPath);
     return file.open(QIODevice::ReadOnly) &&
         QJsonDocument::fromJson(file.readAll()).isObject();
+}
+
+StartupSettings loadStartupSettings(
+    const QString &applicationDirectory,
+    const std::function<AppSettings(const QString &)> &loadSettings = {}) {
+    StartupSettings result;
+    result.settingsPath = applicationDirectory + QStringLiteral("/airplay-settings.json");
+    result.settingsLoaded = settingsFileContainsObject(result.settingsPath);
+    result.settings = loadSettings ? loadSettings(result.settingsPath)
+                                   : AppSettingsStore(result.settingsPath).loadOrDefaults();
+    return result;
+}
+
+std::optional<TranslationLoadFailure> applyStartupLanguage(
+    LanguageManager &languageManager, const AppSettings &settings) {
+    std::optional<TranslationLoadFailure> failure;
+    const QMetaObject::Connection connection = QObject::connect(
+        &languageManager, &LanguageManager::translationLoadFailed, &languageManager,
+        [&failure](const QString &selection, const QString &resourcePath) {
+            failure = TranslationLoadFailure{selection, resourcePath};
+        });
+    languageManager.apply(settings.language());
+    QObject::disconnect(connection);
+    return failure;
+}
+
+void recordStartupLanguageFailure(
+    DiagnosticLogSink *sink, const std::optional<TranslationLoadFailure> &failure) {
+    if (!failure.has_value()) {
+        return;
+    }
+    recordStartup(sink, QStringLiteral("translation_load_failed"),
+                  {{QStringLiteral("requested_language"), failure->requestedLanguage},
+                   {QStringLiteral("resource_path"), failure->resourcePath}}, true);
 }
 
 void closeDiagnosticSession(DiagnosticLogSink *sink,
@@ -298,6 +372,12 @@ int main(int argc, char *argv[]) {
     QCoreApplication::setApplicationName(QStringLiteral("AirPlay Receiver"));
     QCoreApplication::setApplicationVersion(QString::fromUtf16(AirPlayBuildIdentity::version));
 
+    const StartupSettings startupSettings = loadStartupSettings(
+        QCoreApplication::applicationDirPath());
+    LanguageManager languageManager(&app);
+    const std::optional<TranslationLoadFailure> translationLoadFailure =
+        applyStartupLanguage(languageManager, startupSettings.settings);
+
     const DiagnosticActivation activation = DiagnosticActivation::parse(
         QCoreApplication::arguments(), qgetenv("AIRPLAY_DEBUG_LOG"));
     std::unique_ptr<DiagnosticSession> session;
@@ -331,6 +411,7 @@ int main(int argc, char *argv[]) {
     if (session) {
         qtBridge.emplace(sink);
     }
+    recordStartupLanguageFailure(sink, translationLoadFailure);
     if (runDiagnosticChildGate(activation, session.get(), creationError, {}) ==
         DiagnosticChildGateResult::ExitChild) {
         qtBridge.reset();
@@ -340,8 +421,10 @@ int main(int argc, char *argv[]) {
     const DiagnosticStartupDecision startupDecision = diagnosticStartupDecision(
         activation, session != nullptr, creationError);
     if (!startupDecision.userError.isEmpty()) {
-        QMessageBox::warning(nullptr, QStringLiteral("Diagnostic logging unavailable"),
-                             startupDecision.userError);
+        QMessageBox::warning(nullptr,
+                             startupText(QT_TRANSLATE_NOOP(
+                                 "Startup", "Diagnostic logging unavailable")),
+                             diagnosticLoggingUnavailableMessage(startupDecision.userError));
     }
     recordStartup(sink, QStringLiteral("session_activation"),
                   {{QStringLiteral("activation_source"), activation.sourceName()}}, true);
@@ -410,8 +493,10 @@ int main(int argc, char *argv[]) {
             }
             QMessageBox::critical(
                 nullptr,
-                QStringLiteral("AirPlay Receiver dependencies missing"),
-                QString("This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again.")
+                startupText(QT_TRANSLATE_NOOP(
+                    "Startup", "AirPlay Receiver dependencies missing")),
+                startupText(QT_TRANSLATE_NOOP(
+                    "Startup", "This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again."))
                     .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
             abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
                                    QStringLiteral("missing_runtime"));
@@ -461,10 +546,9 @@ int main(int argc, char *argv[]) {
 #endif
 
     WindowsHotkeyService hotkeys;
-    const QString settingsPath = QCoreApplication::applicationDirPath() + "/airplay-settings.json";
-    const bool settingsLoaded = settingsFileContainsObject(settingsPath);
-    const AppSettings settings = AppSettingsStore(settingsPath).loadOrDefaults();
-    recordStartup(sink, settingsLoaded ? QStringLiteral("settings_loaded")
+    const QString &settingsPath = startupSettings.settingsPath;
+    const AppSettings &settings = startupSettings.settings;
+    recordStartup(sink, startupSettings.settingsLoaded ? QStringLiteral("settings_loaded")
                                        : QStringLiteral("settings_defaulted"), {}, true);
     const QStringList cleanupResult = cleanupRecordingDirectoryAtStartup(settings);
     recordStartup(sink, QStringLiteral("recording_startup_cleanup"),
@@ -491,15 +575,19 @@ int main(int argc, char *argv[]) {
                       {{QStringLiteral("result"), state == ReceiverState::Discoverable
                           ? QStringLiteral("yes") : QStringLiteral("no")}}, true);
     });
-    MainWindow window(settings, &hotkeys, &receiver, settingsPath);
+    MainWindowRuntimeServices runtimeServices;
+    runtimeServices.languageManager = &languageManager;
+    runtimeServices.diagnosticLoggingActive = diagnosticLoggingActiveForSession(
+        session != nullptr, session && session->isActive());
+    runtimeServices.quitApplication = [&app] { app.quit(); };
+    MainWindow window(settings, &hotkeys, &receiver, settingsPath, nullptr, nullptr,
+                      runtimeServices);
     recordStartup(sink, QStringLiteral("window_constructed"), {}, true);
     QObject::connect(&window, &MainWindow::diagnosticLoggingStopped, &app,
                      [](const QString &error) {
-        QMessageBox::warning(nullptr, QStringLiteral("Diagnostic logging stopped"), error);
+        showDiagnosticLoggingStoppedWarning(error);
     });
     diagnosticWindow = &window;
-    window.setDiagnosticLoggingActive(diagnosticLoggingActiveForSession(
-        session != nullptr, session && session->isActive()));
     recordStartup(sink, QStringLiteral("receiver_start_requested"), {}, true);
     receiver.start();
     window.show();
@@ -507,15 +595,19 @@ int main(int argc, char *argv[]) {
     closeDiagnosticSession(sink, qtBridge, session, networkMonitor, &receiver);
     return exitCode;
 #else
-    MainWindow window(settings, &hotkeys, nullptr, settingsPath);
+    MainWindowRuntimeServices runtimeServices;
+    runtimeServices.languageManager = &languageManager;
+    runtimeServices.diagnosticLoggingActive = diagnosticLoggingActiveForSession(
+        session != nullptr, session && session->isActive());
+    runtimeServices.quitApplication = [&app] { app.quit(); };
+    MainWindow window(settings, &hotkeys, nullptr, settingsPath, nullptr, nullptr,
+                      runtimeServices);
     recordStartup(sink, QStringLiteral("window_constructed"), {}, true);
     QObject::connect(&window, &MainWindow::diagnosticLoggingStopped, &app,
                      [](const QString &error) {
-        QMessageBox::warning(nullptr, QStringLiteral("Diagnostic logging stopped"), error);
+        showDiagnosticLoggingStoppedWarning(error);
     });
     diagnosticWindow = &window;
-    window.setDiagnosticLoggingActive(diagnosticLoggingActiveForSession(
-        session != nullptr, session && session->isActive()));
     recordStartup(sink, QStringLiteral("receiver_start_requested"),
                   {{QStringLiteral("result"), QStringLiteral("not_built")}}, true);
     window.show();

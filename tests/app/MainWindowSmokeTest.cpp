@@ -2,6 +2,7 @@
 #include "app/AppSettings.h"
 #include "app/AppSettingsStore.h"
 #include "app/DiagnosticRestartCoordinator.h"
+#include "app/LanguageManager.h"
 #include "app/MainWindow.h"
 #include "app/SettingsDialog.h"
 #include "app/ShortcutAction.h"
@@ -31,6 +32,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
+#include <QTranslator>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -133,6 +135,54 @@ bool isAscii(const QString &text) {
         return character.unicode() <= 0x7f;
     });
 }
+
+class MainWindowTranslator final : public QTranslator {
+public:
+    QString translate(const char *context, const char *sourceText,
+                      const char *disambiguation = nullptr, int n = -1) const override {
+        Q_UNUSED(disambiguation);
+        Q_UNUSED(n);
+        return translations.value(QString::fromLatin1(context) + QChar('\x1f')
+                                      + QString::fromLatin1(sourceText));
+    }
+
+    QHash<QString, QString> translations = {
+        {QStringLiteral("MainWindow\u001fAirPlay Receiver"), QStringLiteral("AirPlay 接收器")},
+        {QStringLiteral("MainWindow\u001fAirPlay Receiver [Diagnostic Logging]"), QStringLiteral("AirPlay 接收器 [诊断日志]")},
+        {QStringLiteral("MainWindow\u001fReady for AirPlay"), QStringLiteral("等待 AirPlay")},
+        {QStringLiteral("MainWindow\u001fConnecting"), QStringLiteral("正在连接")},
+        {QStringLiteral("MainWindow\u001fConnected"), QStringLiteral("已连接")},
+        {QStringLiteral("MainWindow\u001fReceiver error: %1"), QStringLiteral("接收器错误：%1")},
+        {QStringLiteral("MainWindow\u001fVolume: %1 / %2"), QStringLiteral("音量：%1 / %2")},
+        {QStringLiteral("MainWindow\u001fPin: %1"), QStringLiteral("置顶：%1")},
+        {QStringLiteral("MainWindow\u001fAspect: %1"), QStringLiteral("比例：%1")},
+        {QStringLiteral("MainWindow\u001fFit: %1"), QStringLiteral("适应：%1")},
+        {QStringLiteral("MainWindow\u001fRecord: %1"), QStringLiteral("录制：%1")},
+        {QStringLiteral("ToolbarWidget\u001fVolume"), QStringLiteral("音量")},
+        {QStringLiteral("ToolbarWidget\u001fPin"), QStringLiteral("置顶")},
+        {QStringLiteral("ToolbarWidget\u001fAspect"), QStringLiteral("比例")},
+        {QStringLiteral("ToolbarWidget\u001fFit"), QStringLiteral("适应")},
+        {QStringLiteral("ToolbarWidget\u001fSettings"), QStringLiteral("设置")},
+        {QStringLiteral("ToolbarWidget\u001fRecord"), QStringLiteral("录制")},
+        {QStringLiteral("ToolbarWidget\u001fStop"), QStringLiteral("停止")},
+        {QStringLiteral("ToolbarWidget\u001fSaving..."), QStringLiteral("正在保存…")},
+    };
+};
+
+class InstalledTranslator final {
+public:
+    explicit InstalledTranslator(QTranslator *translator)
+        : translator_(translator) {
+        QCoreApplication::installTranslator(translator_);
+    }
+
+    ~InstalledTranslator() {
+        QCoreApplication::removeTranslator(translator_);
+    }
+
+private:
+    QTranslator *translator_;
+};
 
 class RejectingRecordingReceiver final : public FakeAirPlayReceiver {
 public:
@@ -788,7 +838,7 @@ private slots:
 
         QCOMPARE(receiver.startRecordingCount, 1);
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
-        QCOMPARE(status->text(), QString("Output folder unavailable"));
+        QCOMPARE(status->text(), QString("Could not start recording: Output folder unavailable"));
         QCOMPARE(button->text(), QString("Record"));
     }
 
@@ -2116,10 +2166,10 @@ private slots:
         QCOMPARE(label->text(), QString("Connected"));
 
         emit receiver.errorChanged("Pairing failed");
-        QCOMPARE(label->text(), QString("Pairing failed"));
+        QCOMPARE(label->text(), QString("Receiver error: Pairing failed"));
 
         emit receiver.stateChanged(ReceiverState::Error);
-        QCOMPARE(label->text(), QString("Pairing failed"));
+        QCOMPARE(label->text(), QString("Receiver error: Pairing failed"));
     }
 
     void errorStateWithoutMessageShowsReadyStatus() {
@@ -2131,6 +2181,103 @@ private slots:
         emit receiver.stateChanged(ReceiverState::Error);
 
         QCOMPARE(label->text(), QString("Ready for AirPlay"));
+    }
+
+    void languageChangeRetranslatesStatusAndTooltipsWithoutChangingReceiverState() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        auto *status = window.findChild<QLabel *>("receiverStatusLabel");
+        auto *fit = window.findChild<QToolButton *>("videoFitButton");
+        auto *recording = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(status != nullptr);
+        QVERIFY(fit != nullptr);
+        QVERIFY(recording != nullptr);
+
+        receiver.forceState(ReceiverState::Connected);
+        receiver.setRecordingAvailableForTest(true);
+        recording->click();
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        const int startsBeforeLanguageChange = receiver.startCount;
+        const int stopsBeforeLanguageChange = receiver.stopCount;
+        const QString receiverName = receiver.receiverName();
+
+        emit receiver.errorChanged("Pairing failed");
+        MainWindowTranslator translator;
+        const InstalledTranslator installedTranslator(&translator);
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&window, &languageChange);
+
+        QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
+        QCOMPARE(status->text(), QString("接收器错误：Pairing failed"));
+        QVERIFY(fit->toolTip().startsWith(QString("适应：")));
+        QCOMPARE(recording->text(), QString("停止"));
+        QVERIFY(recording->isChecked());
+        QVERIFY(recording->isEnabled());
+        QCOMPARE(receiver.recordingState(), RecordingState::Recording);
+        QCOMPARE(receiver.startCount, startsBeforeLanguageChange);
+        QCOMPARE(receiver.stopCount, stopsBeforeLanguageChange);
+        QCOMPARE(receiver.receiverName(), receiverName);
+    }
+
+    void applyingLanguageSettingPersistsBeforeChangingLanguageManager() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        LanguageManager languageManager(QCoreApplication::instance(), nullptr,
+                                        [] { return std::make_unique<QTranslator>(); },
+                                        [](QTranslator *, const QString &) { return true; });
+        QVERIFY(languageManager.apply("en"));
+
+        MainWindowRuntimeServices services;
+        services.languageManager = &languageManager;
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr,
+                          directory.filePath("settings.json"), nullptr, nullptr, services);
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settingsButton != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *language = dialog->findChild<QComboBox *>("languageCombo");
+            QVERIFY(language != nullptr);
+            language->setCurrentIndex(language->findData("zh-CN"));
+            dialog->accept();
+        });
+        settingsButton->click();
+
+        QCOMPARE(languageManager.selection(), QString("zh-CN"));
+        QCOMPARE(languageManager.effectiveLanguage(), QString("zh-CN"));
+        QCOMPARE(AppSettingsStore(directory.filePath("settings.json")).loadOrDefaults().language(),
+                 QString("zh-CN"));
+    }
+
+    void failedLanguageSettingSaveDoesNotChangeLanguageManager() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        LanguageManager languageManager(QCoreApplication::instance(), nullptr,
+                                        [] { return std::make_unique<QTranslator>(); },
+                                        [](QTranslator *, const QString &) { return true; });
+        QVERIFY(languageManager.apply("en"));
+
+        MainWindowRuntimeServices services;
+        services.languageManager = &languageManager;
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, directory.path(),
+                          nullptr, nullptr, services);
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settingsButton != nullptr);
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            auto *language = dialog->findChild<QComboBox *>("languageCombo");
+            QVERIFY(language != nullptr);
+            language->setCurrentIndex(language->findData("zh-CN"));
+            dialog->accept();
+            QTimer::singleShot(0, dialog, &QDialog::reject);
+        });
+        settingsButton->click();
+
+        QCOMPARE(languageManager.selection(), QString("en"));
+        QCOMPARE(languageManager.effectiveLanguage(), QString("en"));
     }
 
     void passesVideoSurfaceToReceiver() {
@@ -2792,7 +2939,8 @@ private slots:
             QVERIFY(failure != nullptr);
             const QString message = failure->text();
             failure->button(QMessageBox::Ok)->click();
-            QVERIFY(message.contains("Recovery failed"));
+            QVERIFY(message.contains("Receiver restoration failed: rollback restart failed"));
+            QVERIFY(!message.contains("Recovery failed: Receiver restoration failed"));
             QVERIFY(!message.contains("Rollback succeeded"));
         });
         receiver.forceState(ReceiverState::Discoverable);
