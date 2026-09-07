@@ -29,6 +29,8 @@ public:
     void setVolume(int value);
     QString receiverName() const;
     void setReceiverName(QString name);
+    QString language() const;
+    void setLanguage(QString language);
     bool aspectRatioLock() const;
     void setAspectRatioLock(bool enabled);
     bool videoFitMode() const;
@@ -48,6 +50,7 @@ private:
     QHash<int, QKeySequence> shortcuts_;
     int volume_ = 100;
     QString receiverName_ = "AirPlay Receiver";
+    QString language_ = QStringLiteral("system");
     bool aspectRatioLock_ = false;
     bool videoFitMode_ = false;
     VideoQualitySettings videoQuality_;

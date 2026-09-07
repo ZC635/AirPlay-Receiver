@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/AppSettingsStore.h"
+#include "app/UiMessage.h"
 
 #include <QVector>
 
@@ -9,6 +10,7 @@
 
 enum class SettingsFieldKind {
     ReceiverName,
+    Language,
     VideoResolution,
     VideoFrameRate,
     Shortcut,
@@ -22,6 +24,7 @@ struct SettingsFieldId {
     std::optional<ShortcutAction> shortcutAction;
 
     static SettingsFieldId receiverName();
+    static SettingsFieldId language();
     static SettingsFieldId videoResolution();
     static SettingsFieldId videoFrameRate();
     static SettingsFieldId shortcut(ShortcutAction action);
@@ -56,6 +59,8 @@ struct SettingsFieldResult {
     QString reason;
     std::optional<quint32> nativeErrorCode;
     QString recoveryError;
+    UiMessage userReason;
+    UiMessage userRecoveryError;
 };
 
 enum class ReceiverApplyTiming {

@@ -14,7 +14,6 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
       recordingButton_(new QToolButton(this)),
       settingsButton_(new QToolButton(this)) {
     volumeButton_->setObjectName("volumeButton");
-    volumeButton_->setText("Volume");
     volumeButton_->setCheckable(true);
 
     volumeSlider_->setObjectName("volumeSlider");
@@ -23,15 +22,12 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     volumeSlider_->hide();
 
     alwaysOnTopButton_->setObjectName("alwaysOnTopButton");
-    alwaysOnTopButton_->setText("Pin");
     alwaysOnTopButton_->setCheckable(true);
 
     aspectRatioButton_->setObjectName("aspectRatioButton");
-    aspectRatioButton_->setText("Aspect");
     aspectRatioButton_->setCheckable(true);
 
     videoFitButton_->setObjectName("videoFitButton");
-    videoFitButton_->setText("Fit");
     videoFitButton_->setCheckable(true);
 
     recordingButton_->setObjectName("recordingButton");
@@ -39,7 +35,6 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     setRecordingUi(RecordingState::Idle, false);
 
     settingsButton_->setObjectName("settingsButton");
-    settingsButton_->setText("Settings");
 
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -58,6 +53,8 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     connect(videoFitButton_, &QToolButton::toggled, this, &ToolbarWidget::videoFitToggled);
     connect(recordingButton_, &QToolButton::clicked, this, &ToolbarWidget::recordingToggledRequested);
     connect(settingsButton_, &QToolButton::clicked, this, &ToolbarWidget::settingsRequested);
+
+    retranslateUi();
 }
 
 int ToolbarWidget::volume() const {
@@ -93,19 +90,21 @@ void ToolbarWidget::setVideoFitChecked(bool checked) {
 }
 
 void ToolbarWidget::setRecordingUi(RecordingState state, bool available) {
-    switch (state) {
+    recordingState_ = state;
+    recordingAvailable_ = available;
+    switch (recordingState_) {
     case RecordingState::Idle:
-        recordingButton_->setText("Record");
+        recordingButton_->setText(tr("Record"));
         recordingButton_->setChecked(false);
-        recordingButton_->setEnabled(available);
+        recordingButton_->setEnabled(recordingAvailable_);
         break;
     case RecordingState::Recording:
-        recordingButton_->setText("Stop");
+        recordingButton_->setText(tr("Stop"));
         recordingButton_->setChecked(true);
         recordingButton_->setEnabled(true);
         break;
     case RecordingState::Finalizing:
-        recordingButton_->setText("Saving...");
+        recordingButton_->setText(tr("Saving..."));
         recordingButton_->setChecked(true);
         recordingButton_->setEnabled(false);
         break;
@@ -118,4 +117,31 @@ void ToolbarWidget::setVideoFitShortcutTooltip(const QString &tooltip) {
 
 void ToolbarWidget::setRecordingShortcutTooltip(const QString &tooltip) {
     recordingButton_->setToolTip(tooltip);
+}
+
+void ToolbarWidget::changeEvent(QEvent *event) {
+    if (event->type() == QEvent::LanguageChange) {
+        retranslateUi();
+    }
+    QWidget::changeEvent(event);
+}
+
+void ToolbarWidget::retranslateUi() {
+    volumeButton_->setText(tr("Volume"));
+    alwaysOnTopButton_->setText(tr("Pin"));
+    aspectRatioButton_->setText(tr("Aspect"));
+    videoFitButton_->setText(tr("Fit"));
+    settingsButton_->setText(tr("Settings"));
+
+    switch (recordingState_) {
+    case RecordingState::Idle:
+        recordingButton_->setText(tr("Record"));
+        break;
+    case RecordingState::Recording:
+        recordingButton_->setText(tr("Stop"));
+        break;
+    case RecordingState::Finalizing:
+        recordingButton_->setText(tr("Saving..."));
+        break;
+    }
 }

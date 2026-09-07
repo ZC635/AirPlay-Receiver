@@ -33,7 +33,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Test Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test Network LinguistTools)
 
 include(cmake/UxPlayDependency.cmake)
 
@@ -50,6 +50,8 @@ add_library(airplay_app_lib
     src/diagnostics/ThirdPartyDiagnosticTranslator.h
     src/diagnostics/ThirdPartyDiagnosticTranslator.cpp
     src/app/AppSettings.cpp
+    src/app/LanguageManager.cpp
+    src/app/LanguageManager.h
     src/app/DiagnosticActivation.cpp
     src/app/DiagnosticActivation.h
     src/app/DiagnosticRestartCoordinator.cpp
@@ -57,6 +59,8 @@ add_library(airplay_app_lib
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
     src/app/AppSettingsStore.h
+    src/app/UiMessage.cpp
+    src/app/UiMessage.h
     src/app/SettingsApplyTypes.cpp
     src/app/SettingsApplyTypes.h
     src/app/SettingsApplyCoordinator.cpp
@@ -70,6 +74,8 @@ add_library(airplay_app_lib
     src/app/SettingsDialog.cpp
     src/app/SettingsDialog.h
     src/app/ShortcutAction.h
+    src/app/ShortcutActionText.cpp
+    src/app/ShortcutActionText.h
     src/app/ShortcutActionKey.h
     src/app/ShortcutActionKey.cpp
     src/app/ShortcutBinding.h
@@ -139,6 +145,14 @@ target_compile_definitions(airplay_app_lib PUBLIC
     AIRPLAY_WITH_UXPLAY=$<BOOL:${AIRPLAY_WITH_UXPLAY}>
 )
 target_link_libraries(airplay_app_lib PUBLIC Qt6::Widgets Qt6::Network)
+qt_add_translations(airplay_app_lib
+    SOURCE_TARGETS airplay_app_lib
+    SOURCES src/app/main.cpp
+    TS_FILES translations/airplay_zh_CN.ts
+    RESOURCE_PREFIX "/i18n"
+    MERGE_QT_TRANSLATIONS
+    QT_TRANSLATION_CATALOGS qtbase
+)
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE
         src/platform/MdnsServerAdapter.cpp

@@ -1,24 +1,29 @@
 #include "platform/DiagnosticLogFolderActions.h"
 
 #include <QDesktopServices>
+#include <QCoreApplication>
 #include <QDir>
 
 #include <utility>
 
 namespace {
 
+QString localized(const char *source) {
+    return QCoreApplication::translate("DiagnosticLogFolderActions", source);
+}
+
 QString createDirectory(const QString &path) {
     if (QDir(path).mkpath(".")) {
         return {};
     }
-    return QStringLiteral("Could not create diagnostic log folder: %1").arg(path);
+    return localized(QT_TRANSLATE_NOOP("DiagnosticLogFolderActions", "Could not create diagnostic log folder: %1")).arg(path);
 }
 
 QString openUrl(const QUrl &url) {
     if (QDesktopServices::openUrl(url)) {
         return {};
     }
-    return QStringLiteral("Could not open diagnostic log folder: %1").arg(url.toLocalFile());
+    return localized(QT_TRANSLATE_NOOP("DiagnosticLogFolderActions", "Could not open diagnostic log folder: %1")).arg(url.toLocalFile());
 }
 
 } // namespace

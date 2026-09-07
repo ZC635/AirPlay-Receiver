@@ -38,6 +38,10 @@ add_executable(SettingsChangeDeferrerTest app/SettingsChangeDeferrerTest.cpp)
 target_link_libraries(SettingsChangeDeferrerTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsChangeDeferrerTest COMMAND SettingsChangeDeferrerTest)
 
+add_executable(UiMessageTest app/UiMessageTest.cpp)
+target_link_libraries(UiMessageTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME UiMessageTest COMMAND UiMessageTest)
+
 add_executable(SettingsApplyTypesTest app/SettingsApplyTypesTest.cpp)
 target_link_libraries(SettingsApplyTypesTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsApplyTypesTest COMMAND SettingsApplyTypesTest)
@@ -75,6 +79,10 @@ add_executable(AppSettingsStoreTest app/AppSettingsStoreTest.cpp)
 target_link_libraries(AppSettingsStoreTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME AppSettingsStoreTest COMMAND AppSettingsStoreTest)
 
+add_executable(LanguageManagerTest app/LanguageManagerTest.cpp)
+target_link_libraries(LanguageManagerTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME LanguageManagerTest COMMAND LanguageManagerTest)
+
 add_executable(WindowStateStoreTest app/WindowStateStoreTest.cpp)
 target_link_libraries(WindowStateStoreTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME WindowStateStoreTest COMMAND WindowStateStoreTest)
@@ -90,6 +98,7 @@ add_test(NAME ToolbarWidgetTest COMMAND ToolbarWidgetTest)
 add_executable(SettingsDialogTest app/SettingsDialogTest.cpp)
 target_link_libraries(SettingsDialogTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsDialogTest COMMAND SettingsDialogTest)
+add_test(NAME SettingsDialogHighDpiTest COMMAND SettingsDialogTest initialWindowFitsAvailableScreen)
 
 add_executable(HotkeyServiceTest platform/HotkeyServiceTest.cpp)
 target_link_libraries(HotkeyServiceTest PRIVATE airplay_app_lib Qt6::Test)
@@ -327,14 +336,17 @@ set(AIRPLAY_QT_TESTS
     SettingsChangeDeferrerTest
     SettingsApplyTypesTest
     SettingsApplyCoordinatorTest
+    UiMessageTest
     MainWindowSmokeTest
     RecordingStartupCleanupTest
     AppSettingsTest
     AppSettingsStoreTest
+    LanguageManagerTest
     WindowStateStoreTest
     ShortcutActionKeyTest
     ToolbarWidgetTest
     SettingsDialogTest
+    SettingsDialogHighDpiTest
     HotkeyServiceTest
     RecordingPathActionsTest
     AspectRatioSizingTest
@@ -366,6 +378,11 @@ foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
 endforeach()
+
+set_tests_properties(SettingsDialogHighDpiTest PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR};QT_SCALE_FACTOR=2"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+)
 
 if(AIRPLAY_WITH_UXPLAY)
     set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test PROPERTIES

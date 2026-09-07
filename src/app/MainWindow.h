@@ -2,6 +2,7 @@
 
 #include "app/AppSettings.h"
 #include "app/SettingsChangeDeferrer.h"
+#include "backend/ReceiverState.h"
 #include "platform/HotkeyService.h"
 
 #include <QMainWindow>
@@ -12,11 +13,12 @@
 #include <memory>
 #include <optional>
 
-enum class ReceiverState;
 class AirPlayReceiver;
+class LanguageManager;
 class ToolbarWidget;
 class QLabel;
 class QImage;
+class QEvent;
 class QCloseEvent;
 class RecordingPathActions;
 class DiagnosticLogFolderActions;
@@ -44,6 +46,7 @@ struct MainWindowRuntimeServices {
     DiagnosticLogFolderActions *diagnosticLogFolderActions = nullptr;
     DiagnosticRestartCoordinator *diagnosticRestartCoordinator = nullptr;
     DiagnosticUiPrompts *diagnosticPrompts = nullptr;
+    LanguageManager *languageManager = nullptr;
     bool diagnosticLoggingActive = false;
     std::function<void()> quitApplication;
 };
@@ -73,6 +76,17 @@ signals:
     void diagnosticLoggingStopped(QString error);
 
 private:
+    enum class StatusKind {
+        Ready,
+        Connecting,
+        Connected,
+        ReceiverError,
+        SettingsSaveFailed,
+        NoRecordableContent,
+        RecordingStartFailed,
+        HotkeyRegistrationFailures,
+    };
+
     struct HotkeyRegistrationFailure {
         ShortcutAction action;
         QKeySequence sequence;
@@ -80,9 +94,14 @@ private:
     };
 
     void handleShortcut(ShortcutAction action);
+    void changeEvent(QEvent *event) override;
+    void retranslateUi();
+    void updateWindowTitle();
+    void setStatus(StatusKind kind, QString detail = {});
+    void refreshStatus();
     void applyShortcutTooltips();
     QVector<HotkeyRegistrationFailure> registerHotkeys();
-    static QString formatHotkeyRegistrationFailures(const QVector<HotkeyRegistrationFailure> &failures);
+    QString formatHotkeyRegistrationFailures(const QVector<HotkeyRegistrationFailure> &failures) const;
     bool saveSettings() const;
     void restoreWindowState();
     bool saveWindowState() const;
@@ -119,6 +138,7 @@ private:
     std::unique_ptr<SettingsApplyCoordinator> settingsApplyCoordinator_;
     QPointer<HotkeyService> hotkeys_;
     QPointer<AirPlayReceiver> receiver_;
+    QPointer<LanguageManager> languageManager_;
     std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
     RecordingPathActions *recordingPathActions_ = nullptr;
     std::unique_ptr<DiagnosticLogFolderActions> ownedDiagnosticLogFolderActions_;
@@ -129,7 +149,10 @@ private:
     DiagnosticUiPrompts *diagnosticPrompts_ = nullptr;
     std::function<void()> quitApplication_;
     QPointer<SettingsDialog> activeSettingsDialog_;
-    QString currentError_;
+    StatusKind statusKind_ = StatusKind::Ready;
+    ReceiverState receiverState_ = ReceiverState::Idle;
+    QString statusDetail_;
+    QVector<HotkeyRegistrationFailure> startupHotkeyFailures_;
     QString settingsPath_;
     QString windowStatePath_;
     bool receiverConnected_ = false;

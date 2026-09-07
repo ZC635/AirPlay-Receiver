@@ -3,6 +3,7 @@
 #include "backend/RecordingTypes.h"
 
 #include <QString>
+#include <QEvent>
 #include <QSlider>
 #include <QToolButton>
 #include <QWidget>
@@ -33,6 +34,9 @@ signals:
     void settingsRequested();
 
 private:
+    void changeEvent(QEvent *event) override;
+    void retranslateUi();
+
     QToolButton *volumeButton_;
     QSlider *volumeSlider_;
     QToolButton *alwaysOnTopButton_;
@@ -40,4 +44,6 @@ private:
     QToolButton *videoFitButton_;
     QToolButton *recordingButton_;
     QToolButton *settingsButton_;
+    RecordingState recordingState_ = RecordingState::Idle;
+    bool recordingAvailable_ = false;
 };

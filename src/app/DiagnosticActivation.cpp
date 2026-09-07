@@ -5,6 +5,7 @@
 #include "diagnostics/DiagnosticSession.h"
 
 #include <QElapsedTimer>
+#include <QCoreApplication>
 #include <QLocalSocket>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -15,6 +16,10 @@
 #include <limits>
 
 namespace {
+
+QString localized(const char *source) {
+    return QCoreApplication::translate("DiagnosticActivation", source);
+}
 
 constexpr auto diagnosticLog = "--diagnostic-log";
 constexpr auto parentPidPrefix = "--diagnostic-parent-pid=";
@@ -196,8 +201,9 @@ DiagnosticChildGateResult runDiagnosticChildGate(
         QString ignored;
         operations.sendReadyLine(activation.readyToken,
                                  errorLine(sessionCreationError.isEmpty()
-                                               ? QStringLiteral("Diagnostic logging could not be initialized.")
-                                               : sessionCreationError),
+                                               ? localized(QT_TRANSLATE_NOOP("DiagnosticActivation", "Diagnostic logging could not be initialized."))
+                                               : localized(QT_TRANSLATE_NOOP("DiagnosticActivation", "Diagnostic logging could not be initialized: %1"))
+                                                     .arg(sessionCreationError)),
                                  &ignored);
         return DiagnosticChildGateResult::ExitChild;
     }
@@ -206,7 +212,7 @@ DiagnosticChildGateResult runDiagnosticChildGate(
     void *parentHandle = operations.openParentForWait(activation.parentPid, &ignored);
     if (parentHandle == nullptr) {
         operations.sendReadyLine(activation.readyToken,
-                                 errorLine(QStringLiteral("Diagnostic parent process is unavailable.")),
+                                 errorLine(localized(QT_TRANSLATE_NOOP("DiagnosticActivation", "Diagnostic parent process is unavailable."))),
                                  &ignored);
         recordHandoffFailure(session, QStringLiteral("parent_handle_unavailable"));
         return DiagnosticChildGateResult::ExitChild;
