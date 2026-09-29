@@ -2,6 +2,7 @@
 
 #include "app/AppSettings.h"
 #include "app/SettingsChangeDeferrer.h"
+#include "app/WindowStateStore.h"
 #include "backend/ReceiverState.h"
 #include "platform/HotkeyService.h"
 
@@ -68,6 +69,7 @@ public:
     void toggleToolbarVisibility();
     bool isAlwaysOnTopEnabled() const;
     void setAlwaysOnTopEnabled(bool enabled);
+    void setFullscreenEnabled(bool enabled);
     void setVolume(int value);
     void setDiagnosticLoggingActive(bool active);
     void handleDiagnosticWriteFailure(QString error);
@@ -172,5 +174,8 @@ private:
     bool diagnosticLoggingActive_ = false;
     bool diagnosticLoggingStopped_ = false;
     std::optional<RecordingResult> exitPendingRecordingResult_;
+    std::optional<WindowStateSnapshot> preFullscreenState_;
+    QRect preFullscreenNormalGeometry_;
+    bool preFullscreenMaximized_ = false;
     std::optional<QString> exitPendingRecordingError_;
 };

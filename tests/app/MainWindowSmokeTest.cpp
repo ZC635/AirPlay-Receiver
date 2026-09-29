@@ -18,9 +18,11 @@
 #include <QCheckBox>
 #include <QAbstractButton>
 #include <QDir>
+#include <QDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMenu>
 #include <QSignalSpy>
 #include <QImage>
 #include <QIcon>
@@ -3099,6 +3101,177 @@ private slots:
         const std::optional<WindowStateSnapshot> saved = WindowStateStore(windowStatePath).load();
         QVERIFY(saved.has_value());
         QVERIFY(!saved->geometry.isEmpty());
+    }
+
+    void fullscreenRestoresNormalGeometryAndToolbarChoice() {
+        MainWindow window;
+        window.resize(640, 400);
+        window.show();
+        QCoreApplication::processEvents();
+        const QRect before = window.geometry();
+        window.toggleToolbarVisibility();
+        const bool toolbarVisible = window.isToolbarVisible();
+
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.isFullScreen());
+        QCOMPARE(window.isToolbarVisible(), toolbarVisible);
+        auto *button = window.findChild<QToolButton *>("fullscreenButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(button->isChecked());
+        window.setFullscreenEnabled(false);
+        QVERIFY(!window.isFullScreen());
+        QCOMPARE(window.geometry(), before);
+        QCOMPARE(window.isToolbarVisible(), toolbarVisible);
+        QVERIFY(!button->isChecked());
+    }
+
+    void fullscreenRestoresMaximizedWindow() {
+        MainWindow window;
+        window.showMaximized();
+        QCoreApplication::processEvents();
+        QVERIFY(window.isMaximized());
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.isFullScreen());
+        window.setFullscreenEnabled(false);
+        QVERIFY(window.isMaximized());
+    }
+
+    void fullscreenKeepsFitAndAlwaysOnTop() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        window.setAlwaysOnTopEnabled(true);
+        auto *fit = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(fit != nullptr);
+        const bool previousFit = fit->isChecked();
+        window.setFullscreenEnabled(true);
+        QCOMPARE(fit->isChecked(), previousFit);
+        QVERIFY(window.isAlwaysOnTopEnabled());
+        window.setFullscreenEnabled(false);
+        QCOMPARE(fit->isChecked(), previousFit);
+        QVERIFY(window.isAlwaysOnTopEnabled());
+    }
+
+    void fullscreenExitsOnlyAfterActiveReceiverSessionEnds_data() {
+        QTest::addColumn<ReceiverState>("endState");
+        QTest::newRow("idle") << ReceiverState::Idle;
+        QTest::newRow("discoverable") << ReceiverState::Discoverable;
+        QTest::newRow("error") << ReceiverState::Error;
+    }
+
+    void fullscreenExitsOnlyAfterActiveReceiverSessionEnds() {
+        QFETCH(ReceiverState, endState);
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        window.setFullscreenEnabled(true);
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+        QVERIFY(window.isFullScreen());
+        emit receiver.stateChanged(ReceiverState::Connecting);
+        QVERIFY(window.isFullScreen());
+        emit receiver.stateChanged(endState);
+        QVERIFY(!window.isFullScreen());
+    }
+
+    void closingFullscreenPersistsPreviousWindowState() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString settingsPath = dir.filePath("settings.json");
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        window.resize(640, 400);
+        window.show();
+        QCoreApplication::processEvents();
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.close());
+
+        MainWindow restored(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        QVERIFY(!restored.isFullScreen());
+        QCOMPARE(restored.size(), QSize(640, 400));
+    }
+
+    void closingFullscreenPersistsPreviousMaximizedState() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString settingsPath = dir.filePath("settings.json");
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        window.showMaximized();
+        QCoreApplication::processEvents();
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.close());
+        MainWindow restored(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        QVERIFY(!restored.isFullScreen());
+        QVERIFY(restored.isMaximized());
+    }
+
+    void nativeFullscreenSuspendsAspectSizingAndVideoResize() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *aspect = window.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(aspect != nullptr);
+        aspect->setChecked(true);
+        window.setFullscreenEnabled(true);
+        const QSize fullscreenSize = window.size();
+        receiver.emitVideoSize(1170, 2532);
+        QCOMPARE(window.size(), fullscreenSize);
+
+        const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+        RECT pending{};
+        QVERIFY(GetWindowRect(hwnd, &pending));
+        pending.right += 117;
+        const RECT expected = pending;
+        SendMessage(hwnd, WM_SIZING, WMSZ_RIGHT, reinterpret_cast<LPARAM>(&pending));
+        QCOMPARE(pending.left, expected.left);
+        QCOMPARE(pending.top, expected.top);
+        QCOMPARE(pending.right, expected.right);
+        QCOMPARE(pending.bottom, expected.bottom);
+    }
+
+    void nativeFullscreenKeysRespectFocusAndModalControls() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+        MainWindow window;
+        window.show();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QWidget other;
+        other.show();
+        other.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&other));
+        QTest::keyClick(&other, Qt::Key_F11);
+        QVERIFY(!window.isFullScreen());
+        other.close();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settings != nullptr);
+        settings->setFocus();
+        QTest::keyClick(settings, Qt::Key_F11);
+        QVERIFY(window.isFullScreen());
+
+        QDialog dialog(&window);
+        dialog.open();
+        QVERIFY(QTest::qWaitForWindowActive(&dialog));
+        QTest::keyClick(&dialog, Qt::Key_Escape);
+        QTRY_VERIFY(!dialog.isVisible());
+        QVERIFY(window.isFullScreen());
+
+        QMenu popup(&window);
+        popup.addAction("Example");
+        popup.popup(window.mapToGlobal(QPoint(20, 20)));
+        QTRY_VERIFY(popup.isVisible());
+        QTest::keyClick(&popup, Qt::Key_Escape);
+        QTRY_VERIFY(!popup.isVisible());
+        QVERIFY(window.isFullScreen());
+
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QTest::keyClick(settings, Qt::Key_Escape);
+        QVERIFY(!window.isFullScreen());
     }
 
     void constructionRestoresSavedWindowGeometry() {

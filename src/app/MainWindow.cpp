@@ -17,6 +17,7 @@
 #include "platform/WindowsWindowBehavior.h"
 
 #include <algorithm>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDir>
@@ -30,6 +31,7 @@
 #include <QPushButton>
 #include <QResource>
 #include <QSignalBlocker>
+#include <QShortcut>
 #include <QStringList>
 #include <QWidget>
 #include <cmath>
@@ -211,10 +213,29 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
 
     connect(toolbar_, &ToolbarWidget::volumeChanged, this, &MainWindow::setReceiverVolume);
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
+    connect(toolbar_, &ToolbarWidget::fullscreenToggled, this, &MainWindow::setFullscreenEnabled);
     connect(toolbar_, &ToolbarWidget::settingsRequested, this, &MainWindow::showSettingsDialog);
     connect(toolbar_, &ToolbarWidget::aspectRatioToggled, this, &MainWindow::applyAspectRatioLock);
     connect(toolbar_, &ToolbarWidget::videoFitToggled, this, &MainWindow::applyVideoFitMode);
     connect(toolbar_, &ToolbarWidget::recordingToggledRequested, this, &MainWindow::toggleRecording);
+
+    auto *fullscreenShortcut = new QShortcut(QKeySequence(Qt::Key_F11), this);
+    fullscreenShortcut->setContext(Qt::WindowShortcut);
+    fullscreenShortcut->setAutoRepeat(false);
+    connect(fullscreenShortcut, &QShortcut::activated, this, [this] {
+        if (QApplication::activeModalWidget() == nullptr && QApplication::activePopupWidget() == nullptr) {
+            setFullscreenEnabled(!isFullScreen());
+        }
+    });
+    auto *exitFullscreenShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    exitFullscreenShortcut->setContext(Qt::WindowShortcut);
+    exitFullscreenShortcut->setAutoRepeat(false);
+    connect(exitFullscreenShortcut, &QShortcut::activated, this, [this] {
+        if (isFullScreen() && QApplication::activeModalWidget() == nullptr
+            && QApplication::activePopupWidget() == nullptr) {
+            setFullscreenEnabled(false);
+        }
+    });
 
     if (receiver_ != nullptr) {
         recordingState_ = receiver_->recordingState();
@@ -439,6 +460,35 @@ void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
     setWindowBorderColor(winId(), enabled);
 }
 
+void MainWindow::setFullscreenEnabled(bool enabled) {
+    if (enabled == isFullScreen()) {
+        const QSignalBlocker blocker(toolbar_);
+        toolbar_->setFullscreenChecked(enabled);
+        return;
+    }
+
+    if (enabled) {
+        preFullscreenState_ = WindowStateSnapshot{saveGeometry(), saveState()};
+        preFullscreenNormalGeometry_ = geometry();
+        preFullscreenMaximized_ = isMaximized();
+        showFullScreen();
+    } else {
+        showNormal();
+        if (preFullscreenState_.has_value()) {
+            restoreGeometry(preFullscreenState_->geometry);
+            restoreState(preFullscreenState_->state);
+            if (preFullscreenMaximized_) {
+                showMaximized();
+            } else {
+                setGeometry(preFullscreenNormalGeometry_);
+            }
+            preFullscreenState_.reset();
+        }
+    }
+    const QSignalBlocker blocker(toolbar_);
+    toolbar_->setFullscreenChecked(isFullScreen());
+}
+
 void MainWindow::setVolume(int value) {
     const int clamped = std::clamp(value, 0, 100);
     if (toolbar_->volume() == clamped) {
@@ -538,12 +588,16 @@ void MainWindow::restoreWindowState() {
     }
 
     restoreGeometry(snapshot->geometry);
+    setWindowState(windowState() & ~Qt::WindowFullScreen);
     restoreState(snapshot->state);
 }
 
 bool MainWindow::saveWindowState() const {
     if (windowStatePath_.isEmpty()) {
         return true;
+    }
+    if (isFullScreen() && preFullscreenState_.has_value()) {
+        return WindowStateStore(windowStatePath_).save(*preFullscreenState_);
     }
     return WindowStateStore(windowStatePath_).save({saveGeometry(), saveState()});
 }
@@ -587,6 +641,9 @@ void MainWindow::updateReceiverState(ReceiverState state) {
     receiverState_ = state;
     receiverConnected_ = state == ReceiverState::Connected;
     receiverSessionActive_ = state == ReceiverState::Connecting || state == ReceiverState::Connected;
+    if (wasSessionActive && !receiverSessionActive_ && isFullScreen()) {
+        setFullscreenEnabled(false);
+    }
     const bool showToolbar = !receiverConnected_;
     toolbar_->setVisible(showToolbar);
     statusLabel_->setVisible(showToolbar);
@@ -748,7 +805,7 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr
     auto *msg = static_cast<MSG *>(message);
     if (msg != nullptr) {
         const WindowsNativeEventResult nativeResult = handleNativeWindowBehaviorEvent(
-            msg->message, msg->wParam, msg->lParam, result, this, aspectRatioLock_, videoWidth_, videoHeight_, videoSurface_);
+            msg->message, msg->wParam, msg->lParam, result, this, aspectRatioLock_ && !isFullScreen(), videoWidth_, videoHeight_, videoSurface_);
         if (nativeResult.handled) {
             return true;
         }
@@ -983,6 +1040,7 @@ void MainWindow::clearDecodedFrameSizeForAspectLock() {
 }
 
 void MainWindow::enforceAspectRatio() {
+    if (isFullScreen()) return;
     if (videoWidth_ <= 0 || videoHeight_ <= 0) return;
     const double targetRatio = static_cast<double>(videoWidth_) / videoHeight_;
     const AspectRatioFrameMargins frameMargins = frameMarginsFor(*this);

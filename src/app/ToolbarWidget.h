@@ -16,6 +16,7 @@ public:
     int volume() const;
     void setVolume(int value);
     void setAlwaysOnTopChecked(bool checked);
+    void setFullscreenChecked(bool checked);
     void setAspectRatioChecked(bool checked);
     void setVideoFitChecked(bool checked);
     void setRecordingUi(RecordingState state, bool available);
@@ -28,6 +29,7 @@ public:
 signals:
     void volumeChanged(int value);
     void alwaysOnTopToggled(bool enabled);
+    void fullscreenToggled(bool enabled);
     void aspectRatioToggled(bool enabled);
     void videoFitToggled(bool enabled);
     void recordingToggledRequested();
@@ -36,6 +38,7 @@ signals:
 private:
     void changeEvent(QEvent *event) override;
     void retranslateUi();
+    void updateFullscreenText();
 
     QToolButton *volumeButton_;
     QSlider *volumeSlider_;
@@ -43,6 +46,7 @@ private:
     QToolButton *aspectRatioButton_;
     QToolButton *videoFitButton_;
     QToolButton *recordingButton_;
+    QToolButton *fullscreenButton_;
     QToolButton *settingsButton_;
     RecordingState recordingState_ = RecordingState::Idle;
     bool recordingAvailable_ = false;
