@@ -29,6 +29,7 @@ ToolbarVisibilityController::~ToolbarVisibilityController() {
 void ToolbarVisibilityController::receiverStateChanged(ReceiverState state) {
     if (receiverState_ == state) return;
     receiverState_ = state;
+    preservedRevealPosition_.reset();
     baselineVisible_ = state != ReceiverState::Connected;
     temporaryVisible_ = false;
     suppressUntilLeave_ = false;
@@ -38,12 +39,16 @@ void ToolbarVisibilityController::receiverStateChanged(ReceiverState state) {
 
 void ToolbarVisibilityController::setHoverRevealEnabled(bool enabled) {
     hoverEnabled_ = enabled;
-    if (!enabled) temporaryVisible_ = false;
+    if (!enabled) {
+        temporaryVisible_ = false;
+        preservedRevealPosition_.reset();
+    }
     publishVisibility();
     updateTimer();
 }
 
 void ToolbarVisibilityController::toggleManually() {
+    preservedRevealPosition_.reset();
     baselineVisible_ = !isVisible();
     temporaryVisible_ = false;
     suppressUntilLeave_ = !baselineVisible_ && inTopBand(lastPosition_);
@@ -56,6 +61,10 @@ void ToolbarVisibilityController::toggleManually(const QPoint &globalPosition) {
     // the user's toggle acts on (native surfaces may not send mouse events).
     lastPosition_ = globalPosition;
     toggleManually();
+}
+
+void ToolbarVisibilityController::preserveTemporaryRevealUntilPointerMoves(const QPoint &globalPosition) {
+    if (temporaryVisible_) preservedRevealPosition_ = globalPosition;
 }
 
 bool ToolbarVisibilityController::isVisible() const {
@@ -103,6 +112,12 @@ void ToolbarVisibilityController::evaluatePointer(const QPoint &globalPosition, 
     if (evaluating_) return;
     QScopedValueRollback<bool> guard(evaluating_, true);
     lastPosition_ = globalPosition;
+    if (preservedRevealPosition_) {
+        if (hoverEnabled_ && active && temporaryVisible_ && globalPosition == *preservedRevealPosition_) {
+            return;
+        }
+        preservedRevealPosition_.reset();
+    }
     const bool atTop = inTopBand(globalPosition);
     if (!atTop) suppressUntilLeave_ = false;
     if (!hoverEnabled_ || !active || baselineVisible_) {

@@ -3184,6 +3184,12 @@ private slots:
         QTRY_VERIFY(!window.isToolbarVisible());
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
         QTRY_VERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(true);
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(false);
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
         auto *toolbar = window.findChild<QToolButton *>("settingsButton")->parentWidget();
         QMenu popup(toolbar);
         popup.addAction("Owned popup");

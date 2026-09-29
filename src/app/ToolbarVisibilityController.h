@@ -19,6 +19,7 @@ public:
     void setHoverRevealEnabled(bool enabled);
     void toggleManually();
     void toggleManually(const QPoint &globalPosition);
+    void preserveTemporaryRevealUntilPointerMoves(const QPoint &globalPosition);
     bool isVisible() const;
     void evaluatePointer(const QPoint &globalPosition, bool active);
 
@@ -42,6 +43,7 @@ private:
     QTimer cursorTimer_;
     std::optional<ReceiverState> receiverState_;
     QPoint lastPosition_;
+    std::optional<QPoint> preservedRevealPosition_;
     bool baselineVisible_ = true;
     bool temporaryVisible_ = false;
     bool hoverEnabled_ = true;
