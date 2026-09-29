@@ -102,6 +102,12 @@ private slots:
         QCOMPARE(manager.effectiveLanguage(), QString("zh-CN"));
         QCOMPARE(QCoreApplication::translate("LanguageManager", "Translation loaded"),
                  QString::fromUtf8(u8"翻译已加载"));
+        QCOMPARE(QCoreApplication::translate("SettingsDialog",
+                     "Show hidden toolbar when the pointer reaches the top"),
+                 QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示"));
+        QCOMPARE(QCoreApplication::translate("SettingsFields",
+                     "Show hidden toolbar when the pointer reaches the top"),
+                 QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示"));
 
         QVERIFY(manager.apply("en", QLocale("en-US")));
         QCOMPARE(QCoreApplication::translate("LanguageManager", "Translation loaded"),

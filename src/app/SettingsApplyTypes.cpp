@@ -75,6 +75,10 @@ SettingsFieldId SettingsFieldId::recordingCompletionNotification() {
     return {SettingsFieldKind::RecordingCompletionNotification, std::nullopt};
 }
 
+SettingsFieldId SettingsFieldId::toolbarHoverReveal() {
+    return {SettingsFieldKind::ToolbarHoverReveal, std::nullopt};
+}
+
 bool operator==(const SettingsFieldId &left, const SettingsFieldId &right) {
     return left.kind == right.kind && left.shortcutAction == right.shortcutAction;
 }
@@ -99,6 +103,7 @@ QVector<SettingsFieldId> allSettingsFields() {
         SettingsFieldId::recordingFormat(),
         SettingsFieldId::recordingOutputDirectory(),
         SettingsFieldId::recordingCompletionNotification(),
+        SettingsFieldId::toolbarHoverReveal(),
     };
 }
 
@@ -122,6 +127,8 @@ SettingsFieldValue settingsFieldValue(const AppSettings &settings, const Setting
         return settings.recordingOutputDirectory();
     case SettingsFieldKind::RecordingCompletionNotification:
         return settings.showRecordingCompletionMessage();
+    case SettingsFieldKind::ToolbarHoverReveal:
+        return settings.toolbarHoverReveal();
     }
     return QString();
 }
@@ -167,6 +174,9 @@ void copySettingsField(const AppSettings &source,
     case SettingsFieldKind::RecordingCompletionNotification:
         destination->setShowRecordingCompletionMessage(source.showRecordingCompletionMessage());
         return;
+    case SettingsFieldKind::ToolbarHoverReveal:
+        destination->setToolbarHoverReveal(source.toolbarHoverReveal());
+        return;
     }
 }
 
@@ -191,6 +201,9 @@ QString settingsFieldDisplayName(const SettingsFieldId &field) {
     case SettingsFieldKind::RecordingCompletionNotification:
         return QCoreApplication::translate("SettingsFields",
                                            "Show a message when recording completes");
+    case SettingsFieldKind::ToolbarHoverReveal:
+        return QCoreApplication::translate("SettingsFields",
+                                           "Show hidden toolbar when the pointer reaches the top");
     }
     return {};
 }

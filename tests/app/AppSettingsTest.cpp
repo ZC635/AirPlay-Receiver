@@ -162,6 +162,13 @@ private slots:
         settings.setVideoFitMode(false);
         QVERIFY(!settings.videoFitMode());
     }
+
+    void toolbarHoverRevealDefaultsOnAndCanBeDisabled() {
+        AppSettings settings = AppSettings::defaults();
+        QVERIFY(settings.toolbarHoverReveal());
+        settings.setToolbarHoverReveal(false);
+        QVERIFY(!settings.toolbarHoverReveal());
+    }
 };
 
 QTEST_MAIN(AppSettingsTest)

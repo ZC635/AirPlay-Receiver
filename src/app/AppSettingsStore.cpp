@@ -135,6 +135,10 @@ AppSettings AppSettingsStore::loadOrDefaults() const {
     if (videoFit.isBool()) {
         settings.setVideoFitMode(videoFit.toBool());
     }
+    const QJsonValue toolbarHoverReveal = root.value("toolbarHoverReveal");
+    if (toolbarHoverReveal.isBool()) {
+        settings.setToolbarHoverReveal(toolbarHoverReveal.toBool());
+    }
     const QJsonValue videoQualityVal = root.value("videoQuality");
     if (videoQualityVal.isObject()) {
         const QJsonObject vqObj = videoQualityVal.toObject();
@@ -190,6 +194,7 @@ AppSettingsSaveResult AppSettingsStore::save(const AppSettings &settings) const 
     root.insert("volume", settings.volume());
     root.insert("aspectRatioLock", settings.aspectRatioLock());
     root.insert("videoFitMode", settings.videoFitMode());
+    root.insert("toolbarHoverReveal", settings.toolbarHoverReveal());
     root.insert("videoQuality", videoQuality);
     root.insert("recording", recording);
 
