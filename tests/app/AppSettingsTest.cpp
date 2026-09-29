@@ -137,9 +137,9 @@ private slots:
         QVERIFY(settings.validateGeneral().join('\n').contains("Receiver name"));
     }
 
-    void aspectRatioLockDefaultsToFalse() {
+    void aspectRatioLockDefaultsToTrue() {
         AppSettings settings = AppSettings::defaults();
-        QVERIFY(!settings.aspectRatioLock());
+        QVERIFY(settings.aspectRatioLock());
     }
 
     void aspectRatioLockSetterAndGetter() {
@@ -150,9 +150,9 @@ private slots:
         QVERIFY(!settings.aspectRatioLock());
     }
 
-    void videoFitModeDefaultsToFalse() {
+    void videoFitModeDefaultsToTrue() {
         AppSettings settings = AppSettings::defaults();
-        QVERIFY(!settings.videoFitMode());
+        QVERIFY(settings.videoFitMode());
     }
 
     void videoFitModeSetterAndGetter() {

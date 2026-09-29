@@ -51,8 +51,8 @@ private:
     int volume_ = 100;
     QString receiverName_ = "AirPlay Receiver";
     QString language_ = QStringLiteral("system");
-    bool aspectRatioLock_ = false;
-    bool videoFitMode_ = false;
+    bool aspectRatioLock_ = true;
+    bool videoFitMode_ = true;
     VideoQualitySettings videoQuality_;
     RecordingFormat recordingFormat_ = RecordingFormat::Mp4;
     QString recordingOutputDirectory_;
