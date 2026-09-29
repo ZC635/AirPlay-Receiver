@@ -4,6 +4,8 @@
 #include "app/DiagnosticRestartCoordinator.h"
 #include "app/LanguageManager.h"
 #include "app/MainWindow.h"
+#include "app/ToolbarVisibilityController.h"
+#include <QCursor>
 #include "app/SettingsDialog.h"
 #include "app/ShortcutAction.h"
 #include "app/VideoSurfaceWidget.h"
@@ -3103,6 +3105,111 @@ private slots:
         QVERIFY(!saved->geometry.isEmpty());
     }
 
+    void toolbarPolicySurvivesFullscreenAndReceiverDuplicates() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        emit receiver.stateChanged(ReceiverState::Connected);
+        QVERIFY(!window.isToolbarVisible());
+        controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(false);
+        QVERIFY(window.isToolbarVisible());
+        controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 150)), true);
+        QVERIFY(!window.isToolbarVisible());
+        window.toggleToolbarVisibility();
+        emit receiver.stateChanged(ReceiverState::Connected);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(true);
+        controller->evaluatePointer(QPoint(-9999, -9999), false);
+        QVERIFY(window.isToolbarVisible());
+        window.toggleToolbarVisibility();
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+        QVERIFY(!window.isFullScreen());
+        QVERIFY(window.isToolbarVisible());
+        QVERIFY(!window.findChild<QLabel *>("receiverStatusLabel")->isHidden());
+    }
+
+    void applyingHoverPreferenceClearsTemporaryVisibility() {
+        MainWindow window;
+        window.show();
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        window.toggleToolbarVisibility();
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = window.findChild<SettingsDialog *>();
+            QVERIFY(dialog);
+            auto *checkbox = dialog->findChild<QCheckBox *>("toolbarHoverRevealCheckBox");
+            QVERIFY(checkbox);
+            checkbox->setChecked(false);
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            controller->evaluatePointer(QPoint(-9999, -9999), true);
+            // Deterministic seam creates the reveal immediately before committing;
+            // modal activation must not mask a missing preference forwarding call.
+            controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+            QVERIFY(window.isToolbarVisible());
+            AppSettings draft = AppSettings::defaults();
+            draft.setToolbarHoverReveal(false);
+            emit dialog->applyRequested(draft);
+            QVERIFY(!window.isToolbarVisible());
+            controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+            QVERIFY(!window.isToolbarVisible());
+            dialog->reject();
+        });
+        window.findChild<QToolButton *>("settingsButton")->click();
+    }
+
+    void nativeToolbarCursorFallbackAndPopupFocus() {
+        if (QGuiApplication::platformName() != QStringLiteral("windows")) QSKIP("Windows QPA required");
+        MainWindow window;
+        window.setGeometry(100, 100, 900, 500);
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        QVERIFY(surface);
+        QVERIFY(surface->testAttribute(Qt::WA_NativeWindow));
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
+        window.toggleToolbarVisibility();
+        QVERIFY(!window.isToolbarVisible());
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
+        QTRY_VERIFY(window.isToolbarVisible());
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
+        QTRY_VERIFY(!window.isToolbarVisible());
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
+        QTRY_VERIFY(window.isToolbarVisible());
+        auto *toolbar = window.findChild<QToolButton *>("settingsButton")->parentWidget();
+        QMenu popup(toolbar);
+        popup.addAction("Owned popup");
+        const QPoint popupOrigin = window.centralWidget()->mapToGlobal(QPoint(200, 100));
+        popup.popup(popupOrigin);
+        QCursor::setPos(popupOrigin + QPoint(5, 5));
+        controller->evaluatePointer(QCursor::pos(), true);
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
+        popup.hide();
+        QTRY_VERIFY(!window.isToolbarVisible());
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
+        QTRY_VERIFY(window.isToolbarVisible());        QWidget foreignWindow;
+        foreignWindow.setGeometry(1100, 200, 100, 100);
+        foreignWindow.show();
+        foreignWindow.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&foreignWindow));
+        QTRY_VERIFY(!window.isToolbarVisible());
+        QTest::qWait(70);
+        QVERIFY(!window.isToolbarVisible());
+        window.toggleToolbarVisibility();
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
+    }
     void fullscreenRestoresNormalGeometryAndToolbarChoice() {
         MainWindow window;
         window.resize(640, 400);

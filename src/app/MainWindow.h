@@ -17,6 +17,7 @@
 class AirPlayReceiver;
 class LanguageManager;
 class ToolbarWidget;
+class ToolbarVisibilityController;
 class QLabel;
 class QImage;
 class QEvent;
@@ -132,6 +133,7 @@ private:
     void enforceAspectRatio();
 
     ToolbarWidget *toolbar_;
+    ToolbarVisibilityController *toolbarVisibility_;
     QLabel *statusLabel_;
     VideoSurfaceWidget *videoSurface_;
     AppSettings settings_;

@@ -79,6 +79,8 @@ add_library(airplay_app_lib
     src/app/ShortcutActionKey.h
     src/app/ShortcutActionKey.cpp
     src/app/ShortcutBinding.h
+    src/app/ToolbarVisibilityController.cpp
+    src/app/ToolbarVisibilityController.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
     src/app/app_resources.qrc

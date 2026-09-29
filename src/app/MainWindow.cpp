@@ -7,6 +7,7 @@
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyTypes.h"
 #include "app/ToolbarWidget.h"
+#include "app/ToolbarVisibilityController.h"
 #include "app/VideoSurfaceWidget.h"
 #include "app/WindowStateStore.h"
 #include "backend/AirPlayReceiver.h"
@@ -20,6 +21,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
@@ -206,6 +208,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     layout->addWidget(toolbar_, 0, 0, Qt::AlignTop | Qt::AlignRight);
 
     setCentralWidget(central);
+    toolbarVisibility_ = new ToolbarVisibilityController(central, toolbar_, this);
+    toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
+    connect(toolbarVisibility_, &ToolbarVisibilityController::visibilityChanged, this, [this](bool visible) {
+        toolbar_->setVisible(visible);
+        if (visible) raiseNativeOverlay(toolbar_);
+    });
     raiseNativeOverlay(statusLabel_);
     raiseNativeOverlay(toolbar_);
 
@@ -313,6 +321,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
         const SettingsApplyOutcome outcome = settingsApplyCoordinator_->completeDeferredReceiverApply(
             batch, settings_);
         settings_ = outcome.committedSettings;
+        toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
         applyShortcutTooltips();
         if (!outcome.mayClose) {
             presentDeferredReceiverApplyFailure(outcome);
@@ -417,19 +426,12 @@ void MainWindow::handleDiagnosticWriteFailure(QString error) {
 }
 
 bool MainWindow::isToolbarVisible() const {
-    return !toolbar_->isHidden();
+    return toolbarVisibility_->isVisible();
 }
 
 void MainWindow::toggleToolbarVisibility() {
-    const bool showToolbar = !isToolbarVisible();
-    toolbar_->setVisible(showToolbar);
-    statusLabel_->setVisible(!receiverConnected_);
-    if (!statusLabel_->isHidden()) {
-        raiseNativeOverlay(statusLabel_);
-    }
-    if (showToolbar) {
-        raiseNativeOverlay(toolbar_);
-    }
+    toolbarVisibility_->evaluatePointer(QCursor::pos(), isActiveWindow());
+    toolbarVisibility_->toggleManually();
 }
 
 bool MainWindow::isAlwaysOnTopEnabled() const {
@@ -644,12 +646,10 @@ void MainWindow::updateReceiverState(ReceiverState state) {
     if (wasSessionActive && !receiverSessionActive_ && isFullScreen()) {
         setFullscreenEnabled(false);
     }
-    const bool showToolbar = !receiverConnected_;
-    toolbar_->setVisible(showToolbar);
-    statusLabel_->setVisible(showToolbar);
-    if (showToolbar) {
+    toolbarVisibility_->receiverStateChanged(state);
+    statusLabel_->setVisible(!receiverConnected_);
+    if (!receiverConnected_) {
         raiseNativeOverlay(statusLabel_);
-        raiseNativeOverlay(toolbar_);
     }
 
     switch (state) {
@@ -695,6 +695,7 @@ void MainWindow::showSettingsDialog() {
         }
         const SettingsApplyOutcome outcome = settingsApplyCoordinator_->execute(plan, *timing);
         settings_ = outcome.committedSettings;
+        toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
         if (!outcome.globalResult.has_value() && settings_.language() != previousLanguage
             && languageManager_ != nullptr) {
             languageManager_->apply(settings_.language());
