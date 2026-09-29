@@ -94,6 +94,32 @@ private slots:
         controller.toggleManually(away);
         QVERIFY(!controller.isVisible());
     }
+    void temporaryRevealSurvivesGeometryUntilPointerMoves() {
+        QWidget content;
+        content.setGeometry(100, 100, 600, 300);
+        QWidget toolbar(&content);
+        toolbar.setGeometry(450, 0, 150, 30);
+        ToolbarVisibilityController controller(&content, &toolbar);
+        controller.receiverStateChanged(ReceiverState::Connected);
+        const QPoint originalTop = content.mapToGlobal(QPoint(5, 1));
+        controller.evaluatePointer(originalTop, true);
+        QVERIFY(controller.isVisible());
+        controller.preserveTemporaryRevealUntilPointerMoves(originalTop);
+        content.setGeometry(0, 0, 1600, 900);
+        controller.evaluatePointer(originalTop, true);
+        QVERIFY(controller.isVisible());
+        controller.evaluatePointer(originalTop + QPoint(1, 0), true);
+        QVERIFY(!controller.isVisible());
+        const QPoint newTop = content.mapToGlobal(QPoint(5, 1));
+        controller.evaluatePointer(newTop, true);
+        controller.preserveTemporaryRevealUntilPointerMoves(newTop);
+        controller.evaluatePointer(newTop, false);
+        QVERIFY(!controller.isVisible());
+        controller.evaluatePointer(newTop, true);
+        controller.preserveTemporaryRevealUntilPointerMoves(newTop);
+        controller.setHoverRevealEnabled(false);
+        QVERIFY(!controller.isVisible());
+    }
     void onlyVisibleOwnedControlsRetain() {
         QWidget content;
         content.resize(600, 300);

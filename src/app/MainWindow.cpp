@@ -469,6 +469,7 @@ void MainWindow::setFullscreenEnabled(bool enabled) {
         return;
     }
 
+    toolbarVisibility_->preserveTemporaryRevealUntilPointerMoves(QCursor::pos());
     if (enabled) {
         preFullscreenState_ = WindowStateSnapshot{saveGeometry(), saveState()};
         preFullscreenNormalGeometry_ = geometry();
