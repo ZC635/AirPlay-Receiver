@@ -108,6 +108,10 @@ private slots:
         QCOMPARE(QCoreApplication::translate("SettingsFields",
                      "Show hidden toolbar when the pointer reaches the top"),
                  QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示"));
+        QCOMPARE(QCoreApplication::translate("ToolbarWidget", "Fullscreen"),
+                 QString::fromUtf8(u8"全屏"));
+        QCOMPARE(QCoreApplication::translate("ToolbarWidget", "Exit Fullscreen"),
+                 QString::fromUtf8(u8"退出全屏"));
 
         QVERIFY(manager.apply("en", QLocale("en-US")));
         QCOMPARE(QCoreApplication::translate("LanguageManager", "Translation loaded"),

@@ -69,6 +69,8 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     add_test(NAME MainWindowNativeAspectSizingTest COMMAND MainWindowSmokeTest nativeAspectSizingAdjustsPendingRightEdgeRect)
     add_test(NAME MainWindowNativeLeftAspectSizingTest COMMAND MainWindowSmokeTest nativeAspectSizingAdjustsPendingLeftEdgeRect)
     add_test(NAME MainWindowSmokeTestNativeOverlayStacking COMMAND MainWindowSmokeTest videoSurfaceDoesNotCoverVisibleOverlays)
+    add_test(NAME MainWindowNativeFullscreenKeysTest COMMAND MainWindowSmokeTest nativeFullscreenKeysRespectFocusAndModalControls)
+    add_test(NAME MainWindowNativeFullscreenAspectTest COMMAND MainWindowSmokeTest nativeFullscreenSuspendsAspectSizingAndVideoResize)
 endif()
 
 add_executable(AppSettingsTest app/AppSettingsTest.cpp)
@@ -409,6 +411,10 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
     set_tests_properties(MainWindowSmokeTestNativeOverlayStacking PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+    set_tests_properties(MainWindowNativeFullscreenKeysTest MainWindowNativeFullscreenAspectTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )

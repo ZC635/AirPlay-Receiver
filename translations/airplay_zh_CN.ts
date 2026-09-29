@@ -848,6 +848,14 @@ Run scripts\build.ps1 -Deploy, then launch airplay_receiver.exe again.</source>
 <context>
     <name>ToolbarWidget</name>
     <message>
+        <source>Fullscreen</source>
+        <translation>全屏</translation>
+    </message>
+    <message>
+        <source>Exit Fullscreen</source>
+        <translation>退出全屏</translation>
+    </message>
+    <message>
         <location filename="../src/app/ToolbarWidget.cpp" line="97"/>
         <location filename="../src/app/ToolbarWidget.cpp" line="138"/>
         <source>Record</source>

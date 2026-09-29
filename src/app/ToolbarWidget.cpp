@@ -12,6 +12,7 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
       aspectRatioButton_(new QToolButton(this)),
       videoFitButton_(new QToolButton(this)),
       recordingButton_(new QToolButton(this)),
+      fullscreenButton_(new QToolButton(this)),
       settingsButton_(new QToolButton(this)) {
     volumeButton_->setObjectName("volumeButton");
     volumeButton_->setCheckable(true);
@@ -34,6 +35,9 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     recordingButton_->setCheckable(true);
     setRecordingUi(RecordingState::Idle, false);
 
+    fullscreenButton_->setObjectName("fullscreenButton");
+    fullscreenButton_->setCheckable(true);
+
     settingsButton_->setObjectName("settingsButton");
 
     auto *layout = new QHBoxLayout(this);
@@ -44,6 +48,7 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     layout->addWidget(aspectRatioButton_);
     layout->addWidget(videoFitButton_);
     layout->addWidget(recordingButton_);
+    layout->addWidget(fullscreenButton_);
     layout->addWidget(settingsButton_);
 
     connect(volumeButton_, &QToolButton::toggled, volumeSlider_, &QSlider::setVisible);
@@ -52,6 +57,10 @@ ToolbarWidget::ToolbarWidget(QWidget *parent)
     connect(aspectRatioButton_, &QToolButton::toggled, this, &ToolbarWidget::aspectRatioToggled);
     connect(videoFitButton_, &QToolButton::toggled, this, &ToolbarWidget::videoFitToggled);
     connect(recordingButton_, &QToolButton::clicked, this, &ToolbarWidget::recordingToggledRequested);
+    connect(fullscreenButton_, &QToolButton::toggled, this, [this](bool checked) {
+        updateFullscreenText();
+        emit fullscreenToggled(checked);
+    });
     connect(settingsButton_, &QToolButton::clicked, this, &ToolbarWidget::settingsRequested);
 
     retranslateUi();
@@ -67,6 +76,11 @@ void ToolbarWidget::setVolume(int value) {
 
 void ToolbarWidget::setAlwaysOnTopChecked(bool checked) {
     alwaysOnTopButton_->setChecked(checked);
+}
+
+void ToolbarWidget::setFullscreenChecked(bool checked) {
+    fullscreenButton_->setChecked(checked);
+    updateFullscreenText();
 }
 
 void ToolbarWidget::setVolumeShortcutTooltip(const QString &tooltip) {
@@ -132,6 +146,7 @@ void ToolbarWidget::retranslateUi() {
     aspectRatioButton_->setText(tr("Aspect"));
     videoFitButton_->setText(tr("Fit"));
     settingsButton_->setText(tr("Settings"));
+    updateFullscreenText();
 
     switch (recordingState_) {
     case RecordingState::Idle:
@@ -144,4 +159,10 @@ void ToolbarWidget::retranslateUi() {
         recordingButton_->setText(tr("Saving..."));
         break;
     }
+}
+
+void ToolbarWidget::updateFullscreenText() {
+    const QString label = fullscreenButton_->isChecked() ? tr("Exit Fullscreen") : tr("Fullscreen");
+    fullscreenButton_->setText(label);
+    fullscreenButton_->setToolTip(label);
 }
