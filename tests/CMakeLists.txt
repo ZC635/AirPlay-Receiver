@@ -419,3 +419,22 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
 endif()
+add_executable(ToolbarVisibilityControllerTest app/ToolbarVisibilityControllerTest.cpp)
+target_link_libraries(ToolbarVisibilityControllerTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME ToolbarVisibilityControllerTest COMMAND ToolbarVisibilityControllerTest)
+set_tests_properties(ToolbarVisibilityControllerTest PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+)
+add_test(NAME ToolbarVisibilityControllerHighDpiTest COMMAND ToolbarVisibilityControllerTest)
+set_tests_properties(ToolbarVisibilityControllerHighDpiTest PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR};QT_SCALE_FACTOR=2"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+)
+if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
+    add_test(NAME MainWindowNativeToolbarHoverTest COMMAND MainWindowSmokeTest nativeToolbarCursorFallbackAndPopupFocus)
+    set_tests_properties(MainWindowNativeToolbarHoverTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+endif()
