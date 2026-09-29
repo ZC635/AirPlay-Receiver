@@ -82,6 +82,8 @@ public:
         {QStringLiteral("SettingsDialog\u001fLanguage"), QStringLiteral("语言")},
         {QStringLiteral("SettingsDialog\u001fApply"), QStringLiteral("应用")},
         {QStringLiteral("SettingsDialog\u001fCancel"), QStringLiteral("取消")},
+        {QStringLiteral("SettingsDialog\u001fShow hidden toolbar when the pointer reaches the top"),
+         QStringLiteral("工具栏隐藏时，鼠标移到顶部显示")},
         {QStringLiteral("SettingsDialog\u001fApply incomplete; setting count: %n. Correct the highlighted fields."),
          QStringLiteral("应用未完成：1 项设置。请更正突出显示的字段。")},
         {QStringLiteral("SettingsFields\u001fReceiver name"), QStringLiteral("接收器名称")},
@@ -112,6 +114,72 @@ class SettingsDialogTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void toolbarHoverRevealDraftCancelAndApply() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *checkbox = dialog.findChild<QCheckBox *>("toolbarHoverRevealCheckBox");
+        QVERIFY(checkbox != nullptr);
+        QVERIFY(checkbox->isChecked());
+        QCOMPARE(checkbox->text(), QString("Show hidden toolbar when the pointer reaches the top"));
+        checkbox->setChecked(false);
+        QVERIFY(!dialog.draftSettings().toolbarHoverReveal());
+        QVERIFY(dialog.committedBaseline().toolbarHoverReveal());
+        QVERIFY(dialog.hasUnappliedChanges());
+
+        AppSettings committed = AppSettings::defaults();
+        committed.setToolbarHoverReveal(false);
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = committed;
+        outcome.fieldResults = {{SettingsFieldId::toolbarHoverReveal(), false,
+                                 SettingsFieldStatus::Applied, {}}};
+        outcome.mayClose = true;
+        dialog.presentApplyOutcome(outcome);
+        QVERIFY(!dialog.committedBaseline().toolbarHoverReveal());
+        QVERIFY(!dialog.hasUnappliedChanges());
+
+        SettingsDialog cancelled(AppSettings::defaults());
+        auto *cancelCheckbox = cancelled.findChild<QCheckBox *>("toolbarHoverRevealCheckBox");
+        QVERIFY(cancelCheckbox != nullptr);
+        cancelCheckbox->setChecked(false);
+        cancelled.reject();
+        QVERIFY(cancelled.committedBaseline().toolbarHoverReveal());
+    }
+
+    void toolbarHoverRevealFailedSaveRetainsDraftAndBaseline() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *checkbox = dialog.findChild<QCheckBox *>("toolbarHoverRevealCheckBox");
+        QVERIFY(checkbox != nullptr);
+        checkbox->setChecked(false);
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = AppSettings::defaults();
+        outcome.fieldResults = {{SettingsFieldId::toolbarHoverReveal(), false,
+                                 SettingsFieldStatus::ApplyFailedRolledBack,
+                                 "persistence failed"}};
+        SettingsApplyGlobalResult global;
+        global.persistence.targetPath = "C:/settings.json";
+        global.persistence.errorString = "Disk full";
+        outcome.globalResult = global;
+        dialog.presentApplyOutcome(outcome);
+
+        QVERIFY(!checkbox->isChecked());
+        QVERIFY(!dialog.draftSettings().toolbarHoverReveal());
+        QVERIFY(dialog.committedBaseline().toolbarHoverReveal());
+        QVERIFY(dialog.hasUnappliedChanges());
+    }
+
+    void toolbarHoverRevealTextRetranslatesWithoutChangingDraft() {
+        SettingsDialog dialog(AppSettings::defaults());
+        auto *checkbox = dialog.findChild<QCheckBox *>("toolbarHoverRevealCheckBox");
+        QVERIFY(checkbox != nullptr);
+        checkbox->setChecked(false);
+        SettingsDialogTranslator translator;
+        const InstalledTranslator installedTranslator(&translator);
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&dialog, &languageChange);
+
+        QCOMPARE(checkbox->text(), QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示"));
+        QVERIFY(!dialog.draftSettings().toolbarHoverReveal());
+    }
+
     void comboBoxesIgnoreWheelWithoutChangingSelection() {
         SettingsDialog dialog(AppSettings::defaults());
         dialog.show();

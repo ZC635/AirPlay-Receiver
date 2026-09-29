@@ -201,7 +201,7 @@ private slots:
         const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
                                            .plan(baseline, candidate, true, RecordingState::Idle);
 
-        QCOMPARE(plan.validationResults.size(), 14);
+        QCOMPARE(plan.validationResults.size(), 15);
         verifyValidationFailure(plan, SettingsFieldId::receiverName(),
                                 QStringLiteral("Receiver name cannot be empty."));
         verifyValid(plan, SettingsFieldId::language());
@@ -408,6 +408,50 @@ private slots:
         QVERIFY(!outcome.mayClose);
     }
 
+    void toolbarHoverRevealAppliesLocallyDuringReceiverSession() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setToolbarHoverReveal(false);
+        RecordingSettingsPersistence persistence;
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+
+        const SettingsApplyPlan plan = coordinator.plan(
+            baseline, candidate, true, RecordingState::Idle);
+        QVERIFY(!plan.requiresReceiverTimingDecision);
+        QVERIFY(plan.validChangedReceiverFields.isEmpty());
+        verifyValid(plan, SettingsFieldId::toolbarHoverReveal());
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            plan, ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QVERIFY(!persistence.saved.constFirst().toolbarHoverReveal());
+        QVERIFY(!outcome.committedSettings.toolbarHoverReveal());
+        verifyStatus(outcome, SettingsFieldId::toolbarHoverReveal(),
+                     SettingsFieldStatus::Applied);
+        QVERIFY(outcome.mayClose);
+    }
+
+    void toolbarHoverRevealSaveFailureKeepsCommittedValue() {
+        const AppSettings baseline = AppSettings::defaults();
+        AppSettings candidate = baseline;
+        candidate.setToolbarHoverReveal(false);
+        RecordingSettingsPersistence persistence;
+        persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                                      QFileDevice::WriteError, "Disk full"});
+        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+
+        const SettingsApplyOutcome outcome = coordinator.execute(
+            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
+            ReceiverApplyTiming::Immediate);
+
+        QCOMPARE(persistence.saved.size(), 1);
+        QVERIFY(outcome.committedSettings.toolbarHoverReveal());
+        verifyStatus(outcome, SettingsFieldId::toolbarHoverReveal(),
+                     SettingsFieldStatus::ApplyFailedRolledBack);
+        QVERIFY(outcome.globalResult.has_value());
+        QVERIFY(!outcome.mayClose);
+    }
+
     void planCopiesRecordingIdleState() {
         const AppSettings settings = AppSettings::defaults();
         const SettingsApplyCoordinator coordinator(nullptr, nullptr, nullptr, nullptr);
@@ -466,7 +510,7 @@ private slots:
         QVERIFY(!deferrer.hasPendingReceiverConfiguration());
         const SettingsApplyPlan nullPlan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
                                                 .plan(settings, settings, false, RecordingState::Idle);
-        QCOMPARE(nullPlan.validationResults.size(), 14);
+        QCOMPARE(nullPlan.validationResults.size(), 15);
     }
 
     void oneShortcutFailureDoesNotRollbackAnotherShortcut() {

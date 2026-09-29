@@ -533,6 +533,10 @@
         <translation>录制完成时显示消息</translation>
     </message>
     <message>
+        <source>Show hidden toolbar when the pointer reaches the top</source>
+        <translation>工具栏隐藏时，鼠标移到顶部显示</translation>
+    </message>
+    <message>
         <location filename="../src/app/SettingsDialog.cpp" line="320"/>
         <source>Choose...</source>
         <translation>选择…</translation>
@@ -685,6 +689,10 @@
         <location filename="../src/app/SettingsApplyTypes.cpp" line="192"/>
         <source>Show a message when recording completes</source>
         <translation>录制完成时显示消息</translation>
+    </message>
+    <message>
+        <source>Show hidden toolbar when the pointer reaches the top</source>
+        <translation>工具栏隐藏时，鼠标移到顶部显示</translation>
     </message>
     <message>
         <location filename="../src/app/SettingsApplyTypes.cpp" line="213"/>
