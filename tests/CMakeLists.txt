@@ -437,5 +437,6 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
     set_tests_properties(MainWindowNativeToolbarHoverTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+        RUN_SERIAL TRUE
     )
 endif()
