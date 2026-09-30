@@ -26,7 +26,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMenu>
-#include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QImage>
 #include <QIcon>
@@ -3194,6 +3194,8 @@ private slots:
 
     void nativeToolbarCursorFallbackAndPopupFocus() {
         if (QGuiApplication::platformName() != QStringLiteral("windows")) QSKIP("Windows QPA required");
+        const QPoint originalCursor = QCursor::pos();
+        const auto restoreCursor = qScopeGuard([originalCursor] { QCursor::setPos(originalCursor); });
         MainWindow window;
         window.setGeometry(100, 100, 900, 500);
         window.show();
@@ -3207,11 +3209,11 @@ private slots:
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
         window.toggleToolbarVisibility();
         QVERIFY(!window.isToolbarVisible());
-        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
         QTRY_VERIFY(window.isToolbarVisible());
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
         QTRY_VERIFY(!window.isToolbarVisible());
-        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
         QTRY_VERIFY(window.isToolbarVisible());
         window.setFullscreenEnabled(true);
         QTest::qWait(70);
@@ -3223,10 +3225,6 @@ private slots:
         QMenu popup(toolbar);
         popup.addAction("Owned popup");
         const QPoint popupOrigin = window.centralWidget()->mapToGlobal(QPoint(200, 100));
-        // Qt 6.11's QMenu transient-parent setup warns for the intentionally
-        // native child overlay. Expect only this diagnostic for this fixture.
-        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
-            R"(^QWidgetWindow\(0x[0-9a-fA-F]+, name="ToolbarWidgetClassWindow"\) must be a top level window\.$)"));
         popup.popup(popupOrigin);
         QCursor::setPos(popupOrigin + QPoint(5, 5));
         controller->evaluatePointer(QCursor::pos(), true);
@@ -3236,7 +3234,7 @@ private slots:
         QTRY_VERIFY(!window.isToolbarVisible());
         window.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&window));
-        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
         QTRY_VERIFY(window.isToolbarVisible());
         QWidget foreignWindow;
         foreignWindow.setGeometry(1100, 200, 100, 100);
