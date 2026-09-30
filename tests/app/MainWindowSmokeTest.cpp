@@ -2,6 +2,7 @@
 #include "app/AppSettings.h"
 #include "app/AppSettingsStore.h"
 #include "app/DiagnosticRestartCoordinator.h"
+#include "app/FullscreenRestoreGeometry.h"
 #include "app/LanguageManager.h"
 #include "app/MainWindow.h"
 #include "app/ToolbarVisibilityController.h"
@@ -3271,6 +3272,27 @@ private slots:
         QVERIFY(!button->isChecked());
     }
 
+    void fullscreenRestoreGeometryKeepsOriginalOnAvailableScreen() {
+        const QRect available(0, 0, 1920, 1080);
+        const QRect original(100, 120, 640, 400);
+        const QRect qtRestored(120, 140, 640, 400);
+        QCOMPARE(fullscreenRestoreGeometry(original, qtRestored, {available}), original);
+    }
+
+    void fullscreenRestoreGeometryKeepsQtRelocationWhenMonitorDisappears() {
+        const QRect original(2400, 100, 640, 400);
+        const QRect qtRestored(100, 120, 640, 400);
+        QCOMPARE(fullscreenRestoreGeometry(original, qtRestored, {QRect(0, 0, 1920, 1080)}),
+                 qtRestored);
+    }
+
+    void fullscreenRestoreGeometryClampsWhenBothRectsAreOffscreen() {
+        const QRect original(2400, 100, 640, 400);
+        const QRect qtRestored(2700, 200, 640, 400);
+        QCOMPARE(fullscreenRestoreGeometry(original, qtRestored, {QRect(0, 0, 1920, 1080)}),
+                 QRect(1280, 100, 640, 400));
+    }
+
     void fullscreenRestoresMaximizedWindow() {
         MainWindow window;
         window.showMaximized();
@@ -3296,6 +3318,21 @@ private slots:
         window.setFullscreenEnabled(false);
         QCOMPARE(fit->isChecked(), previousFit);
         QVERIFY(window.isAlwaysOnTopEnabled());
+    }
+
+    void nativeFullscreenPreservesTopmostWindowStyle() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+        MainWindow window;
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.setAlwaysOnTopEnabled(true);
+        QVERIFY(windowHasNativeTopmostState(window));
+        window.setFullscreenEnabled(true);
+        QVERIFY(windowHasNativeTopmostState(window));
+        window.setFullscreenEnabled(false);
+        QVERIFY(windowHasNativeTopmostState(window));
     }
 
     void fullscreenExitsOnlyAfterActiveReceiverSessionEnds_data() {
