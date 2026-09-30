@@ -430,8 +430,7 @@ bool MainWindow::isToolbarVisible() const {
 }
 
 void MainWindow::toggleToolbarVisibility() {
-    toolbarVisibility_->evaluatePointer(QCursor::pos(), isActiveWindow());
-    toolbarVisibility_->toggleManually();
+    toolbarVisibility_->toggleManually(QCursor::pos());
 }
 
 bool MainWindow::isAlwaysOnTopEnabled() const {
@@ -469,7 +468,7 @@ void MainWindow::setFullscreenEnabled(bool enabled) {
         return;
     }
 
-    toolbarVisibility_->preserveTemporaryRevealUntilPointerMoves(QCursor::pos());
+    toolbarVisibility_->preserveVisibilityUntilPointerMoves(QCursor::pos());
     if (enabled) {
         preFullscreenState_ = WindowStateSnapshot{saveGeometry(), saveState()};
         preFullscreenNormalGeometry_ = geometry();

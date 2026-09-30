@@ -25,6 +25,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMenu>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QImage>
 #include <QIcon>
@@ -3105,6 +3106,31 @@ private slots:
         QVERIFY(!saved->geometry.isEmpty());
     }
 
+    void manualToolbarToggleActsOnVisibleState_data() {
+        QTest::addColumn<bool>("temporaryVisible");
+        QTest::newRow("hidden-with-cursor-at-top") << false;
+        QTest::newRow("temporary-with-cursor-outside") << true;
+    }
+    void manualToolbarToggleActsOnVisibleState() {
+        QFETCH(bool, temporaryVisible);
+        MainWindow window;
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        const QPoint top = window.centralWidget()->mapToGlobal(QPoint(5, 1));
+        const QPoint away = window.centralWidget()->mapToGlobal(QPoint(5, 150));
+        controller->receiverStateChanged(ReceiverState::Connected);
+        if (temporaryVisible) controller->evaluatePointer(top, true);
+        QCOMPARE(window.isToolbarVisible(), temporaryVisible);
+        // Set the native cursor without dispatching move events before the hotkey.
+        QCursor::setPos(temporaryVisible ? away : top);
+        window.toggleToolbarVisibility();
+        QCOMPARE(window.isToolbarVisible(), !temporaryVisible);
+        controller->evaluatePointer(away, true);
+        QCOMPARE(window.isToolbarVisible(), !temporaryVisible);
+    }
     void toolbarPolicySurvivesFullscreenAndReceiverDuplicates() {
         FakeAirPlayReceiver receiver;
         MainWindow window(AppSettings::defaults(), nullptr, &receiver);
@@ -3113,7 +3139,9 @@ private slots:
         QVERIFY(controller);
         emit receiver.stateChanged(ReceiverState::Connected);
         QVERIFY(!window.isToolbarVisible());
-        controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+        const QPoint top = window.centralWidget()->mapToGlobal(QPoint(5, 1));
+        QCursor::setPos(top);
+        controller->evaluatePointer(top, true);
         QVERIFY(window.isToolbarVisible());
         window.setFullscreenEnabled(true);
         QVERIFY(window.isToolbarVisible());
@@ -3194,6 +3222,10 @@ private slots:
         QMenu popup(toolbar);
         popup.addAction("Owned popup");
         const QPoint popupOrigin = window.centralWidget()->mapToGlobal(QPoint(200, 100));
+        // Qt 6.11's QMenu transient-parent setup warns for the intentionally
+        // native child overlay. Expect only this diagnostic for this fixture.
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
+            R"(^QWidgetWindow\(0x[0-9a-fA-F]+, name="ToolbarWidgetClassWindow"\) must be a top level window\.$)"));
         popup.popup(popupOrigin);
         QCursor::setPos(popupOrigin + QPoint(5, 5));
         controller->evaluatePointer(QCursor::pos(), true);
@@ -3204,7 +3236,8 @@ private slots:
         window.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&window));
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 1)));
-        QTRY_VERIFY(window.isToolbarVisible());        QWidget foreignWindow;
+        QTRY_VERIFY(window.isToolbarVisible());
+        QWidget foreignWindow;
         foreignWindow.setGeometry(1100, 200, 100, 100);
         foreignWindow.show();
         foreignWindow.activateWindow();

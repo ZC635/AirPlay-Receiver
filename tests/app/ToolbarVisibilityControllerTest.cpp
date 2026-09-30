@@ -104,7 +104,7 @@ private slots:
         const QPoint originalTop = content.mapToGlobal(QPoint(5, 1));
         controller.evaluatePointer(originalTop, true);
         QVERIFY(controller.isVisible());
-        controller.preserveTemporaryRevealUntilPointerMoves(originalTop);
+        controller.preserveVisibilityUntilPointerMoves(originalTop);
         content.setGeometry(0, 0, 1600, 900);
         controller.evaluatePointer(originalTop, true);
         QVERIFY(controller.isVisible());
@@ -112,12 +112,39 @@ private slots:
         QVERIFY(!controller.isVisible());
         const QPoint newTop = content.mapToGlobal(QPoint(5, 1));
         controller.evaluatePointer(newTop, true);
-        controller.preserveTemporaryRevealUntilPointerMoves(newTop);
+        controller.preserveVisibilityUntilPointerMoves(newTop);
         controller.evaluatePointer(newTop, false);
         QVERIFY(!controller.isVisible());
         controller.evaluatePointer(newTop, true);
-        controller.preserveTemporaryRevealUntilPointerMoves(newTop);
+        controller.preserveVisibilityUntilPointerMoves(newTop);
         controller.setHoverRevealEnabled(false);
+        QVERIFY(!controller.isVisible());
+    }
+    void hiddenToolbarSurvivesGeometryUntilPointerMoves_data() {
+        QTest::addColumn<QRect>("before");
+        QTest::addColumn<QRect>("after");
+        QTest::newRow("fullscreen-entry") << QRect(100, 100, 600, 300) << QRect(0, 0, 1600, 900);
+        QTest::newRow("fullscreen-exit") << QRect(0, 0, 1600, 900) << QRect(100, 100, 600, 300);
+    }
+    void hiddenToolbarSurvivesGeometryUntilPointerMoves() {
+        QFETCH(QRect, before);
+        QFETCH(QRect, after);
+        QWidget content;
+        content.setGeometry(before);
+        QWidget toolbar(&content);
+        toolbar.setGeometry(450, 0, 150, 30);
+        ToolbarVisibilityController controller(&content, &toolbar);
+        controller.receiverStateChanged(ReceiverState::Connected);
+        const QPoint stationary = after.topLeft() + QPoint(5, 1);
+        controller.evaluatePointer(stationary, true);
+        QVERIFY(!controller.isVisible());
+        controller.preserveVisibilityUntilPointerMoves(stationary);
+        content.setGeometry(after);
+        controller.evaluatePointer(stationary, true);
+        QVERIFY(!controller.isVisible());
+        controller.evaluatePointer(stationary + QPoint(1, 0), true);
+        QVERIFY(controller.isVisible());
+        controller.evaluatePointer(stationary + QPoint(1, 100), true);
         QVERIFY(!controller.isVisible());
     }
     void onlyVisibleOwnedControlsRetain() {
