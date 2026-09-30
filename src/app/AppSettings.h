@@ -35,6 +35,8 @@ public:
     void setAspectRatioLock(bool enabled);
     bool videoFitMode() const;
     void setVideoFitMode(bool enabled);
+    bool toolbarHoverReveal() const;
+    void setToolbarHoverReveal(bool enabled);
     VideoQualitySettings videoQuality() const;
     void setVideoQuality(VideoQualitySettings quality);
     RecordingFormat recordingFormat() const;
@@ -53,6 +55,7 @@ private:
     QString language_ = QStringLiteral("system");
     bool aspectRatioLock_ = true;
     bool videoFitMode_ = true;
+    bool toolbarHoverReveal_ = true;
     VideoQualitySettings videoQuality_;
     RecordingFormat recordingFormat_ = RecordingFormat::Mp4;
     QString recordingOutputDirectory_;

@@ -49,11 +49,12 @@ class SettingsApplyTypesTest : public QObject {
 private slots:
     void containsEverySettingsDialogField() {
         const QVector<SettingsFieldId> fields = allSettingsFields();
-        QCOMPARE(fields.size(), 14);
+        QCOMPARE(fields.size(), 15);
         QCOMPARE(std::count_if(fields.cbegin(), fields.cend(), [](const SettingsFieldId &id) {
             return id.kind == SettingsFieldKind::Shortcut;
         }), 7);
         QVERIFY(fields.contains(SettingsFieldId::language()));
+        QVERIFY(fields.contains(SettingsFieldId::toolbarHoverReveal()));
     }
 
     void copiesOnlyRequestedField() {
@@ -84,12 +85,14 @@ private slots:
             SettingsFieldId::recordingFormat(),
             SettingsFieldId::recordingOutputDirectory(),
             SettingsFieldId::recordingCompletionNotification(),
+            SettingsFieldId::toolbarHoverReveal(),
         };
         const QStringList expectedNames = {
             "Receiver name", "Language", "Resolution", "Frame rate", "Toggle always on top",
             "Volume up", "Volume down", "Toggle toolbar", "Toggle aspect ratio",
             "Toggle video fit", "Toggle recording", "Format", "Output folder",
             "Show a message when recording completes",
+            "Show hidden toolbar when the pointer reaches the top",
         };
 
         QCOMPARE(fields, expected);
@@ -118,6 +121,7 @@ private slots:
         settings.setShortcut(ShortcutAction::ToggleVideoFit, QKeySequence("Ctrl+Shift+F"));
         settings.setShortcut(ShortcutAction::ToggleRecording, QKeySequence("Ctrl+Shift+G"));
         settings.setLanguage("zh-CN");
+        settings.setToolbarHoverReveal(false);
         settings.setRecordingOutputDirectory("field-value-recordings");
         settings.setShowRecordingCompletionMessage(false);
 
@@ -125,6 +129,7 @@ private slots:
                  QString("Desk Receiver"));
         QCOMPARE(std::get<QString>(settingsFieldValue(settings, SettingsFieldId::language())),
                  QString("zh-CN"));
+        QCOMPARE(std::get<bool>(settingsFieldValue(settings, SettingsFieldId::toolbarHoverReveal())), false);
         QCOMPARE(std::get<VideoResolution>(settingsFieldValue(settings, SettingsFieldId::videoResolution())),
                  VideoResolution::P720);
         QCOMPARE(std::get<VideoFrameRate>(settingsFieldValue(settings, SettingsFieldId::videoFrameRate())),
@@ -157,6 +162,7 @@ private slots:
             }
         }
         candidate.setLanguage("zh-CN");
+        candidate.setToolbarHoverReveal(false);
         candidate.setRecordingOutputDirectory("copy-field-recordings");
         candidate.setShowRecordingCompletionMessage(false);
 

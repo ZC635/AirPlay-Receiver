@@ -98,6 +98,10 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     languageCombo_->setParent(generalGroup_);
     languageCombo_->setObjectName("languageCombo");
     generalLayout->addRow(languageLabel_, languageCombo_);
+    toolbarHoverRevealCheckBox_ = new QCheckBox(generalGroup_);
+    toolbarHoverRevealCheckBox_->setObjectName("toolbarHoverRevealCheckBox");
+    toolbarHoverRevealCheckBox_->setChecked(committedBaseline_.toolbarHoverReveal());
+    generalLayout->addRow(toolbarHoverRevealCheckBox_);
 
     videoGroup_ = new QGroupBox(this);
     videoGroup_->setObjectName("videoSettingsGroup");
@@ -267,6 +271,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     connect(showRecordingCompletionMessageCheckBox_, &QCheckBox::toggled, this, [this] {
         clearFieldResult(SettingsFieldId::recordingCompletionNotification());
     });
+    connect(toolbarHoverRevealCheckBox_, &QCheckBox::toggled, this, [this] {
+        clearFieldResult(SettingsFieldId::toolbarHoverReveal());
+    });
     connect(chooseDirectoryButton_, &QPushButton::clicked, this, [this] {
         if (recordingPathActions_ == nullptr) {
             return;
@@ -326,6 +333,7 @@ void SettingsDialog::retranslateUi() {
     recordingFormatLabel_->setText(tr("Format"));
     recordingOutputFolderLabel_->setText(tr("Output folder"));
     showRecordingCompletionMessageCheckBox_->setText(tr("Show a message when recording completes"));
+    toolbarHoverRevealCheckBox_->setText(tr("Show hidden toolbar when the pointer reaches the top"));
 
     chooseDirectoryButton_->setText(tr("Choose..."));
     openDirectoryButton_->setText(tr("Open"));
@@ -383,6 +391,7 @@ AppSettings SettingsDialog::draftSettings() const {
     draft.setRecordingOutputDirectory(normalizedAbsolutePath(
         QDir::fromNativeSeparators(recordingOutputDirectoryEdit_->text())));
     draft.setShowRecordingCompletionMessage(showRecordingCompletionMessageCheckBox_->isChecked());
+    draft.setToolbarHoverReveal(toolbarHoverRevealCheckBox_->isChecked());
     return draft;
 }
 
