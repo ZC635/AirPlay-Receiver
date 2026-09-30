@@ -2,6 +2,7 @@
 
 #include "app/AppSettingsStore.h"
 #include "app/DiagnosticRestartCoordinator.h"
+#include "app/FullscreenRestoreGeometry.h"
 #include "app/LanguageManager.h"
 #include "app/SettingsApplyCoordinator.h"
 #include "app/SettingsDialog.h"
@@ -26,6 +27,7 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QIcon>
 #include <QKeySequence>
 #include <QLabel>
@@ -34,6 +36,7 @@
 #include <QResource>
 #include <QSignalBlocker>
 #include <QShortcut>
+#include <QScreen>
 #include <QStringList>
 #include <QWidget>
 #include <cmath>
@@ -482,7 +485,12 @@ void MainWindow::setFullscreenEnabled(bool enabled) {
             if (preFullscreenMaximized_) {
                 showMaximized();
             } else {
-                setGeometry(preFullscreenNormalGeometry_);
+                QList<QRect> availableScreens;
+                for (const QScreen *screen : QGuiApplication::screens()) {
+                    availableScreens.append(screen->availableGeometry());
+                }
+                setGeometry(fullscreenRestoreGeometry(
+                    preFullscreenNormalGeometry_, geometry(), availableScreens));
             }
             preFullscreenState_.reset();
         }
