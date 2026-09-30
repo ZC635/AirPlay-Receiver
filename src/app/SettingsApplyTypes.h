@@ -17,6 +17,7 @@ enum class SettingsFieldKind {
     RecordingFormat,
     RecordingOutputDirectory,
     RecordingCompletionNotification,
+    ToolbarHoverReveal,
 };
 
 struct SettingsFieldId {
@@ -31,6 +32,7 @@ struct SettingsFieldId {
     static SettingsFieldId recordingFormat();
     static SettingsFieldId recordingOutputDirectory();
     static SettingsFieldId recordingCompletionNotification();
+    static SettingsFieldId toolbarHoverReveal();
 };
 
 bool operator==(const SettingsFieldId &left, const SettingsFieldId &right);

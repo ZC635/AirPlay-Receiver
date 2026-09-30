@@ -83,6 +83,7 @@ private:
     QComboBox *recordingFormatCombo_;
     QLineEdit *recordingOutputDirectoryEdit_;
     QCheckBox *showRecordingCompletionMessageCheckBox_;
+    QCheckBox *toolbarHoverRevealCheckBox_;
     QPushButton *chooseDirectoryButton_;
     QPushButton *openDirectoryButton_;
     QPushButton *resetButton_;

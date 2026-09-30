@@ -87,6 +87,14 @@ void AppSettings::setVideoFitMode(bool enabled) {
     videoFitMode_ = enabled;
 }
 
+bool AppSettings::toolbarHoverReveal() const {
+    return toolbarHoverReveal_;
+}
+
+void AppSettings::setToolbarHoverReveal(bool enabled) {
+    toolbarHoverReveal_ = enabled;
+}
+
 VideoQualitySettings AppSettings::videoQuality() const {
     return videoQuality_;
 }

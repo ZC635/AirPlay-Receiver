@@ -185,6 +185,41 @@ private slots:
         QCOMPARE(loaded.shortcutFor(ShortcutAction::ToggleToolbar), QKeySequence("Ctrl+Shift+H"));
     }
 
+    void toolbarHoverRevealPersistsAsRootBoolean() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("settings.json");
+        AppSettings settings = AppSettings::defaults();
+        settings.setToolbarHoverReveal(false);
+
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings).success);
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+        QVERIFY(root.value("toolbarHoverReveal").isBool());
+        QVERIFY(!root.value("toolbarHoverReveal").toBool());
+        QVERIFY(!store.loadOrDefaults().toolbarHoverReveal());
+    }
+
+    void missingOrNonBooleanToolbarHoverRevealUsesDefault() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("settings.json");
+        const QList<QByteArray> inputs = {
+            R"({})",
+            R"({"toolbarHoverReveal":"false"})",
+            R"({"toolbarHoverReveal":null})",
+        };
+        for (const QByteArray &input : inputs) {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(file.write(input), input.size());
+            file.close();
+            QVERIFY(AppSettingsStore(path).loadOrDefaults().toolbarHoverReveal());
+        }
+    }
+
     void savesAndLoadsRecordingSettings() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());

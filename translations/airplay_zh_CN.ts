@@ -533,6 +533,10 @@
         <translation>录制完成时显示消息</translation>
     </message>
     <message>
+        <source>Show hidden toolbar when the pointer reaches the top</source>
+        <translation>工具栏隐藏时，鼠标移到顶部显示</translation>
+    </message>
+    <message>
         <location filename="../src/app/SettingsDialog.cpp" line="320"/>
         <source>Choose...</source>
         <translation>选择…</translation>
@@ -687,6 +691,10 @@
         <translation>录制完成时显示消息</translation>
     </message>
     <message>
+        <source>Show hidden toolbar when the pointer reaches the top</source>
+        <translation>工具栏隐藏时，鼠标移到顶部显示</translation>
+    </message>
+    <message>
         <location filename="../src/app/SettingsApplyTypes.cpp" line="213"/>
         <source>Enabled</source>
         <translation>已启用</translation>
@@ -839,6 +847,14 @@ Run scripts\build.ps1 -Deploy, then launch airplay_receiver.exe again.</source>
 </context>
 <context>
     <name>ToolbarWidget</name>
+    <message>
+        <source>Fullscreen</source>
+        <translation>全屏</translation>
+    </message>
+    <message>
+        <source>Exit Fullscreen</source>
+        <translation>退出全屏</translation>
+    </message>
     <message>
         <location filename="../src/app/ToolbarWidget.cpp" line="97"/>
         <location filename="../src/app/ToolbarWidget.cpp" line="138"/>

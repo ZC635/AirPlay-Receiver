@@ -25,6 +25,8 @@ public:
         {QStringLiteral("ToolbarWidget\u001fAspect"), QStringLiteral("比例")},
         {QStringLiteral("ToolbarWidget\u001fFit"), QStringLiteral("适应")},
         {QStringLiteral("ToolbarWidget\u001fSettings"), QStringLiteral("设置")},
+        {QStringLiteral("ToolbarWidget\u001fFullscreen"), QStringLiteral("全屏")},
+        {QStringLiteral("ToolbarWidget\u001fExit Fullscreen"), QStringLiteral("退出全屏")},
         {QStringLiteral("ToolbarWidget\u001fRecord"), QStringLiteral("录制")},
         {QStringLiteral("ToolbarWidget\u001fStop"), QStringLiteral("停止")},
         {QStringLiteral("ToolbarWidget\u001fSaving..."), QStringLiteral("正在保存…")},
@@ -61,6 +63,46 @@ private slots:
         QVERIFY(toolbar.findChild<QToolButton *>("videoFitButton"));
         QVERIFY(toolbar.findChild<QToolButton *>("recordingButton"));
         QVERIFY(toolbar.findChild<QToolButton *>("settingsButton"));
+        auto *fullscreen = toolbar.findChild<QToolButton *>("fullscreenButton");
+        QVERIFY(fullscreen != nullptr);
+        QVERIFY(fullscreen->isCheckable());
+        QVERIFY(!fullscreen->isChecked());
+        QCOMPARE(fullscreen->text(), QString("Fullscreen"));
+        QCOMPARE(fullscreen->toolTip(), QString("Fullscreen"));
+        auto *pin = toolbar.findChild<QToolButton *>("alwaysOnTopButton");
+        QCOMPARE(fullscreen->styleSheet(), pin->styleSheet());
+        QCOMPARE(toolbar.layout()->indexOf(fullscreen) + 1,
+                 toolbar.layout()->indexOf(toolbar.findChild<QToolButton *>("settingsButton")));
+    }
+
+    void fullscreenButtonTextTracksCheckedState() {
+        ToolbarWidget toolbar;
+        auto *button = toolbar.findChild<QToolButton *>("fullscreenButton");
+        QVERIFY(button != nullptr);
+        QSignalSpy spy(&toolbar, &ToolbarWidget::fullscreenToggled);
+        button->click();
+        QCOMPARE(spy.count(), 1);
+        QVERIFY(spy.takeFirst().at(0).toBool());
+        QCOMPARE(button->text(), QString("Exit Fullscreen"));
+        QCOMPARE(button->toolTip(), QString("Exit Fullscreen"));
+        toolbar.setFullscreenChecked(false);
+        QCOMPARE(button->text(), QString("Fullscreen"));
+    }
+
+    void fullscreenButtonRetranslatesCurrentState() {
+        ToolbarWidget toolbar;
+        auto *button = toolbar.findChild<QToolButton *>("fullscreenButton");
+        QVERIFY(button != nullptr);
+        toolbar.setFullscreenChecked(true);
+        ToolbarTranslator translator;
+        const InstalledTranslator installedTranslator(&translator);
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&toolbar, &languageChange);
+        QCOMPARE(button->text(), QStringLiteral("退出全屏"));
+        QCOMPARE(button->toolTip(), QStringLiteral("退出全屏"));
+        toolbar.setFullscreenChecked(false);
+        QCOMPARE(button->text(), QStringLiteral("全屏"));
+        QCOMPARE(button->toolTip(), QStringLiteral("全屏"));
     }
 
     void exposesAspectRatioButton() {
@@ -117,7 +159,7 @@ private slots:
         QVERIFY(settingsIdx >= 0);
         QVERIFY(fitIdx == aspectIdx + 1);
         QVERIFY(recordingIdx == fitIdx + 1);
-        QVERIFY(settingsIdx == recordingIdx + 1);
+        QVERIFY(settingsIdx == recordingIdx + 2);
     }
 
     void recordingButtonReflectsAllStates() {

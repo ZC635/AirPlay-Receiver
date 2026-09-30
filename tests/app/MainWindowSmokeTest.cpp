@@ -2,8 +2,11 @@
 #include "app/AppSettings.h"
 #include "app/AppSettingsStore.h"
 #include "app/DiagnosticRestartCoordinator.h"
+#include "app/FullscreenRestoreGeometry.h"
 #include "app/LanguageManager.h"
 #include "app/MainWindow.h"
+#include "app/ToolbarVisibilityController.h"
+#include <QCursor>
 #include "app/SettingsDialog.h"
 #include "app/ShortcutAction.h"
 #include "app/VideoSurfaceWidget.h"
@@ -18,9 +21,12 @@
 #include <QCheckBox>
 #include <QAbstractButton>
 #include <QDir>
+#include <QDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMenu>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QImage>
 #include <QIcon>
@@ -1525,10 +1531,12 @@ private slots:
         MainWindow window(AppSettings::defaults(), &hotkeys);
         auto *button = window.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(button != nullptr);
-        QVERIFY(!button->isChecked());
+        QVERIFY(button->isChecked());
 
         emit hotkeys.activated(ShortcutAction::ToggleAspectRatio);
 
+        QVERIFY(!button->isChecked());
+        emit hotkeys.activated(ShortcutAction::ToggleAspectRatio);
         QVERIFY(button->isChecked());
     }
 
@@ -1992,20 +2000,24 @@ private slots:
         QVERIFY(dir.isValid());
 
         const QString path = dir.filePath("settings.json");
+        const QByteArray originalSettings = R"({"receiverName":"AirPlay Receiver","shortcuts":{"toggleAlwaysOnTop":"Ctrl+Shift+P","volumeUp":"Ctrl+Shift+Up","volumeDown":"Ctrl+Shift+Down","toggleToolbar":"Ctrl+Shift+T","toggleAspectRatio":"Ctrl+Shift+A"},"volume":100,"aspectRatioLock":false})";
         {
             QFile file(path);
             QVERIFY(file.open(QIODevice::WriteOnly));
-            file.write(R"({"receiverName":"AirPlay Receiver","shortcuts":{"toggleAlwaysOnTop":"Ctrl+Shift+P","volumeUp":"Ctrl+Shift+Up","volumeDown":"Ctrl+Shift+Down","toggleToolbar":"Ctrl+Shift+T","toggleAspectRatio":"Ctrl+Shift+A"},"volume":100,"aspectRatioLock":false})");
+            file.write(originalSettings);
             file.close();
         }
 
-        AppSettings settings = AppSettings::defaults();
+        AppSettings settings = AppSettingsStore(path).loadOrDefaults();
         MainWindow window(settings, nullptr, nullptr, path);
 
         const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
         QCOMPARE(loaded.volume(), 100);
         QCOMPARE(loaded.receiverName(), QString("AirPlay Receiver"));
         QVERIFY(!loaded.aspectRatioLock());
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(file.readAll(), originalSettings);
     }
 
     void acceptedSettingsDialogUpdatesHotkeysAndSavesShortcuts() {
@@ -2293,11 +2305,11 @@ private slots:
         QCOMPARE(surface->objectName(), QString("videoSurface"));
     }
 
-    void startsWithAspectRatioLockDisabled() {
+    void startsWithAspectRatioLockEnabled() {
         MainWindow window;
         auto *button = window.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(button != nullptr);
-        QVERIFY(!button->isChecked());
+        QVERIFY(button->isChecked());
     }
 
     void videoSizeStoredOnSignal() {
@@ -2525,11 +2537,14 @@ private slots:
         MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
         auto *button = window.findChild<QToolButton *>("videoFitButton");
         QVERIFY(button != nullptr);
-        QVERIFY(!button->isChecked());
-        QVERIFY(!receiver.lastVideoFitMode());
+        QVERIFY(button->isChecked());
+        QVERIFY(receiver.lastVideoFitMode());
 
         emit hotkeys.activated(ShortcutAction::ToggleVideoFit);
 
+        QVERIFY(!button->isChecked());
+        QVERIFY(!receiver.lastVideoFitMode());
+        emit hotkeys.activated(ShortcutAction::ToggleVideoFit);
         QVERIFY(button->isChecked());
         QVERIFY(receiver.lastVideoFitMode());
     }
@@ -3062,7 +3077,7 @@ private slots:
         QCOMPARE(receiver.lastAppliedVideoQuality, customQuality);
     }
 
-    void startupWithVideoFitModeTrueDoesNotSaveUnchangedSettings() {
+    void startupWithEnabledAspectAndVideoFitDoesNotSaveUnchangedSettings() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
 
@@ -3070,11 +3085,12 @@ private slots:
         {
             QFile file(path);
             QVERIFY(file.open(QIODevice::WriteOnly));
-            file.write(R"({"videoFitMode":true})");
+            file.write(R"({"aspectRatioLock":true,"videoFitMode":true})");
             file.close();
         }
 
         AppSettings settings = AppSettingsStore(path).loadOrDefaults();
+        QVERIFY(settings.aspectRatioLock());
         QVERIFY(settings.videoFitMode());
 
         QFile::remove(path);
@@ -3099,6 +3115,354 @@ private slots:
         const std::optional<WindowStateSnapshot> saved = WindowStateStore(windowStatePath).load();
         QVERIFY(saved.has_value());
         QVERIFY(!saved->geometry.isEmpty());
+    }
+
+    void manualToolbarToggleActsOnVisibleState_data() {
+        QTest::addColumn<bool>("temporaryVisible");
+        QTest::newRow("hidden-with-cursor-at-top") << false;
+        QTest::newRow("temporary-with-cursor-outside") << true;
+    }
+    void manualToolbarToggleActsOnVisibleState() {
+        QFETCH(bool, temporaryVisible);
+        MainWindow window;
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        const QPoint top = window.centralWidget()->mapToGlobal(QPoint(5, 1));
+        const QPoint away = window.centralWidget()->mapToGlobal(QPoint(5, 150));
+        controller->receiverStateChanged(ReceiverState::Connected);
+        if (temporaryVisible) controller->evaluatePointer(top, true);
+        QCOMPARE(window.isToolbarVisible(), temporaryVisible);
+        // Set the native cursor without dispatching move events before the hotkey.
+        QCursor::setPos(temporaryVisible ? away : top);
+        window.toggleToolbarVisibility();
+        QCOMPARE(window.isToolbarVisible(), !temporaryVisible);
+        controller->evaluatePointer(away, true);
+        QCOMPARE(window.isToolbarVisible(), !temporaryVisible);
+    }
+    void toolbarPolicySurvivesFullscreenAndReceiverDuplicates() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        emit receiver.stateChanged(ReceiverState::Connected);
+        QVERIFY(!window.isToolbarVisible());
+        const QPoint top = window.centralWidget()->mapToGlobal(QPoint(5, 1));
+        QCursor::setPos(top);
+        controller->evaluatePointer(top, true);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(false);
+        QVERIFY(window.isToolbarVisible());
+        controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 150)), true);
+        QVERIFY(!window.isToolbarVisible());
+        window.toggleToolbarVisibility();
+        emit receiver.stateChanged(ReceiverState::Connected);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(true);
+        controller->evaluatePointer(QPoint(-9999, -9999), false);
+        QVERIFY(window.isToolbarVisible());
+        window.toggleToolbarVisibility();
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+        QVERIFY(!window.isFullScreen());
+        QVERIFY(window.isToolbarVisible());
+        QVERIFY(!window.findChild<QLabel *>("receiverStatusLabel")->isHidden());
+    }
+
+    void applyingHoverPreferenceClearsTemporaryVisibility() {
+        MainWindow window;
+        window.show();
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        window.toggleToolbarVisibility();
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = window.findChild<SettingsDialog *>();
+            QVERIFY(dialog);
+            auto *checkbox = dialog->findChild<QCheckBox *>("toolbarHoverRevealCheckBox");
+            QVERIFY(checkbox);
+            checkbox->setChecked(false);
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            controller->evaluatePointer(QPoint(-9999, -9999), true);
+            // Deterministic seam creates the reveal immediately before committing;
+            // modal activation must not mask a missing preference forwarding call.
+            controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+            QVERIFY(window.isToolbarVisible());
+            AppSettings draft = AppSettings::defaults();
+            draft.setToolbarHoverReveal(false);
+            emit dialog->applyRequested(draft);
+            QVERIFY(!window.isToolbarVisible());
+            controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+            QVERIFY(!window.isToolbarVisible());
+            dialog->reject();
+        });
+        window.findChild<QToolButton *>("settingsButton")->click();
+    }
+
+    void nativeToolbarCursorFallbackAndPopupFocus() {
+        if (QGuiApplication::platformName() != QStringLiteral("windows")) QSKIP("Windows QPA required");
+        const QPoint originalCursor = QCursor::pos();
+        const auto restoreCursor = qScopeGuard([originalCursor] { QCursor::setPos(originalCursor); });
+        MainWindow window;
+        window.setGeometry(100, 100, 900, 500);
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        QVERIFY(surface);
+        QVERIFY(surface->testAttribute(Qt::WA_NativeWindow));
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
+        window.toggleToolbarVisibility();
+        QVERIFY(!window.isToolbarVisible());
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
+        QTRY_VERIFY(window.isToolbarVisible());
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
+        QTRY_VERIFY(!window.isToolbarVisible());
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
+        QTRY_VERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(true);
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
+        window.setFullscreenEnabled(false);
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
+        auto *toolbar = window.findChild<QToolButton *>("settingsButton")->parentWidget();
+        QMenu popup(toolbar);
+        popup.addAction("Owned popup");
+        const QPoint popupOrigin = window.centralWidget()->mapToGlobal(QPoint(200, 100));
+        popup.popup(popupOrigin);
+        QCursor::setPos(popupOrigin + QPoint(5, 5));
+        controller->evaluatePointer(QCursor::pos(), true);
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
+        popup.hide();
+        QTRY_VERIFY(!window.isToolbarVisible());
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
+        QTRY_VERIFY(window.isToolbarVisible());
+        QWidget foreignWindow;
+        foreignWindow.setGeometry(1100, 200, 100, 100);
+        foreignWindow.show();
+        foreignWindow.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&foreignWindow));
+        QTRY_VERIFY(!window.isToolbarVisible());
+        QTest::qWait(70);
+        QVERIFY(!window.isToolbarVisible());
+        window.toggleToolbarVisibility();
+        QTest::qWait(70);
+        QVERIFY(window.isToolbarVisible());
+    }
+    void fullscreenRestoresNormalGeometryAndToolbarChoice() {
+        MainWindow window;
+        window.resize(640, 400);
+        window.show();
+        QCoreApplication::processEvents();
+        const QRect before = window.geometry();
+        window.toggleToolbarVisibility();
+        const bool toolbarVisible = window.isToolbarVisible();
+
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.isFullScreen());
+        QCOMPARE(window.isToolbarVisible(), toolbarVisible);
+        auto *button = window.findChild<QToolButton *>("fullscreenButton");
+        QVERIFY(button != nullptr);
+        QVERIFY(button->isChecked());
+        window.setFullscreenEnabled(false);
+        QVERIFY(!window.isFullScreen());
+        QCOMPARE(window.geometry(), before);
+        QCOMPARE(window.isToolbarVisible(), toolbarVisible);
+        QVERIFY(!button->isChecked());
+    }
+
+    void fullscreenRestoreGeometryKeepsOriginalOnAvailableScreen() {
+        const QRect available(0, 0, 1920, 1080);
+        const QRect original(100, 120, 640, 400);
+        const QRect qtRestored(120, 140, 640, 400);
+        QCOMPARE(fullscreenRestoreGeometry(original, qtRestored, {available}), original);
+    }
+
+    void fullscreenRestoreGeometryKeepsQtRelocationWhenMonitorDisappears() {
+        const QRect original(2400, 100, 640, 400);
+        const QRect qtRestored(100, 120, 640, 400);
+        QCOMPARE(fullscreenRestoreGeometry(original, qtRestored, {QRect(0, 0, 1920, 1080)}),
+                 qtRestored);
+    }
+
+    void fullscreenRestoreGeometryClampsWhenBothRectsAreOffscreen() {
+        const QRect original(2400, 100, 640, 400);
+        const QRect qtRestored(2700, 200, 640, 400);
+        QCOMPARE(fullscreenRestoreGeometry(original, qtRestored, {QRect(0, 0, 1920, 1080)}),
+                 QRect(1280, 100, 640, 400));
+    }
+
+    void fullscreenRestoresMaximizedWindow() {
+        MainWindow window;
+        window.showMaximized();
+        QCoreApplication::processEvents();
+        QVERIFY(window.isMaximized());
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.isFullScreen());
+        window.setFullscreenEnabled(false);
+        QVERIFY(window.isMaximized());
+    }
+
+    void fullscreenKeepsFitAndAlwaysOnTop() {
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        window.setAlwaysOnTopEnabled(true);
+        auto *fit = window.findChild<QToolButton *>("videoFitButton");
+        QVERIFY(fit != nullptr);
+        const bool previousFit = fit->isChecked();
+        window.setFullscreenEnabled(true);
+        QCOMPARE(fit->isChecked(), previousFit);
+        QVERIFY(window.isAlwaysOnTopEnabled());
+        window.setFullscreenEnabled(false);
+        QCOMPARE(fit->isChecked(), previousFit);
+        QVERIFY(window.isAlwaysOnTopEnabled());
+    }
+
+    void nativeFullscreenPreservesTopmostWindowStyle() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+        MainWindow window;
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.setAlwaysOnTopEnabled(true);
+        QVERIFY(windowHasNativeTopmostState(window));
+        window.setFullscreenEnabled(true);
+        QVERIFY(windowHasNativeTopmostState(window));
+        window.setFullscreenEnabled(false);
+        QVERIFY(windowHasNativeTopmostState(window));
+    }
+
+    void fullscreenExitsOnlyAfterActiveReceiverSessionEnds_data() {
+        QTest::addColumn<ReceiverState>("endState");
+        QTest::newRow("idle") << ReceiverState::Idle;
+        QTest::newRow("discoverable") << ReceiverState::Discoverable;
+        QTest::newRow("error") << ReceiverState::Error;
+    }
+
+    void fullscreenExitsOnlyAfterActiveReceiverSessionEnds() {
+        QFETCH(ReceiverState, endState);
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        window.setFullscreenEnabled(true);
+        emit receiver.stateChanged(ReceiverState::Discoverable);
+        QVERIFY(window.isFullScreen());
+        emit receiver.stateChanged(ReceiverState::Connecting);
+        QVERIFY(window.isFullScreen());
+        emit receiver.stateChanged(endState);
+        QVERIFY(!window.isFullScreen());
+    }
+
+    void closingFullscreenPersistsPreviousWindowState() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString settingsPath = dir.filePath("settings.json");
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        window.resize(640, 400);
+        window.show();
+        QCoreApplication::processEvents();
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.close());
+
+        MainWindow restored(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        QVERIFY(!restored.isFullScreen());
+        QCOMPARE(restored.size(), QSize(640, 400));
+    }
+
+    void closingFullscreenPersistsPreviousMaximizedState() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString settingsPath = dir.filePath("settings.json");
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        window.showMaximized();
+        QCoreApplication::processEvents();
+        window.setFullscreenEnabled(true);
+        QVERIFY(window.close());
+        MainWindow restored(AppSettings::defaults(), nullptr, nullptr, settingsPath);
+        QVERIFY(!restored.isFullScreen());
+        QVERIFY(restored.isMaximized());
+    }
+
+    void nativeFullscreenSuspendsAspectSizingAndVideoResize() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+        FakeAirPlayReceiver receiver;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *aspect = window.findChild<QToolButton *>("aspectRatioButton");
+        QVERIFY(aspect != nullptr);
+        aspect->setChecked(true);
+        window.setFullscreenEnabled(true);
+        const QSize fullscreenSize = window.size();
+        receiver.emitVideoSize(1170, 2532);
+        QCOMPARE(window.size(), fullscreenSize);
+
+        const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+        RECT pending{};
+        QVERIFY(GetWindowRect(hwnd, &pending));
+        pending.right += 117;
+        const RECT expected = pending;
+        SendMessage(hwnd, WM_SIZING, WMSZ_RIGHT, reinterpret_cast<LPARAM>(&pending));
+        QCOMPARE(pending.left, expected.left);
+        QCOMPARE(pending.top, expected.top);
+        QCOMPARE(pending.right, expected.right);
+        QCOMPARE(pending.bottom, expected.bottom);
+    }
+
+    void nativeFullscreenKeysRespectFocusAndModalControls() {
+        if (QGuiApplication::platformName().compare("windows", Qt::CaseInsensitive) != 0) {
+            QSKIP("Requires the Windows QPA platform");
+        }
+        MainWindow window;
+        window.show();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QWidget other;
+        other.show();
+        other.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&other));
+        QTest::keyClick(&other, Qt::Key_F11);
+        QVERIFY(!window.isFullScreen());
+        other.close();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settings != nullptr);
+        settings->setFocus();
+        QTest::keyClick(settings, Qt::Key_F11);
+        QVERIFY(window.isFullScreen());
+
+        QDialog dialog(&window);
+        dialog.open();
+        QVERIFY(QTest::qWaitForWindowActive(&dialog));
+        QTest::keyClick(&dialog, Qt::Key_Escape);
+        QTRY_VERIFY(!dialog.isVisible());
+        QVERIFY(window.isFullScreen());
+
+        QMenu popup(&window);
+        popup.addAction("Example");
+        popup.popup(window.mapToGlobal(QPoint(20, 20)));
+        QTRY_VERIFY(popup.isVisible());
+        QTest::keyClick(&popup, Qt::Key_Escape);
+        QTRY_VERIFY(!popup.isVisible());
+        QVERIFY(window.isFullScreen());
+
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&window));
+        QTest::keyClick(settings, Qt::Key_Escape);
+        QVERIFY(!window.isFullScreen());
     }
 
     void constructionRestoresSavedWindowGeometry() {
