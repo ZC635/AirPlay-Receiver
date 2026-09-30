@@ -823,7 +823,7 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr
 }
 
 void MainWindow::applyAspectRatioLock(bool enabled) {
-    const bool changed = (aspectRatioLock_ != enabled);
+    const bool changed = (settings_.aspectRatioLock() != enabled);
     aspectRatioLock_ = enabled;
     settings_.setAspectRatioLock(enabled);
     toolbar_->setAspectRatioChecked(enabled);

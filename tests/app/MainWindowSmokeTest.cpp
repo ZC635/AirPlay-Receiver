@@ -1531,10 +1531,12 @@ private slots:
         MainWindow window(AppSettings::defaults(), &hotkeys);
         auto *button = window.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(button != nullptr);
-        QVERIFY(!button->isChecked());
+        QVERIFY(button->isChecked());
 
         emit hotkeys.activated(ShortcutAction::ToggleAspectRatio);
 
+        QVERIFY(!button->isChecked());
+        emit hotkeys.activated(ShortcutAction::ToggleAspectRatio);
         QVERIFY(button->isChecked());
     }
 
@@ -1998,20 +2000,24 @@ private slots:
         QVERIFY(dir.isValid());
 
         const QString path = dir.filePath("settings.json");
+        const QByteArray originalSettings = R"({"receiverName":"AirPlay Receiver","shortcuts":{"toggleAlwaysOnTop":"Ctrl+Shift+P","volumeUp":"Ctrl+Shift+Up","volumeDown":"Ctrl+Shift+Down","toggleToolbar":"Ctrl+Shift+T","toggleAspectRatio":"Ctrl+Shift+A"},"volume":100,"aspectRatioLock":false})";
         {
             QFile file(path);
             QVERIFY(file.open(QIODevice::WriteOnly));
-            file.write(R"({"receiverName":"AirPlay Receiver","shortcuts":{"toggleAlwaysOnTop":"Ctrl+Shift+P","volumeUp":"Ctrl+Shift+Up","volumeDown":"Ctrl+Shift+Down","toggleToolbar":"Ctrl+Shift+T","toggleAspectRatio":"Ctrl+Shift+A"},"volume":100,"aspectRatioLock":false})");
+            file.write(originalSettings);
             file.close();
         }
 
-        AppSettings settings = AppSettings::defaults();
+        AppSettings settings = AppSettingsStore(path).loadOrDefaults();
         MainWindow window(settings, nullptr, nullptr, path);
 
         const AppSettings loaded = AppSettingsStore(path).loadOrDefaults();
         QCOMPARE(loaded.volume(), 100);
         QCOMPARE(loaded.receiverName(), QString("AirPlay Receiver"));
         QVERIFY(!loaded.aspectRatioLock());
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(file.readAll(), originalSettings);
     }
 
     void acceptedSettingsDialogUpdatesHotkeysAndSavesShortcuts() {
@@ -2299,11 +2305,11 @@ private slots:
         QCOMPARE(surface->objectName(), QString("videoSurface"));
     }
 
-    void startsWithAspectRatioLockDisabled() {
+    void startsWithAspectRatioLockEnabled() {
         MainWindow window;
         auto *button = window.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(button != nullptr);
-        QVERIFY(!button->isChecked());
+        QVERIFY(button->isChecked());
     }
 
     void videoSizeStoredOnSignal() {
@@ -2531,11 +2537,14 @@ private slots:
         MainWindow window(AppSettings::defaults(), &hotkeys, &receiver);
         auto *button = window.findChild<QToolButton *>("videoFitButton");
         QVERIFY(button != nullptr);
-        QVERIFY(!button->isChecked());
-        QVERIFY(!receiver.lastVideoFitMode());
+        QVERIFY(button->isChecked());
+        QVERIFY(receiver.lastVideoFitMode());
 
         emit hotkeys.activated(ShortcutAction::ToggleVideoFit);
 
+        QVERIFY(!button->isChecked());
+        QVERIFY(!receiver.lastVideoFitMode());
+        emit hotkeys.activated(ShortcutAction::ToggleVideoFit);
         QVERIFY(button->isChecked());
         QVERIFY(receiver.lastVideoFitMode());
     }
@@ -3068,7 +3077,7 @@ private slots:
         QCOMPARE(receiver.lastAppliedVideoQuality, customQuality);
     }
 
-    void startupWithVideoFitModeTrueDoesNotSaveUnchangedSettings() {
+    void startupWithEnabledAspectAndVideoFitDoesNotSaveUnchangedSettings() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
 
@@ -3076,11 +3085,12 @@ private slots:
         {
             QFile file(path);
             QVERIFY(file.open(QIODevice::WriteOnly));
-            file.write(R"({"videoFitMode":true})");
+            file.write(R"({"aspectRatioLock":true,"videoFitMode":true})");
             file.close();
         }
 
         AppSettings settings = AppSettingsStore(path).loadOrDefaults();
+        QVERIFY(settings.aspectRatioLock());
         QVERIFY(settings.videoFitMode());
 
         QFile::remove(path);
