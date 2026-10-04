@@ -208,14 +208,14 @@ public:
         return chosenDirectory;
     }
 
-    QString ensureAndOpenDirectory(const QString &directory) override {
+    UiMessage ensureAndOpenDirectory(const QString &directory) override {
         openedDirectory = directory;
-        return openError;
+        return UiMessage::raw(openError);
     }
 
-    QString revealFile(const QString &filePath) override {
+    UiMessage revealFile(const QString &filePath) override {
         revealedFile = filePath;
-        return revealError;
+        return UiMessage::raw(revealError);
     }
 
     QString chosenDirectory;
@@ -274,8 +274,8 @@ class FakeDiagnosticLogFolderOperations {
 public:
     DiagnosticLogFolderOperations operation() {
         return {
-            [this](const QString &path) { createdTargets.append(path); return createError; },
-            [this](const QUrl &url) { openedTargets.append(url.toLocalFile()); return openError; },
+            [this](const QString &path) { createdTargets.append(path); return UiMessage::raw(createError); },
+            [this](const QUrl &url) { openedTargets.append(url.toLocalFile()); return UiMessage::raw(openError); },
         };
     }
 
@@ -464,6 +464,76 @@ private slots:
             dialog->reject();
         });
         settings->click();
+    }
+
+    void cachedDiagnosticFolderFailureRetranslatesWithoutRetry_data() {
+        QTest::addColumn<bool>("creationFails");
+        QTest::addColumn<QString>("english");
+        QTest::addColumn<QString>("chinese");
+        QTest::newRow("create") << true << "Could not create diagnostic log folder: %1"
+            << QString::fromUtf8(u8"无法创建诊断日志文件夹：%1");
+        QTest::newRow("open") << false << "Could not open diagnostic log folder: %1"
+            << QString::fromUtf8(u8"无法打开诊断日志文件夹：%1");
+    }
+
+    void cachedDiagnosticFolderFailureRetranslatesWithoutRetry() {
+        QFETCH(bool, creationFails);
+        QFETCH(QString, english);
+        QFETCH(QString, chinese);
+        int createAttempts = 0;
+        int openAttempts = 0;
+        DiagnosticLogFolderOperations operations;
+        operations.createDirectory = [&](const QString &path) {
+            ++createAttempts;
+            return creationFails
+                ? UiMessage::translated("DiagnosticLogFolderActions", english, {path})
+                : UiMessage{};
+        };
+        operations.openUrl = [&](const QUrl &url) {
+            ++openAttempts;
+            return UiMessage::translated("DiagnosticLogFolderActions", english, {url.toLocalFile()});
+        };
+        DiagnosticLogFolderActions folders("C:/package", operations);
+        LanguageManager language(QCoreApplication::instance());
+        FakeAirPlayReceiver receiver;
+        MainWindowRuntimeServices services;
+        services.languageManager = &language;
+        services.diagnosticLogFolderActions = &folders;
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, QString(), nullptr, nullptr, services);
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(settings != nullptr);
+
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog != nullptr);
+            const auto closeDialog = qScopeGuard([dialog] { dialog->reject(); });
+            auto *open = dialog->findChild<QPushButton *>("openDiagnosticLogFolderButton");
+            auto *summary = dialog->findChild<QLabel *>("settingsApplySummary");
+            auto *receiverEdit = dialog->findChild<QLineEdit *>("receiverNameEdit");
+            QVERIFY(open != nullptr);
+            QVERIFY(summary != nullptr);
+            QVERIFY(receiverEdit != nullptr);
+            receiverEdit->setText("Unapplied receiver");
+            open->click();
+            QVERIFY(summary->text().contains(english.arg("C:/package/logs")));
+
+            QVERIFY(language.apply("zh-CN", QLocale("en-US")));
+            QEvent languageChange(QEvent::LanguageChange);
+            QCoreApplication::sendEvent(dialog, &languageChange);
+            QVERIFY2(summary->text().contains(chinese.arg("C:/package/logs")),
+                     qPrintable(summary->text()));
+            QCOMPARE(createAttempts, 1);
+            QCOMPARE(openAttempts, creationFails ? 0 : 1);
+            QCOMPARE(receiverEdit->text(), QString("Unapplied receiver"));
+            QVERIFY(dialog->hasUnappliedChanges());
+
+            QVERIFY(language.apply("en", QLocale("en-US")));
+            QCoreApplication::sendEvent(dialog, &languageChange);
+            QVERIFY(summary->text().contains(english.arg("C:/package/logs")));
+        });
+        settings->click();
+        QCOMPARE(createAttempts, 1);
+        QCOMPARE(openAttempts, creationFails ? 0 : 1);
     }
 
     void diagnosticRestartRejectsFinalizingRecordingBeforePrivacy() {

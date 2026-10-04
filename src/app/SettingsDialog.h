@@ -34,7 +34,7 @@ public:
     const AppSettings &committedBaseline() const;
     void presentApplyOutcome(const SettingsApplyOutcome &outcome);
     bool hasUnappliedChanges() const;
-    void presentDiagnosticActionError(QString error);
+    void presentDiagnosticActionError(UiMessage error);
 
 signals:
     void applyRequested(AppSettings draft);
@@ -96,6 +96,6 @@ private:
     RecordingPathActions *recordingPathActions_;
     QVector<SettingsFieldResult> fieldResults_;
     std::optional<SettingsApplyGlobalResult> globalResult_;
-    QString pathActionError_;
-    QString diagnosticActionError_;
+    UiMessage pathActionError_;
+    UiMessage diagnosticActionError_;
 };

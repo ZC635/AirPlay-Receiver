@@ -978,10 +978,10 @@ void MainWindow::showRecordingCompletion(const RecordingResult &result) {
     if (box.clickedButton() != openFolder || recordingPathActions_ == nullptr) {
         return;
     }
-    const QString error = recordingPathActions_->revealFile(result.finalPath);
+    const UiMessage error = recordingPathActions_->revealFile(result.finalPath);
     if (!error.isEmpty()) {
         QMessageBox::warning(this, tr("Could not open recording"),
-                             tr("Could not open recording: %1").arg(error), QMessageBox::Ok);
+                             tr("Could not open recording: %1").arg(error.render()), QMessageBox::Ok);
     }
 }
 

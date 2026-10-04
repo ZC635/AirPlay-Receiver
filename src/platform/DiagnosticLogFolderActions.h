@@ -1,13 +1,15 @@
 #pragma once
 
+#include "app/UiMessage.h"
+
 #include <QString>
 #include <QUrl>
 
 #include <functional>
 
 struct DiagnosticLogFolderOperations {
-    std::function<QString(const QString &)> createDirectory;
-    std::function<QString(const QUrl &)> openUrl;
+    std::function<UiMessage(const QString &)> createDirectory;
+    std::function<UiMessage(const QUrl &)> openUrl;
 };
 
 class DiagnosticLogFolderActions final {
@@ -15,7 +17,7 @@ public:
     explicit DiagnosticLogFolderActions(QString applicationDirectory,
                                         DiagnosticLogFolderOperations operations = {});
 
-    QString ensureAndOpen();
+    UiMessage ensureAndOpen();
 
 private:
     QString applicationDirectory_;

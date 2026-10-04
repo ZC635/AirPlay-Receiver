@@ -283,7 +283,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
         if (!chosen.isEmpty()) {
             recordingOutputDirectoryEdit_->setText(
                 QDir::toNativeSeparators(normalizedAbsolutePath(chosen)));
-            pathActionError_.clear();
+            pathActionError_ = {};
             refreshPresentation();
         }
     });
@@ -296,12 +296,12 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
         refreshPresentation();
     });
     connect(restartWithDiagnosticLoggingButton_, &QPushButton::clicked, this, [this] {
-        diagnosticActionError_.clear();
+        diagnosticActionError_ = {};
         refreshPresentation();
         emit restartWithDiagnosticLoggingRequested();
     });
     connect(openDiagnosticLogFolderButton_, &QPushButton::clicked, this, [this] {
-        diagnosticActionError_.clear();
+        diagnosticActionError_ = {};
         refreshPresentation();
         emit openDiagnosticLogFolderRequested();
     });
@@ -403,7 +403,7 @@ bool SettingsDialog::hasUnappliedChanges() const {
     return unappliedChangeCount() > 0;
 }
 
-void SettingsDialog::presentDiagnosticActionError(QString error) {
+void SettingsDialog::presentDiagnosticActionError(UiMessage error) {
     diagnosticActionError_ = std::move(error);
     refreshPresentation();
 }
@@ -549,10 +549,10 @@ void SettingsDialog::refreshPresentation() {
         }
     }
     if (!pathActionError_.isEmpty()) {
-        lines.push_back(pathActionError_);
+        lines.push_back(pathActionError_.render());
     }
     if (!diagnosticActionError_.isEmpty()) {
-        lines.push_back(diagnosticActionError_);
+        lines.push_back(diagnosticActionError_.render());
     }
     if (lines.isEmpty()) {
         summaryLabel_->clear();

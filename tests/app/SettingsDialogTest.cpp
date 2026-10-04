@@ -5,6 +5,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
+#include <QFile>
 #include <QFileInfo>
 #include <QGroupBox>
 #include <QHash>
@@ -16,6 +17,7 @@
 #include <QScrollBar>
 #include <QScreen>
 #include <QTableWidget>
+#include <QTemporaryDir>
 #include <QTranslator>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -45,14 +47,14 @@ public:
         return chosenDirectory;
     }
 
-    QString ensureAndOpenDirectory(const QString &directory) override {
+    UiMessage ensureAndOpenDirectory(const QString &directory) override {
         openedDirectories.push_back(directory);
-        return openError;
+        return UiMessage::raw(openError);
     }
 
-    QString revealFile(const QString &filePath) override {
+    UiMessage revealFile(const QString &filePath) override {
         revealedFiles.push_back(filePath);
-        return revealError;
+        return UiMessage::raw(revealError);
     }
 
     QWidget *chooseParent = nullptr;
@@ -770,7 +772,7 @@ private slots:
         global.persistence.errorString = "access denied";
         outcome.globalResult = global;
         dialog.presentApplyOutcome(outcome);
-        dialog.presentDiagnosticActionError("Could not open diagnostic log folder");
+        dialog.presentDiagnosticActionError(UiMessage::raw("Could not open diagnostic log folder"));
 
         QVERIFY(!summary->isHidden());
         QVERIFY(summary->text().contains("Could not save C:/settings.json"));
@@ -912,6 +914,105 @@ private slots:
 
         QCOMPARE(error->text(), actions.openError);
         QVERIFY(!error->isHidden());
+    }
+
+    void cachedRecordingDirectoryFailureRetranslatesWithoutRetry_data() {
+        QTest::addColumn<bool>("creationFails");
+        QTest::addColumn<QString>("english");
+        QTest::addColumn<QString>("chinese");
+        QTest::newRow("open") << false << "Could not open recording directory: %1"
+            << QString::fromUtf8(u8"无法打开录制目录：%1");
+        QTest::newRow("create") << true << "Could not create recording directory: %1"
+            << QString::fromUtf8(u8"无法创建录制目录：%1");
+    }
+
+    void cachedRecordingDirectoryFailureRetranslatesWithoutRetry() {
+        QFETCH(bool, creationFails);
+        QFETCH(QString, english);
+        QFETCH(QString, chinese);
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        QString directory = temporaryDirectory.filePath("recordings");
+        if (creationFails) {
+            QFile blocker(temporaryDirectory.filePath("blocker"));
+            QVERIFY(blocker.open(QIODevice::WriteOnly));
+            blocker.close();
+            directory = blocker.fileName() + "/recordings";
+        }
+        int launchAttempts = 0;
+        WindowsRecordingPathActions actions(
+            [&](const QString &, const QStringList &) {
+                ++launchAttempts;
+                return false;
+            });
+        AppSettings settings = AppSettings::defaults();
+        settings.setRecordingOutputDirectory(directory);
+        SettingsDialog dialog(settings, nullptr, &actions);
+        auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        auto *receiver = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *receiverError = dialog.findChild<QLabel *>("receiverNameError");
+        QVERIFY(open != nullptr);
+        QVERIFY(summary != nullptr);
+        QVERIFY(receiver != nullptr);
+        QVERIFY(receiverError != nullptr);
+        receiver->setText("Unapplied receiver");
+        SettingsApplyOutcome outcome;
+        outcome.committedSettings = settings;
+        outcome.fieldResults = {{SettingsFieldId::receiverName(), QString("Unapplied receiver"),
+                                 SettingsFieldStatus::ValidationFailed, "raw validation detail"}};
+        dialog.presentApplyOutcome(outcome);
+        open->click();
+        const QString nativeDirectory = QDir::toNativeSeparators(directory);
+        QVERIFY(summary->text().contains(english.arg(nativeDirectory)));
+        QCOMPARE(launchAttempts, creationFails ? 0 : 1);
+        if (creationFails) {
+            QVERIFY(QFile::remove(temporaryDirectory.filePath("blocker")));
+        }
+
+        LanguageManager language(QCoreApplication::instance());
+        QVERIFY(language.apply("zh-CN", QLocale("en-US")));
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&dialog, &languageChange);
+        QVERIFY2(summary->text().contains(chinese.arg(nativeDirectory)),
+                 qPrintable(summary->text()));
+        QCOMPARE(launchAttempts, creationFails ? 0 : 1);
+        if (creationFails) {
+            QVERIFY(!QDir(directory).exists());
+        }
+        QCOMPARE(receiver->text(), QString("Unapplied receiver"));
+        QVERIFY(receiverError->text().contains("raw validation detail"));
+        QVERIFY(dialog.hasUnappliedChanges());
+
+        QVERIFY(language.apply("en", QLocale("en-US")));
+        QCoreApplication::sendEvent(&dialog, &languageChange);
+        QVERIFY(summary->text().contains(english.arg(nativeDirectory)));
+        QCOMPARE(launchAttempts, creationFails ? 0 : 1);
+    }
+
+    void cachedRawActionFailuresRemainUntranslated() {
+        FakeRecordingPathActions actions;
+        actions.openError = "Could not open recording directory: %1";
+        const QString diagnosticError = "Could not open diagnostic log folder: %1";
+        SettingsDialog dialog(AppSettings::defaults(), nullptr, &actions);
+        auto *open = dialog.findChild<QPushButton *>("openRecordingDirectoryButton");
+        auto *summary = dialog.findChild<QLabel *>("settingsApplySummary");
+        QVERIFY(open != nullptr);
+        QVERIFY(summary != nullptr);
+        open->click();
+        dialog.presentDiagnosticActionError(UiMessage::raw(diagnosticError));
+        const QString expected = actions.openError + '\n' + diagnosticError;
+        QCOMPARE(summary->text(), expected);
+
+        LanguageManager language(QCoreApplication::instance());
+        QEvent languageChange(QEvent::LanguageChange);
+        QVERIFY(language.apply("zh-CN", QLocale("en-US")));
+        QCoreApplication::sendEvent(&dialog, &languageChange);
+        QCOMPARE(summary->text(), expected);
+        QVERIFY(language.apply("en", QLocale("en-US")));
+        QCoreApplication::sendEvent(&dialog, &languageChange);
+        QCOMPARE(summary->text(), expected);
+        QCOMPARE(actions.openedDirectories.size(), 1);
     }
 
     void successfulPathActionsClearPreviousPathErrors() {

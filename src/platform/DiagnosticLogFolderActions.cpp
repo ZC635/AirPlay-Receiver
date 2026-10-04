@@ -8,22 +8,22 @@
 
 namespace {
 
-QString localized(const char *source) {
-    return QCoreApplication::translate("DiagnosticLogFolderActions", source);
-}
-
-QString createDirectory(const QString &path) {
+UiMessage createDirectory(const QString &path) {
     if (QDir(path).mkpath(".")) {
         return {};
     }
-    return localized(QT_TRANSLATE_NOOP("DiagnosticLogFolderActions", "Could not create diagnostic log folder: %1")).arg(path);
+    return UiMessage::translated("DiagnosticLogFolderActions",
+        QT_TRANSLATE_NOOP("DiagnosticLogFolderActions", "Could not create diagnostic log folder: %1"),
+        {path});
 }
 
-QString openUrl(const QUrl &url) {
+UiMessage openUrl(const QUrl &url) {
     if (QDesktopServices::openUrl(url)) {
         return {};
     }
-    return localized(QT_TRANSLATE_NOOP("DiagnosticLogFolderActions", "Could not open diagnostic log folder: %1")).arg(url.toLocalFile());
+    return UiMessage::translated("DiagnosticLogFolderActions",
+        QT_TRANSLATE_NOOP("DiagnosticLogFolderActions", "Could not open diagnostic log folder: %1"),
+        {url.toLocalFile()});
 }
 
 } // namespace
@@ -39,9 +39,9 @@ DiagnosticLogFolderActions::DiagnosticLogFolderActions(
     }
 }
 
-QString DiagnosticLogFolderActions::ensureAndOpen() {
+UiMessage DiagnosticLogFolderActions::ensureAndOpen() {
     const QString logDirectory = QDir(applicationDirectory_).filePath("logs");
-    if (const QString error = operations_.createDirectory(logDirectory); !error.isEmpty()) {
+    if (const UiMessage error = operations_.createDirectory(logDirectory); !error.isEmpty()) {
         return error;
     }
     return operations_.openUrl(QUrl::fromLocalFile(logDirectory));

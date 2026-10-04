@@ -23,9 +23,9 @@ private slots:
                 return true;
             });
 
-        const QString error = actions.ensureAndOpenDirectory(directory);
+        const UiMessage error = actions.ensureAndOpenDirectory(directory);
 
-        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY2(error.isEmpty(), qPrintable(error.render()));
         QVERIFY(QDir(directory).exists());
         QCOMPARE(launchedProgram, QString("explorer.exe"));
         QCOMPARE(launchedArguments,
@@ -46,9 +46,9 @@ private slots:
                 return true;
             });
 
-        const QString error = actions.revealFile(filePath);
+        const UiMessage error = actions.revealFile(filePath);
 
-        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY2(error.isEmpty(), qPrintable(error.render()));
         QCOMPARE(launchedProgram, QString("explorer.exe"));
         QCOMPARE(launchedArguments,
                  QStringList({"/select,", QDir::toNativeSeparators(
@@ -61,9 +61,9 @@ private slots:
         WindowsRecordingPathActions actions(
             [](const QString &, const QStringList &) { return false; });
 
-        const QString openError = actions.ensureAndOpenDirectory(
+        const UiMessage openError = actions.ensureAndOpenDirectory(
             QDir(temporaryDirectory.path()).filePath("recordings"));
-        const QString revealError = actions.revealFile(
+        const UiMessage revealError = actions.revealFile(
             QDir(temporaryDirectory.path()).filePath("finished.mp4"));
 
         QVERIFY(!openError.isEmpty());
