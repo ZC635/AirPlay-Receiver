@@ -70,12 +70,17 @@ private slots:
     void validSettingsObjectIsLoaded();
     void savedChineseLanguageIsAppliedBeforeDiagnosticStartupDecision();
     void missingStartupCatalogFallsBackToEnglishAndRecordsOneDiagnosticEvent();
+    void startupTranslationFailureSurvivesPrivacyFiltering();
+    void startupTranslationFailureRedactsUnsupportedSelection();
+    void startupSettingsSnapshotSurvivesPrivacyFiltering_data();
+    void startupSettingsSnapshotSurvivesPrivacyFiltering();
     void diagnosticLoggingBodiesTranslateWithoutChangingRawDetails();
     void missingRuntimeAbortsWithoutNormalDiagnosticClose();
     void skippedStandaloneRuntimeAvoidsManifestEntries();
     void incompatibleRuntimePathStopsWithActionableMessage();
     void compatibleRuntimePathContinuesWithoutStartupError();
     void runtimePathCompatibilityFieldsAvoidPathDisclosure();
+    void runtimePathCharacterCountSurvivesPrivacyFiltering();
     void incompletePortableManifestSkipsGStreamerSetupAndProbe();
     void completePortableManifestConfiguresGStreamerBeforeProbing();
     void skippedPortableManifestConfiguresGStreamerBeforeProbing();
@@ -259,13 +264,127 @@ void DiagnosticActivationTest::missingStartupCatalogFallsBackToEnglishAndRecords
     QCOMPARE(languageManager.effectiveLanguage(), QStringLiteral("en"));
     QCOMPARE(QCoreApplication::translate("Startup", "Diagnostic logging unavailable"),
              QStringLiteral("Diagnostic logging unavailable"));
+    languageManager.setDiagnosticSink(&sink);
     recordStartupLanguageFailure(&sink, failure);
     QCOMPARE(sink.events.size(), 1);
     QCOMPARE(sink.events.constFirst().name, QStringLiteral("translation_load_failed"));
-    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("requested_language")),
+    QCOMPARE(sink.events.constFirst().severity, DiagnosticSeverity::Warning);
+    QVERIFY(sink.events.constFirst().flushImmediately);
+    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("language_selection")),
              QStringLiteral("zh-CN"));
-    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("resource_path")),
-             QStringLiteral(":/i18n/airplay_zh_CN.qm"));
+    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("effective_language")),
+             QStringLiteral("en"));
+    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("catalog_id")),
+             QStringLiteral("airplay_zh_CN"));
+    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("phase")),
+             QStringLiteral("startup"));
+    QCOMPARE(sink.events.constFirst().fields.value(QStringLiteral("result")),
+             QStringLiteral("fallback"));
+}
+
+void DiagnosticActivationTest::startupTranslationFailureSurvivesPrivacyFiltering() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DiagnosticSessionOptions options;
+    options.applicationDirectory = directory.path();
+    options.activationSource = QStringLiteral("command_argument");
+    auto created = DiagnosticSession::create(std::move(options));
+    QVERIFY2(created.session != nullptr, qPrintable(created.error));
+
+    recordStartupLanguageFailure(created.session.get(),
+                                TranslationLoadFailure{QStringLiteral("zh-CN"),
+                                    QStringLiteral(":/i18n/airplay_zh_CN.qm")});
+
+    QFile log(created.session->filePath());
+    QVERIFY(log.open(QIODevice::ReadOnly));
+    const QByteArray output = log.readAll();
+    QCOMPARE(output.count("translation_load_failed"), 1);
+    QVERIFY(output.contains("WARN startup translation_load_failed"));
+    QVERIFY(output.contains("language_selection=zh-CN"));
+    QVERIFY(output.contains("effective_language=en"));
+    QVERIFY(output.contains("catalog_id=airplay_zh_CN"));
+    QVERIFY(output.contains("phase=startup"));
+    QVERIFY(output.contains("result=fallback"));
+    QVERIFY(!output.contains("resource_path"));
+    QVERIFY(!output.contains(":/i18n/"));
+}
+
+void DiagnosticActivationTest::startupTranslationFailureRedactsUnsupportedSelection() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DiagnosticSessionOptions options;
+    options.applicationDirectory = directory.path();
+    auto created = DiagnosticSession::create(std::move(options));
+    QVERIFY2(created.session != nullptr, qPrintable(created.error));
+
+    recordStartupLanguageFailure(created.session.get(),
+                                TranslationLoadFailure{QStringLiteral("Private language value"),
+                                    QStringLiteral("C:/Users/Private/catalog.qm")});
+
+    QFile log(created.session->filePath());
+    QVERIFY(log.open(QIODevice::ReadOnly));
+    const QByteArray output = log.readAll();
+    QVERIFY(output.contains("language_selection=unsupported"));
+    QVERIFY(!output.contains("Private"));
+    QVERIFY(!output.contains("catalog.qm"));
+}
+
+void DiagnosticActivationTest::startupSettingsSnapshotSurvivesPrivacyFiltering_data() {
+    QTest::addColumn<bool>("saved");
+    QTest::addColumn<QString>("selection");
+    QTest::addColumn<bool>("catalogAvailable");
+    QTest::addColumn<QString>("expectedSelection");
+    QTest::addColumn<QString>("expectedEffective");
+    QTest::newRow("defaults") << false << "system" << true << "system" << "en";
+    QTest::newRow("saved Chinese") << true << "zh-CN" << true << "zh-CN" << "zh-CN";
+    QTest::newRow("saved Chinese fallback") << true << "zh-CN" << false << "zh-CN" << "en";
+    QTest::newRow("saved unsupported selection")
+        << true << "Private language value" << true << "unsupported" << "en";
+}
+
+void DiagnosticActivationTest::startupSettingsSnapshotSurvivesPrivacyFiltering() {
+    QFETCH(bool, saved);
+    QFETCH(QString, selection);
+    QFETCH(bool, catalogAvailable);
+    QFETCH(QString, expectedSelection);
+    QFETCH(QString, expectedEffective);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    if (saved) {
+        AppSettings settings = AppSettings::defaults();
+        settings.setLanguage(selection);
+        settings.setAspectRatioLock(false);
+        settings.setVideoFitMode(false);
+        settings.setToolbarHoverReveal(false);
+        settings.setReceiverName(QStringLiteral("Private receiver"));
+        settings.setRecordingOutputDirectory(QStringLiteral("C:/Users/Private/recordings"));
+        QVERIFY(AppSettingsStore(directory.filePath("airplay-settings.json")).save(settings).success);
+    }
+    const StartupSettings settings = loadStartupSettings(directory.path());
+    LanguageManager manager(QCoreApplication::instance(), nullptr,
+                            [] { return std::make_unique<QTranslator>(); },
+                            [catalogAvailable](QTranslator *translator, const QString &resourcePath) {
+        return catalogAvailable && translator->load(resourcePath);
+    });
+    manager.apply(settings.settings.language(), QLocale("en-US"));
+    DiagnosticSessionOptions options;
+    options.applicationDirectory = directory.path();
+    auto created = DiagnosticSession::create(std::move(options));
+    QVERIFY2(created.session != nullptr, qPrintable(created.error));
+
+    recordStartupSettings(created.session.get(), settings, manager);
+
+    QFile log(created.session->filePath());
+    QVERIFY(log.open(QIODevice::ReadOnly));
+    const QByteArray output = log.readAll();
+    QVERIFY(output.contains(saved ? "INFO startup settings_loaded" : "INFO startup settings_defaulted"));
+    QVERIFY(output.contains(saved ? "aspect_lock=no" : "aspect_lock=yes"));
+    QVERIFY(output.contains(saved ? "video_fit=no" : "video_fit=yes"));
+    QVERIFY(output.contains(saved ? "hover_reveal=no" : "hover_reveal=yes"));
+    QVERIFY(output.contains("language_selection=" + expectedSelection.toUtf8()));
+    QVERIFY(output.contains("effective_language=" + expectedEffective.toUtf8()));
+    QVERIFY(!output.contains("Private"));
+    QVERIFY(!output.contains("recordings"));
 }
 
 void DiagnosticActivationTest::diagnosticLoggingBodiesTranslateWithoutChangingRawDetails() {
@@ -316,13 +435,33 @@ void DiagnosticActivationTest::runtimePathCompatibilityFieldsAvoidPathDisclosure
     const QMap<QString, QString> fields = runtimePathCompatibilityFields({false, true, 936, 42});
 
     QCOMPARE(fields.keys(), QStringList({QStringLiteral("ansi_code_page"),
+                                         QStringLiteral("character_count"),
                                          QStringLiteral("has_non_ascii"),
-                                         QStringLiteral("path_length"),
                                          QStringLiteral("result")}));
     QCOMPARE(fields.value(QStringLiteral("result")), QStringLiteral("no"));
     QCOMPARE(fields.value(QStringLiteral("has_non_ascii")), QStringLiteral("yes"));
     QCOMPARE(fields.value(QStringLiteral("ansi_code_page")), QStringLiteral("936"));
-    QCOMPARE(fields.value(QStringLiteral("path_length")), QStringLiteral("42"));
+    QCOMPARE(fields.value(QStringLiteral("character_count")), QStringLiteral("42"));
+}
+
+void DiagnosticActivationTest::runtimePathCharacterCountSurvivesPrivacyFiltering() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    DiagnosticSessionOptions options;
+    options.applicationDirectory = directory.path();
+    auto created = DiagnosticSession::create(std::move(options));
+    QVERIFY2(created.session != nullptr, qPrintable(created.error));
+
+    recordStartup(created.session.get(), QStringLiteral("runtime_path_compatibility"),
+                  runtimePathCompatibilityFields({false, true, 936, 42}), true);
+
+    QFile log(created.session->filePath());
+    QVERIFY(log.open(QIODevice::ReadOnly));
+    const QByteArray output = log.readAll();
+    QVERIFY(output.contains("character_count=42"));
+    QVERIFY(output.contains("ansi_code_page=936"));
+    QVERIFY(output.contains("has_non_ascii=yes"));
+    QVERIFY(!output.contains("path_length"));
 }
 
 void DiagnosticActivationTest::incompletePortableManifestSkipsGStreamerSetupAndProbe() {

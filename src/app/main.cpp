@@ -155,7 +155,7 @@ QMap<QString, QString> runtimePathCompatibilityFields(
     return {{QStringLiteral("result"), compatibility.compatible ? QStringLiteral("yes") : QStringLiteral("no")},
             {QStringLiteral("has_non_ascii"), compatibility.hasNonAscii ? QStringLiteral("yes") : QStringLiteral("no")},
             {QStringLiteral("ansi_code_page"), QString::number(compatibility.ansiCodePage)},
-            {QStringLiteral("path_length"), QString::number(compatibility.pathLength)}};
+            {QStringLiteral("character_count"), QString::number(compatibility.pathLength)}};
 }
 
 GStreamerPluginStartupDecision gstreamerPluginStartupDecision(
@@ -216,6 +216,17 @@ void recordStartup(DiagnosticLogSink *sink, QString name,
                                     std::move(name), std::move(fields), flush));
 }
 
+QString diagnosticLanguageSelection(const QString &selection) {
+    const QString normalized = selection.trimmed();
+    if (normalized.isEmpty() || normalized == QStringLiteral("system")) {
+        return QStringLiteral("system");
+    }
+    if (normalized == QStringLiteral("en") || normalized == QStringLiteral("zh-CN")) {
+        return normalized;
+    }
+    return QStringLiteral("unsupported");
+}
+
 bool processIsElevated() {
     HANDLE token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
@@ -265,9 +276,28 @@ void recordStartupLanguageFailure(
     if (!failure.has_value()) {
         return;
     }
-    recordStartup(sink, QStringLiteral("translation_load_failed"),
-                  {{QStringLiteral("requested_language"), failure->requestedLanguage},
-                   {QStringLiteral("resource_path"), failure->resourcePath}}, true);
+    sink->record(makeDiagnosticEvent(DiagnosticSeverity::Warning, QStringLiteral("startup"),
+        QStringLiteral("translation_load_failed"),
+        {{QStringLiteral("language_selection"), diagnosticLanguageSelection(failure->requestedLanguage)},
+         {QStringLiteral("effective_language"), QStringLiteral("en")},
+         {QStringLiteral("catalog_id"), QStringLiteral("airplay_zh_CN")},
+         {QStringLiteral("phase"), QStringLiteral("startup")},
+         {QStringLiteral("result"), QStringLiteral("fallback")}}, true));
+}
+
+void recordStartupSettings(DiagnosticLogSink *sink, const StartupSettings &settings,
+                           const LanguageManager &languageManager) {
+    recordStartup(sink, settings.settingsLoaded ? QStringLiteral("settings_loaded")
+                                               : QStringLiteral("settings_defaulted"),
+                  {{QStringLiteral("aspect_lock"), settings.settings.aspectRatioLock()
+                        ? QStringLiteral("yes") : QStringLiteral("no")},
+                   {QStringLiteral("video_fit"), settings.settings.videoFitMode()
+                        ? QStringLiteral("yes") : QStringLiteral("no")},
+                   {QStringLiteral("hover_reveal"), settings.settings.toolbarHoverReveal()
+                        ? QStringLiteral("yes") : QStringLiteral("no")},
+                   {QStringLiteral("language_selection"),
+                        diagnosticLanguageSelection(settings.settings.language())},
+                   {QStringLiteral("effective_language"), languageManager.effectiveLanguage()}}, true);
 }
 
 void closeDiagnosticSession(DiagnosticLogSink *sink,
@@ -394,6 +424,7 @@ int main(int argc, char *argv[]) {
             sink = session.get();
         }
     }
+    languageManager.setDiagnosticSink(sink);
     MainWindow *diagnosticWindow = nullptr;
     DiagnosticWriteFailureRelay writeFailureRelay;
     writeFailureRelay.setHandler([&diagnosticWindow](QString error) {
@@ -548,8 +579,7 @@ int main(int argc, char *argv[]) {
     WindowsHotkeyService hotkeys;
     const QString &settingsPath = startupSettings.settingsPath;
     const AppSettings &settings = startupSettings.settings;
-    recordStartup(sink, startupSettings.settingsLoaded ? QStringLiteral("settings_loaded")
-                                       : QStringLiteral("settings_defaulted"), {}, true);
+    recordStartupSettings(sink, startupSettings, languageManager);
     const QStringList cleanupResult = cleanupRecordingDirectoryAtStartup(settings);
     recordStartup(sink, QStringLiteral("recording_startup_cleanup"),
                   {{QStringLiteral("count"), QString::number(cleanupResult.size())},
@@ -576,6 +606,7 @@ int main(int argc, char *argv[]) {
                           ? QStringLiteral("yes") : QStringLiteral("no")}}, true);
     });
     MainWindowRuntimeServices runtimeServices;
+    runtimeServices.diagnosticSink = sink;
     runtimeServices.languageManager = &languageManager;
     runtimeServices.diagnosticLoggingActive = diagnosticLoggingActiveForSession(
         session != nullptr, session && session->isActive());
@@ -596,6 +627,7 @@ int main(int argc, char *argv[]) {
     return exitCode;
 #else
     MainWindowRuntimeServices runtimeServices;
+    runtimeServices.diagnosticSink = sink;
     runtimeServices.languageManager = &languageManager;
     runtimeServices.diagnosticLoggingActive = diagnosticLoggingActiveForSession(
         session != nullptr, session && session->isActive());
