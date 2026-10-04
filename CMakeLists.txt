@@ -83,6 +83,8 @@ add_library(airplay_app_lib
     src/app/ToolbarVisibilityController.h
     src/app/ToolbarWidget.cpp
     src/app/ToolbarWidget.h
+    src/app/ToolbarIcons.cpp
+    src/app/ToolbarIcons.h
     src/app/app_resources.qrc
     src/app/VideoRenderGeometry.cpp
     src/app/VideoRenderGeometry.h

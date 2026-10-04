@@ -22,6 +22,8 @@ Download the newest Windows portable build from the [latest release](https://git
 
 Default global shortcuts are available as soon as the receiver starts: `Ctrl+Alt+T` toggles always-on-top, `Ctrl+Alt+Up` and `Ctrl+Alt+Down` adjust volume, `Ctrl+Alt+B` toggles toolbar visibility, `Ctrl+Alt+A` toggles aspect-ratio lock, `Ctrl+Alt+F` toggles video fit, and `Ctrl+Alt+R` starts or stops recording. Open the toolbar settings button to customize shortcut bindings or reset them to defaults.
 
+The toolbar uses monochrome icons. Hover over a button to see its localized label and any configured global shortcuts.
+
 ## Usage
 
 ### Prerequisites
@@ -135,7 +137,7 @@ After the receiver starts, open Control Center on an iPhone, choose Screen Mirro
 
 ### Record Mirrored Content
 
-Once an iPhone is mirroring and recordable samples are available, click **Record** on the toolbar or press `Ctrl+Alt+R`. Click **Stop** or press the shortcut again to finish. The button shows **Saving...** while the recording is finalized into an MP4 file.
+Once an iPhone is mirroring and recordable samples are available, click the circular **Record** icon on the toolbar or press `Ctrl+Alt+R`. Click the square **Stop** icon or press the shortcut again to finish. While the recording is finalized into an MP4 file, the button shows a disabled hourglass; its tooltip includes **Saving...** and the configured shortcut.
 
 Recordings are saved by default under the Windows Videos folder in `AirPlay Receiver Recording`. Open **Settings > Recording** to choose another output folder or control whether a completion message is shown. Closing the application while a recording is active or being saved asks for confirmation before discarding it.
 

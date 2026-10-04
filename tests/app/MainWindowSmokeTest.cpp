@@ -165,6 +165,7 @@ public:
         {QStringLiteral("MainWindow\u001fFit: %1"), QStringLiteral("适应：%1")},
         {QStringLiteral("MainWindow\u001fRecord: %1"), QStringLiteral("录制：%1")},
         {QStringLiteral("ToolbarWidget\u001fVolume"), QStringLiteral("音量")},
+        {QStringLiteral("ToolbarWidget\u001f%1: %2"), QStringLiteral("%1：%2")},
         {QStringLiteral("ToolbarWidget\u001fPin"), QStringLiteral("置顶")},
         {QStringLiteral("ToolbarWidget\u001fAspect"), QStringLiteral("比例")},
         {QStringLiteral("ToolbarWidget\u001fFit"), QStringLiteral("适应")},
@@ -2223,12 +2224,30 @@ private slots:
         QCOMPARE(status->text(), QString("接收器错误：Pairing failed"));
         QVERIFY(fit->toolTip().startsWith(QString("适应：")));
         QCOMPARE(recording->text(), QString("停止"));
+        QVERIFY(recording->toolTip().startsWith(QStringLiteral("停止：")));
         QVERIFY(recording->isChecked());
         QVERIFY(recording->isEnabled());
         QCOMPARE(receiver.recordingState(), RecordingState::Recording);
         QCOMPARE(receiver.startCount, startsBeforeLanguageChange);
         QCOMPARE(receiver.stopCount, stopsBeforeLanguageChange);
         QCOMPARE(receiver.receiverName(), receiverName);
+    }
+
+    void recordingTooltipKeepsShortcutAcrossStateChanges() {
+        FakeAirPlayReceiver receiver;
+        const AppSettings settings = AppSettings::defaults();
+        MainWindow window(settings, nullptr, &receiver);
+        auto *button = window.findChild<QToolButton *>("recordingButton");
+        QVERIFY(button != nullptr);
+        const QString shortcut = settings.shortcutFor(ShortcutAction::ToggleRecording)
+                                     .toString(QKeySequence::NativeText);
+        QCOMPARE(button->toolTip(), QString("Record: %1").arg(shortcut));
+        receiver.setRecordingAvailableForTest(true);
+        button->click();
+        QCOMPARE(button->toolTip(), QString("Stop: %1").arg(shortcut));
+        button->click();
+        QCOMPARE(button->toolTip(), QString("Saving...: %1").arg(shortcut));
+        QVERIFY(!button->isEnabled());
     }
 
     void applyingLanguageSettingPersistsBeforeChangingLanguageManager() {

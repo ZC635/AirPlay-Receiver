@@ -20,6 +20,7 @@ public:
     }
 
     QHash<QString, QString> translations = {
+        {QStringLiteral("ToolbarWidget\u001f%1: %2"), QStringLiteral("%1：%2")},
         {QStringLiteral("ToolbarWidget\u001fVolume"), QStringLiteral("音量")},
         {QStringLiteral("ToolbarWidget\u001fPin"), QStringLiteral("置顶")},
         {QStringLiteral("ToolbarWidget\u001fAspect"), QStringLiteral("比例")},
@@ -54,6 +55,134 @@ class ToolbarWidgetTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void checkedButtonsHaveReadableFill_data() {
+        QTest::addColumn<bool>("darkPalette");
+        QTest::newRow("light") << false;
+        QTest::newRow("dark") << true;
+    }
+
+    void checkedButtonsHaveReadableFill() {
+        QFETCH(bool, darkPalette);
+        ToolbarWidget toolbar;
+        QPalette palette = toolbar.palette();
+        palette.setColor(QPalette::Button, QColor(darkPalette ? "#333333" : "#f9f9f9"));
+        palette.setColor(QPalette::Window, QColor(darkPalette ? "#222222" : "#ffffff"));
+        palette.setColor(QPalette::ButtonText, QColor(darkPalette ? "#eeeeee" : "#202020"));
+        palette.setColor(QPalette::Midlight, QColor(darkPalette ? "#444444" : "#dedede"));
+        palette.setColor(QPalette::Mid, QColor(darkPalette ? "#666666" : "#b0b0b0"));
+        toolbar.setPalette(palette);
+        toolbar.setRecordingUi(RecordingState::Recording, true);
+        toolbar.resize(toolbar.sizeHint());
+        toolbar.layout()->activate();
+        for (auto *button : toolbar.findChildren<QToolButton *>()) {
+            if (!button->isCheckable()) continue;
+            button->setChecked(true);
+            button->ensurePolished();
+            QImage image(button->size(), QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            button->render(&image);
+            const QColor fill = image.pixelColor(4, button->height() / 2);
+            const QString detail = button->objectName() + ": " + fill.name();
+            QVERIFY2(darkPalette ? fill.lightness() <= 110
+                                 : fill.lightness() >= 160 && fill.lightness() <= 235,
+                     qPrintable(detail));
+            bool hasContrastingGlyph = false;
+            for (int y = 8; y < image.height() - 8; ++y) {
+                for (int x = 8; x < image.width() - 8; ++x) {
+                    const QColor pixel = image.pixelColor(x, y);
+                    hasContrastingGlyph |= pixel.alpha() == 255
+                        && qAbs(pixel.lightness() - fill.lightness()) >= 120;
+                }
+            }
+            QVERIFY2(hasContrastingGlyph, qPrintable(detail));
+        }
+    }
+
+    void iconOnlyControlsKeepAccessibleLabels() {
+        ToolbarWidget toolbar;
+        const QHash<QString, QString> labels = {
+            {"volumeButton", "Volume"}, {"alwaysOnTopButton", "Pin"},
+            {"aspectRatioButton", "Aspect"}, {"videoFitButton", "Fit"},
+            {"recordingButton", "Record"}, {"fullscreenButton", "Fullscreen"},
+            {"settingsButton", "Settings"},
+        };
+        for (auto it = labels.cbegin(); it != labels.cend(); ++it) {
+            auto *button = toolbar.findChild<QToolButton *>(it.key());
+            QVERIFY(button != nullptr);
+            QVERIFY2(!button->icon().isNull(), qPrintable(it.key()));
+            QCOMPARE(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+            QCOMPARE(button->accessibleName(), it.value());
+            QCOMPARE(button->toolTip(), it.value());
+            const QImage image = button->icon().pixmap(QSize(20, 20)).toImage();
+            QVERIFY(!image.isNull());
+            QCOMPARE(image.pixelColor(0, 0).alpha(), 0);
+            bool hasVisiblePixel = false;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    hasVisiblePixel |= image.pixelColor(x, y).alpha() > 0;
+                }
+            }
+            QVERIFY2(hasVisiblePixel, qPrintable(it.key()));
+        }
+    }
+
+    void recordingIconsAndTooltipsFollowState() {
+        ToolbarWidget toolbar;
+        auto *button = toolbar.findChild<QToolButton *>("recordingButton");
+        toolbar.setRecordingUi(RecordingState::Idle, true);
+        const QImage record = button->icon().pixmap(QSize(20, 20)).toImage();
+        QVERIFY(!record.isNull());
+        QCOMPARE(button->toolTip(), QString("Record"));
+        toolbar.setRecordingUi(RecordingState::Recording, true);
+        const QImage stop = button->icon().pixmap(QSize(20, 20)).toImage();
+        QVERIFY(stop != record);
+        QCOMPARE(button->toolTip(), QString("Stop"));
+        QCOMPARE(button->accessibleName(), QString("Stop"));
+        toolbar.setRecordingUi(RecordingState::Finalizing, true);
+        const QImage saving = button->icon().pixmap(QSize(20, 20)).toImage();
+        QVERIFY(saving != stop);
+        QVERIFY(saving != record);
+        QCOMPARE(button->toolTip(), QString("Saving..."));
+        QCOMPARE(button->accessibleName(), QString("Saving..."));
+        QVERIFY(!button->isEnabled());
+    }
+
+    void fullscreenIconChangesWithAction() {
+        ToolbarWidget toolbar;
+        auto *button = toolbar.findChild<QToolButton *>("fullscreenButton");
+        const QImage enter = button->icon().pixmap(QSize(20, 20)).toImage();
+        QVERIFY(!enter.isNull());
+        toolbar.setFullscreenChecked(true);
+        const QImage exit = button->icon().pixmap(QSize(20, 20)).toImage();
+        QVERIFY(exit != enter);
+        QCOMPARE(button->accessibleName(), QString("Exit Fullscreen"));
+        toolbar.setFullscreenChecked(false);
+        QCOMPARE(button->icon().pixmap(QSize(20, 20)).toImage(), enter);
+    }
+
+    void iconsFollowPaletteChangesAndDisabledColors() {
+        ToolbarWidget toolbar;
+        auto *button = toolbar.findChild<QToolButton *>("settingsButton");
+        QPalette palette = toolbar.palette();
+        palette.setColor(QPalette::Active, QPalette::ButtonText, QColor(241, 242, 243));
+        palette.setColor(QPalette::Inactive, QPalette::ButtonText, QColor(241, 242, 243));
+        palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(101, 102, 103));
+        toolbar.setPalette(palette);
+        for (const auto mode : {QIcon::Normal, QIcon::Disabled}) {
+            const QColor expected = mode == QIcon::Disabled
+                ? QColor(101, 102, 103) : QColor(241, 242, 243);
+            const QImage image = button->icon().pixmap(QSize(40, 40), mode).toImage();
+            QVERIFY(!image.isNull());
+            bool hasExpectedColor = false;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    hasExpectedColor |= image.pixelColor(x, y) == expected;
+                }
+            }
+            QVERIFY(hasExpectedColor);
+        }
+    }
+
     void exposesRequiredControls() {
         ToolbarWidget toolbar;
         QVERIFY(toolbar.findChild<QToolButton *>("volumeButton"));
@@ -260,6 +389,7 @@ private slots:
         QCOMPARE(aspect->text(), QString("Aspect"));
         QCOMPARE(fit->text(), QString("Fit"));
         QCOMPARE(settings->text(), QString("Settings"));
+        QCOMPARE(settings->toolTip(), QString("Settings"));
         QCOMPARE(recording->text(), englishText);
         QCOMPARE(recording->isChecked(), checked);
         QCOMPARE(recording->isEnabled(), enabled);
@@ -274,6 +404,9 @@ private slots:
         QCOMPARE(aspect->text(), QString("比例"));
         QCOMPARE(fit->text(), QString("适应"));
         QCOMPARE(settings->text(), QString("设置"));
+        QCOMPARE(settings->toolTip(), QString("设置"));
+        QCOMPARE(recording->toolTip(), translatedText);
+        QCOMPARE(recording->accessibleName(), translatedText);
         QCOMPARE(recording->text(), translatedText);
         QCOMPARE(recording->isChecked(), checked);
         QCOMPARE(recording->isEnabled(), enabled);
@@ -284,11 +417,11 @@ private slots:
 
     void storesShortcutTooltips() {
         ToolbarWidget toolbar;
-        toolbar.setVolumeShortcutTooltip("Volume: Ctrl+Alt+Up / Ctrl+Alt+Down");
-        toolbar.setAlwaysOnTopShortcutTooltip("Pin: Ctrl+Alt+T");
-        toolbar.setAspectRatioShortcutTooltip("Aspect: Ctrl+Alt+A");
-        toolbar.setVideoFitShortcutTooltip("Fit: Ctrl+Alt+F");
-        toolbar.setRecordingShortcutTooltip("Record: Ctrl+Alt+R");
+        toolbar.setVolumeShortcuts("Ctrl+Alt+Up", "Ctrl+Alt+Down");
+        toolbar.setAlwaysOnTopShortcut("Ctrl+Alt+T");
+        toolbar.setAspectRatioShortcut("Ctrl+Alt+A");
+        toolbar.setVideoFitShortcut("Ctrl+Alt+F");
+        toolbar.setRecordingShortcut("Ctrl+Alt+R");
 
         auto *volumeButton = toolbar.findChild<QToolButton *>("volumeButton");
         auto *pinButton = toolbar.findChild<QToolButton *>("alwaysOnTopButton");

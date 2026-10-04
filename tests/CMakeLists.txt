@@ -433,6 +433,18 @@ set_tests_properties(ToolbarVisibilityControllerHighDpiTest PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
 )
 if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
+    add_test(NAME ToolbarWidgetNativeCheckedColorsTest
+        COMMAND ToolbarWidgetTest checkedButtonsHaveReadableFill)
+    add_test(NAME ToolbarWidgetNativeCheckedColorsHighDpiTest
+        COMMAND ToolbarWidgetTest checkedButtonsHaveReadableFill)
+    set_tests_properties(ToolbarWidgetNativeCheckedColorsTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
+    set_tests_properties(ToolbarWidgetNativeCheckedColorsHighDpiTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR};QT_SCALE_FACTOR=2"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+    )
     add_test(NAME MainWindowNativeToolbarHoverTest COMMAND MainWindowSmokeTest nativeToolbarCursorFallbackAndPopupFocus)
     set_tests_properties(MainWindowNativeToolbarHoverTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"

@@ -848,6 +848,10 @@ Run scripts\build.ps1 -Deploy, then launch airplay_receiver.exe again.</source>
 <context>
     <name>ToolbarWidget</name>
     <message>
+        <source>%1: %2</source>
+        <translation>%1：%2</translation>
+    </message>
+    <message>
         <source>Fullscreen</source>
         <translation>全屏</translation>
     </message>

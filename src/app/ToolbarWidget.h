@@ -20,11 +20,11 @@ public:
     void setAspectRatioChecked(bool checked);
     void setVideoFitChecked(bool checked);
     void setRecordingUi(RecordingState state, bool available);
-    void setVolumeShortcutTooltip(const QString &tooltip);
-    void setAlwaysOnTopShortcutTooltip(const QString &tooltip);
-    void setAspectRatioShortcutTooltip(const QString &tooltip);
-    void setVideoFitShortcutTooltip(const QString &tooltip);
-    void setRecordingShortcutTooltip(const QString &tooltip);
+    void setVolumeShortcuts(const QString &up, const QString &down);
+    void setAlwaysOnTopShortcut(const QString &shortcut);
+    void setAspectRatioShortcut(const QString &shortcut);
+    void setVideoFitShortcut(const QString &shortcut);
+    void setRecordingShortcut(const QString &shortcut);
 
 signals:
     void volumeChanged(int value);
@@ -39,6 +39,10 @@ private:
     void changeEvent(QEvent *event) override;
     void retranslateUi();
     void updateFullscreenText();
+    void updateRecordingText();
+    void updateTooltips();
+    void updateIcons();
+    void updateButtonStyles();
 
     QToolButton *volumeButton_;
     QSlider *volumeSlider_;
@@ -50,4 +54,10 @@ private:
     QToolButton *settingsButton_;
     RecordingState recordingState_ = RecordingState::Idle;
     bool recordingAvailable_ = false;
+    QString volumeUpShortcut_;
+    QString volumeDownShortcut_;
+    QString alwaysOnTopShortcut_;
+    QString aspectRatioShortcut_;
+    QString videoFitShortcut_;
+    QString recordingShortcut_;
 };

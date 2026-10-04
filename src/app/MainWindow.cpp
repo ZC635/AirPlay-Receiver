@@ -542,11 +542,11 @@ void MainWindow::applyShortcutTooltips() {
     const QString aspectShortcut = settings_.shortcutFor(ShortcutAction::ToggleAspectRatio).toString(QKeySequence::NativeText);
     const QString videoFitShortcut = settings_.shortcutFor(ShortcutAction::ToggleVideoFit).toString(QKeySequence::NativeText);
     const QString recordingShortcut = settings_.shortcutFor(ShortcutAction::ToggleRecording).toString(QKeySequence::NativeText);
-    toolbar_->setVolumeShortcutTooltip(tr("Volume: %1 / %2").arg(volumeUpShortcut, volumeDownShortcut));
-    toolbar_->setAlwaysOnTopShortcutTooltip(tr("Pin: %1").arg(pinShortcut));
-    toolbar_->setAspectRatioShortcutTooltip(tr("Aspect: %1").arg(aspectShortcut));
-    toolbar_->setVideoFitShortcutTooltip(tr("Fit: %1").arg(videoFitShortcut));
-    toolbar_->setRecordingShortcutTooltip(tr("Record: %1").arg(recordingShortcut));
+    toolbar_->setVolumeShortcuts(volumeUpShortcut, volumeDownShortcut);
+    toolbar_->setAlwaysOnTopShortcut(pinShortcut);
+    toolbar_->setAspectRatioShortcut(aspectShortcut);
+    toolbar_->setVideoFitShortcut(videoFitShortcut);
+    toolbar_->setRecordingShortcut(recordingShortcut);
 }
 
 QVector<MainWindow::HotkeyRegistrationFailure> MainWindow::registerHotkeys() {
