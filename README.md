@@ -121,6 +121,8 @@ A normal launch writes no diagnostic logs. To collect logs for a troubleshooting
 
 Diagnostic logs are written only to the adjacent `logs` directory: one file per session, up to 20 MB per file, retaining the newest 10 files. Logs are never uploaded automatically; send them manually when requested. The [Diagnostic Logging] title suffix is the only continuous indication that diagnostic logging is active. If the adjacent directory cannot be written, no fallback directory is used and administrator privileges are not required. Diagnostic logging provides information for troubleshooting; it does not automatically determine the root cause.
 
+Logs also cover language application, fullscreen restoration, toolbar visibility changes, effective display preferences, and settings or directory-operation failures. See the [UI and settings event reference](docs/diagnostic-events.md) for the recorded fields.
+
 ### Run
 
 Launch through the helper script:
