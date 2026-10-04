@@ -31,6 +31,8 @@
 #include <QImage>
 #include <QIcon>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeySequenceEdit>
 #include <QPainter>
 #include <QPushButton>
@@ -2527,27 +2529,57 @@ private slots:
         QCOMPARE(window.size(), QSize(640, 640));
     }
 
+    void loadsAspectRatioLockFromSettings_data() {
+        QTest::addColumn<bool>("enabled");
+        QTest::newRow("enabled") << true;
+        QTest::newRow("disabled") << false;
+    }
+
     void loadsAspectRatioLockFromSettings() {
+        QFETCH(bool, enabled);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("settings.json");
         AppSettings settings = AppSettings::defaults();
-        settings.setAspectRatioLock(true);
-        MainWindow window(settings, nullptr);
+        settings.setAspectRatioLock(enabled);
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings).success);
+        MainWindow window(store.loadOrDefaults(), nullptr, nullptr, path);
         auto *button = window.findChild<QToolButton *>("aspectRatioButton");
-        QVERIFY(button->isChecked());
+        QVERIFY(button != nullptr);
+        QCOMPARE(button->isChecked(), enabled);
+    }
+
+    void aspectRatioLockTogglePersistsToSettings_data() {
+        QTest::addColumn<bool>("enabled");
+        QTest::newRow("enable") << true;
+        QTest::newRow("disable") << false;
     }
 
     void aspectRatioLockTogglePersistsToSettings() {
+        QFETCH(bool, enabled);
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
 
         const QString path = dir.filePath("settings.json");
-        MainWindow window(AppSettings::defaults(), nullptr, nullptr, path);
+        AppSettings settings = AppSettings::defaults();
+        settings.setAspectRatioLock(!enabled);
+        MainWindow window(settings, nullptr, nullptr, path);
         auto *button = window.findChild<QToolButton *>("aspectRatioButton");
         QVERIFY(button != nullptr);
+        QCOMPARE(button->isChecked(), !enabled);
+        QVERIFY(!QFile::exists(path));
 
-        button->setChecked(true);
+        button->click();
 
-        AppSettingsStore store(path);
-        QVERIFY(store.loadOrDefaults().aspectRatioLock());
+        QCOMPARE(button->isChecked(), enabled);
+        QVERIFY(QFile::exists(path));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonValue saved = QJsonDocument::fromJson(file.readAll()).object().value("aspectRatioLock");
+        QVERIFY(saved.isBool());
+        QCOMPARE(saved.toBool(), enabled);
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().aspectRatioLock(), enabled);
     }
 
     void shortcutVideoFitTogglesButtonAndReceiver() {
@@ -2612,49 +2644,60 @@ private slots:
         QVERIFY(!receiver.lastVideoFitMode());
     }
 
+    void loadedVideoFitModeInitializesButtonAndReceiver_data() {
+        QTest::addColumn<bool>("enabled");
+        QTest::newRow("enabled") << true;
+        QTest::newRow("disabled") << false;
+    }
+
     void loadedVideoFitModeInitializesButtonAndReceiver() {
+        QFETCH(bool, enabled);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath("settings.json");
         AppSettings settings = AppSettings::defaults();
-        settings.setVideoFitMode(true);
+        settings.setVideoFitMode(enabled);
+        AppSettingsStore store(path);
+        QVERIFY(store.save(settings).success);
         FakeAirPlayReceiver receiver;
 
-        MainWindow window(settings, nullptr, &receiver);
+        MainWindow window(store.loadOrDefaults(), nullptr, &receiver, path);
         auto *button = window.findChild<QToolButton *>("videoFitButton");
         QVERIFY(button != nullptr);
-        QVERIFY(button->isChecked());
-        QVERIFY(receiver.lastVideoFitMode());
+        QCOMPARE(button->isChecked(), enabled);
+        QCOMPARE(receiver.lastVideoFitMode(), enabled);
+    }
+
+    void videoFitModeTogglePersistsToSettings_data() {
+        QTest::addColumn<bool>("enabled");
+        QTest::newRow("enable") << true;
+        QTest::newRow("disable") << false;
     }
 
     void videoFitModeTogglePersistsToSettings() {
-        QTemporaryDir dir;
-        QVERIFY(dir.isValid());
-
-        const QString path = dir.filePath("settings.json");
-        MainWindow window(AppSettings::defaults(), nullptr, nullptr, path);
-        auto *button = window.findChild<QToolButton *>("videoFitButton");
-        QVERIFY(button != nullptr);
-
-        button->setChecked(true);
-
-        AppSettingsStore store(path);
-        QVERIFY(store.loadOrDefaults().videoFitMode());
-    }
-
-    void videoFitModeToggleOffPersistsToSettings() {
+        QFETCH(bool, enabled);
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
 
         const QString path = dir.filePath("settings.json");
         AppSettings settings = AppSettings::defaults();
-        settings.setVideoFitMode(true);
+        settings.setVideoFitMode(!enabled);
         MainWindow window(settings, nullptr, nullptr, path);
         auto *button = window.findChild<QToolButton *>("videoFitButton");
         QVERIFY(button != nullptr);
-        QVERIFY(button->isChecked());
+        QCOMPARE(button->isChecked(), !enabled);
+        QVERIFY(!QFile::exists(path));
 
-        button->setChecked(false);
+        button->click();
 
-        AppSettingsStore store(path);
-        QVERIFY(!store.loadOrDefaults().videoFitMode());
+        QCOMPARE(button->isChecked(), enabled);
+        QVERIFY(QFile::exists(path));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonValue saved = QJsonDocument::fromJson(file.readAll()).object().value("videoFitMode");
+        QVERIFY(saved.isBool());
+        QCOMPARE(saved.toBool(), enabled);
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().videoFitMode(), enabled);
     }
 
     void videoQualityChangedWhileIdleAppliesImmediatelyAndPersists() {

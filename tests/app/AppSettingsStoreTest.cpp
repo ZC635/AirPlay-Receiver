@@ -485,19 +485,31 @@ private slots:
         QVERIFY(!store.save(AppSettings::defaults()).success);
     }
 
+    void savesAndLoadsAspectRatioLock_data() {
+        QTest::addColumn<bool>("enabled");
+        QTest::newRow("enabled") << true;
+        QTest::newRow("disabled") << false;
+    }
+
     void savesAndLoadsAspectRatioLock() {
+        QFETCH(bool, enabled);
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
 
         const QString path = dir.filePath("settings.json");
         AppSettings settings = AppSettings::defaults();
-        settings.setAspectRatioLock(true);
+        settings.setAspectRatioLock(enabled);
 
         AppSettingsStore store(path);
         QVERIFY(store.save(settings).success);
 
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonValue saved = QJsonDocument::fromJson(file.readAll()).object().value("aspectRatioLock");
+        QVERIFY(saved.isBool());
+        QCOMPARE(saved.toBool(), enabled);
         const AppSettings loaded = store.loadOrDefaults();
-        QVERIFY(loaded.aspectRatioLock());
+        QCOMPARE(loaded.aspectRatioLock(), enabled);
     }
 
     void malformedAspectRatioLockFallsBackToDefault() {
@@ -515,19 +527,31 @@ private slots:
         QCOMPARE(loaded.aspectRatioLock(), AppSettings::defaults().aspectRatioLock());
     }
 
+    void savesAndLoadsVideoFitMode_data() {
+        QTest::addColumn<bool>("enabled");
+        QTest::newRow("enabled") << true;
+        QTest::newRow("disabled") << false;
+    }
+
     void savesAndLoadsVideoFitMode() {
+        QFETCH(bool, enabled);
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
 
         const QString path = dir.filePath("settings.json");
         AppSettings settings = AppSettings::defaults();
-        settings.setVideoFitMode(true);
+        settings.setVideoFitMode(enabled);
 
         AppSettingsStore store(path);
         QVERIFY(store.save(settings).success);
 
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonValue saved = QJsonDocument::fromJson(file.readAll()).object().value("videoFitMode");
+        QVERIFY(saved.isBool());
+        QCOMPARE(saved.toBool(), enabled);
         const AppSettings loaded = store.loadOrDefaults();
-        QVERIFY(loaded.videoFitMode());
+        QCOMPARE(loaded.videoFitMode(), enabled);
     }
 
     void malformedVideoFitModeFallsBackToDefault() {
