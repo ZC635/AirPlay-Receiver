@@ -152,31 +152,6 @@
         <translation>无法开始录制：%1</translation>
     </message>
     <message>
-        <location filename="../src/app/MainWindow.cpp" line="485"/>
-        <source>Volume: %1 / %2</source>
-        <translation>音量：%1 / %2</translation>
-    </message>
-    <message>
-        <location filename="../src/app/MainWindow.cpp" line="486"/>
-        <source>Pin: %1</source>
-        <translation>置顶：%1</translation>
-    </message>
-    <message>
-        <location filename="../src/app/MainWindow.cpp" line="487"/>
-        <source>Aspect: %1</source>
-        <translation>宽高比：%1</translation>
-    </message>
-    <message>
-        <location filename="../src/app/MainWindow.cpp" line="488"/>
-        <source>Fit: %1</source>
-        <translation>适应窗口：%1</translation>
-    </message>
-    <message>
-        <location filename="../src/app/MainWindow.cpp" line="489"/>
-        <source>Record: %1</source>
-        <translation>录制：%1</translation>
-    </message>
-    <message>
         <location filename="../src/app/MainWindow.cpp" line="512"/>
         <source>Unknown error.</source>
         <translation>未知错误。</translation>

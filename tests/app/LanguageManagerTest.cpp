@@ -102,20 +102,59 @@ private slots:
         QCOMPARE(manager.effectiveLanguage(), QString("zh-CN"));
         QCOMPARE(QCoreApplication::translate("LanguageManager", "Translation loaded"),
                  QString::fromUtf8(u8"翻译已加载"));
-        QCOMPARE(QCoreApplication::translate("SettingsDialog",
-                     "Show hidden toolbar when the pointer reaches the top"),
-                 QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示"));
-        QCOMPARE(QCoreApplication::translate("SettingsFields",
-                     "Show hidden toolbar when the pointer reaches the top"),
-                 QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示"));
-        QCOMPARE(QCoreApplication::translate("ToolbarWidget", "Fullscreen"),
-                 QString::fromUtf8(u8"全屏"));
-        QCOMPARE(QCoreApplication::translate("ToolbarWidget", "Exit Fullscreen"),
-                 QString::fromUtf8(u8"退出全屏"));
 
         QVERIFY(manager.apply("en", QLocale("en-US")));
         QCOMPARE(QCoreApplication::translate("LanguageManager", "Translation loaded"),
                  QString("Translation loaded"));
+    }
+
+    void embeddedChineseCatalogTranslatesCurrentControls_data() {
+        QTest::addColumn<QString>("context");
+        QTest::addColumn<QString>("sourceText");
+        QTest::addColumn<QString>("expected");
+
+        QTest::newRow("toolbar volume") << "ToolbarWidget" << "Volume"
+            << QString::fromUtf8(u8"音量");
+        QTest::newRow("toolbar pin") << "ToolbarWidget" << "Pin"
+            << QString::fromUtf8(u8"置顶");
+        QTest::newRow("toolbar aspect") << "ToolbarWidget" << "Aspect"
+            << QString::fromUtf8(u8"宽高比");
+        QTest::newRow("toolbar fit") << "ToolbarWidget" << "Fit"
+            << QString::fromUtf8(u8"适应窗口");
+        QTest::newRow("toolbar settings") << "ToolbarWidget" << "Settings"
+            << QString::fromUtf8(u8"设置");
+        QTest::newRow("toolbar record") << "ToolbarWidget" << "Record"
+            << QString::fromUtf8(u8"录制");
+        QTest::newRow("toolbar stop") << "ToolbarWidget" << "Stop"
+            << QString::fromUtf8(u8"停止");
+        QTest::newRow("toolbar saving") << "ToolbarWidget" << "Saving..."
+            << QString::fromUtf8(u8"正在保存…");
+        QTest::newRow("toolbar fullscreen") << "ToolbarWidget" << "Fullscreen"
+            << QString::fromUtf8(u8"全屏");
+        QTest::newRow("toolbar exit fullscreen") << "ToolbarWidget" << "Exit Fullscreen"
+            << QString::fromUtf8(u8"退出全屏");
+        QTest::newRow("toolbar shortcut tooltip format") << "ToolbarWidget" << "%1: %2"
+            << QString::fromUtf8(u8"%1：%2");
+        QTest::newRow("settings hover reveal") << "SettingsDialog"
+            << "Show hidden toolbar when the pointer reaches the top"
+            << QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示");
+        QTest::newRow("settings field hover reveal") << "SettingsFields"
+            << "Show hidden toolbar when the pointer reaches the top"
+            << QString::fromUtf8(u8"工具栏隐藏时，鼠标移到顶部显示");
+    }
+
+    void embeddedChineseCatalogTranslatesCurrentControls() {
+        QFETCH(QString, context);
+        QFETCH(QString, sourceText);
+        QFETCH(QString, expected);
+
+        LanguageManager manager(QCoreApplication::instance());
+        QVERIFY(manager.apply("zh-CN", QLocale("en-US")));
+
+        const QByteArray contextUtf8 = context.toUtf8();
+        const QByteArray sourceUtf8 = sourceText.toUtf8();
+        QCOMPARE(QCoreApplication::translate(contextUtf8.constData(), sourceUtf8.constData()),
+                 expected);
     }
 
     void destroyManagerRemovesInstalledTranslator() {
