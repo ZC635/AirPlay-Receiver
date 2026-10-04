@@ -1,4 +1,5 @@
 #include "app/ToolbarVisibilityController.h"
+#include "diagnostics/DiagnosticLogSink.h"
 
 #include <QApplication>
 #include <QCursor>
@@ -15,7 +16,8 @@ bool contains(const QWidget *widget, const QPoint &position) {
 }
 
 ToolbarVisibilityController::ToolbarVisibilityController(QWidget *content, QWidget *toolbar, QObject *parent)
-    : QObject(parent), content_(content), toolbar_(toolbar), lastPosition_(QCursor::pos()) {
+    : QObject(parent), content_(content), toolbar_(toolbar), diagnosticSink_(&nullDiagnosticLogSink()),
+      lastPosition_(QCursor::pos()) {
     cursorTimer_.setInterval(25);
     cursorTimer_.setTimerType(Qt::PreciseTimer);
     connect(&cursorTimer_, &QTimer::timeout, this, &ToolbarVisibilityController::evaluateCursor);
@@ -26,6 +28,10 @@ ToolbarVisibilityController::~ToolbarVisibilityController() {
     qApp->removeEventFilter(this);
 }
 
+void ToolbarVisibilityController::setDiagnosticSink(DiagnosticLogSink *sink) {
+    diagnosticSink_ = sink ? sink : &nullDiagnosticLogSink();
+}
+
 void ToolbarVisibilityController::receiverStateChanged(ReceiverState state) {
     if (receiverState_ == state) return;
     receiverState_ = state;
@@ -33,7 +39,7 @@ void ToolbarVisibilityController::receiverStateChanged(ReceiverState state) {
     baselineVisible_ = state != ReceiverState::Connected;
     temporaryVisible_ = false;
     suppressUntilLeave_ = false;
-    publishVisibility();
+    publishVisibility("receiver_state");
     updateTimer();
 }
 
@@ -43,7 +49,7 @@ void ToolbarVisibilityController::setHoverRevealEnabled(bool enabled) {
         temporaryVisible_ = false;
         preservedVisibilityPosition_.reset();
     }
-    publishVisibility();
+    publishVisibility("preference");
     updateTimer();
 }
 
@@ -52,7 +58,7 @@ void ToolbarVisibilityController::toggleManually() {
     baselineVisible_ = !isVisible();
     temporaryVisible_ = false;
     suppressUntilLeave_ = !baselineVisible_ && inTopBand(lastPosition_);
-    publishVisibility();
+    publishVisibility("manual");
     updateTimer();
 }
 
@@ -128,14 +134,26 @@ void ToolbarVisibilityController::evaluatePointer(const QPoint &globalPosition, 
     } else {
         temporaryVisible_ = atTop && !suppressUntilLeave_;
     }
-    publishVisibility();
+    publishVisibility(!active ? "deactivated" : temporaryVisible_ ? "hover_enter" : "hover_leave");
 }
 
-void ToolbarVisibilityController::publishVisibility() {
+void ToolbarVisibilityController::publishVisibility(const char *reason) {
     const bool visible = isVisible();
     if (visible == publishedVisible_) return;
     publishedVisible_ = visible;
     QScopedValueRollback<bool> guard(evaluating_, true);
+    if (diagnosticSink_->isActive()) {
+        const auto flag = [](bool value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); };
+        diagnosticSink_->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("ui"),
+            QStringLiteral("toolbar_visibility_changed"),
+            {{QStringLiteral("visible"), flag(visible)},
+             {QStringLiteral("baseline_visible"), flag(baselineVisible_)},
+             {QStringLiteral("temporary_visible"), flag(temporaryVisible_)},
+             {QStringLiteral("hover_enabled"), flag(hoverEnabled_)},
+             {QStringLiteral("suppressed"), flag(suppressUntilLeave_)},
+             {QStringLiteral("preserved"), flag(preservedVisibilityPosition_.has_value())},
+             {QStringLiteral("reason"), QString::fromLatin1(reason)}}));
+    }
     emit visibilityChanged(visible);
 }
 

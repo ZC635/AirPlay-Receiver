@@ -8,6 +8,7 @@
 #include <optional>
 
 class QWidget;
+class DiagnosticLogSink;
 
 // Owns toolbar policy, independently of the window's normal/fullscreen mode.
 class ToolbarVisibilityController final : public QObject {
@@ -15,6 +16,7 @@ class ToolbarVisibilityController final : public QObject {
 public:
     ToolbarVisibilityController(QWidget *content, QWidget *toolbar, QObject *parent = nullptr);
     ~ToolbarVisibilityController() override;
+    void setDiagnosticSink(DiagnosticLogSink *sink);
     void receiverStateChanged(ReceiverState state);
     void setHoverRevealEnabled(bool enabled);
     void toggleManually();
@@ -35,11 +37,12 @@ private:
     bool ownsControl(const QWidget *widget) const;
     bool hoverWindowActive() const;
     void evaluateCursor();
-    void publishVisibility();
+    void publishVisibility(const char *reason);
     void updateTimer();
 
     QPointer<QWidget> content_;
     QPointer<QWidget> toolbar_;
+    DiagnosticLogSink *diagnosticSink_;
     QTimer cursorTimer_;
     std::optional<ReceiverState> receiverState_;
     QPoint lastPosition_;

@@ -1,13 +1,178 @@
 #include <QtTest/QtTest>
 #include "app/ToolbarVisibilityController.h"
+#include "diagnostics/DiagnosticLogSink.h"
 #include <QDialog>
 #include <QMenu>
 #include <QSignalSpy>
 #include <QWidget>
 
+namespace {
+class RecordingDiagnosticSink final : public DiagnosticLogSink {
+public:
+    void record(DiagnosticEvent event) override { events.append(std::move(event)); }
+    bool isActive() const override { return active; }
+
+    QList<DiagnosticEvent> events;
+    bool active = true;
+};
+
+QMap<QString, QString> toolbarFields(bool visible, bool baseline, bool temporary,
+                                    bool hover, bool suppressed, const QString &reason) {
+    const auto flag = [](bool value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); };
+    return {{QStringLiteral("visible"), flag(visible)},
+            {QStringLiteral("baseline_visible"), flag(baseline)},
+            {QStringLiteral("temporary_visible"), flag(temporary)},
+            {QStringLiteral("hover_enabled"), flag(hover)},
+            {QStringLiteral("suppressed"), flag(suppressed)},
+            {QStringLiteral("preserved"), QStringLiteral("no")},
+            {QStringLiteral("reason"), reason}};
+}
+}
+
 class ToolbarVisibilityControllerTest : public QObject {
     Q_OBJECT
 private slots:
+    void diagnosticReceiverTransitionsRecordOnlyVisibilityChanges() {
+        QWidget content;
+        QWidget toolbar(&content);
+        RecordingDiagnosticSink sink;
+        ToolbarVisibilityController controller(&content, &toolbar);
+        controller.setDiagnosticSink(&sink);
+        QVERIFY(sink.events.isEmpty());
+
+        controller.receiverStateChanged(ReceiverState::Connected);
+        QCOMPARE(sink.events.size(), 1);
+        const DiagnosticEvent &hidden = sink.events.constFirst();
+        QCOMPARE(hidden.severity, DiagnosticSeverity::Info);
+        QCOMPARE(hidden.component, QStringLiteral("ui"));
+        QCOMPARE(hidden.name, QStringLiteral("toolbar_visibility_changed"));
+        QCOMPARE(hidden.fields, toolbarFields(false, false, false, true, false,
+                                               QStringLiteral("receiver_state")));
+        controller.receiverStateChanged(ReceiverState::Connected);
+        QCOMPARE(sink.events.size(), 1);
+
+        controller.receiverStateChanged(ReceiverState::Discoverable);
+        QCOMPARE(sink.events.size(), 2);
+        QCOMPARE(sink.events.constLast().fields, toolbarFields(true, true, false, true, false,
+                                                              QStringLiteral("receiver_state")));
+        controller.receiverStateChanged(ReceiverState::Starting);
+        QCOMPARE(sink.events.size(), 2);
+    }
+    void diagnosticHoverTransitionsDoNotRecordRepeatedPolling() {
+        QWidget content;
+        content.resize(600, 300);
+        QWidget toolbar(&content);
+        toolbar.setGeometry(450, 0, 150, 30);
+        RecordingDiagnosticSink sink;
+        ToolbarVisibilityController controller(&content, &toolbar);
+        controller.setDiagnosticSink(&sink);
+        controller.receiverStateChanged(ReceiverState::Connected);
+        const QPoint top = content.mapToGlobal(QPoint(5, 1));
+        const QPoint away = content.mapToGlobal(QPoint(5, 100));
+
+        controller.evaluatePointer(top, true);
+        QCOMPARE(sink.events.size(), 2);
+        QCOMPARE(sink.events.constLast().fields, toolbarFields(true, false, true, true, false,
+                                                              QStringLiteral("hover_enter")));
+        for (int pass = 0; pass < 40; ++pass) controller.evaluatePointer(top, true);
+        QCOMPARE(sink.events.size(), 2);
+
+        controller.evaluatePointer(away, true);
+        QCOMPARE(sink.events.size(), 3);
+        QCOMPARE(sink.events.constLast().fields, toolbarFields(false, false, false, true, false,
+                                                              QStringLiteral("hover_leave")));
+        for (int pass = 0; pass < 40; ++pass) controller.evaluatePointer(away, true);
+        QCOMPARE(sink.events.size(), 3);
+    }
+    void diagnosticManualHideRecordsSuppressionWithoutPollingNoise() {
+        QWidget content;
+        content.resize(600, 300);
+        QWidget toolbar(&content);
+        toolbar.setGeometry(450, 0, 150, 30);
+        RecordingDiagnosticSink sink;
+        ToolbarVisibilityController controller(&content, &toolbar);
+        controller.setDiagnosticSink(&sink);
+        controller.receiverStateChanged(ReceiverState::Connected);
+        const QPoint top = content.mapToGlobal(QPoint(5, 1));
+        const QPoint away = content.mapToGlobal(QPoint(5, 100));
+        controller.evaluatePointer(top, true);
+        controller.toggleManually(top);
+        QCOMPARE(sink.events.size(), 3);
+        QCOMPARE(sink.events.constLast().fields, toolbarFields(false, false, false, true, true,
+                                                              QStringLiteral("manual")));
+        for (int pass = 0; pass < 40; ++pass) controller.evaluatePointer(top, true);
+        QVERIFY(!controller.isVisible());
+        QCOMPARE(sink.events.size(), 3);
+
+        controller.evaluatePointer(away, true);
+        QCOMPARE(sink.events.size(), 3);
+        controller.toggleManually(away);
+        QCOMPARE(sink.events.size(), 4);
+        QCOMPARE(sink.events.constLast().fields, toolbarFields(true, true, false, true, false,
+                                                              QStringLiteral("manual")));
+        controller.evaluatePointer(away, false);
+        QVERIFY(controller.isVisible());
+        QCOMPARE(sink.events.size(), 4);
+    }
+    void diagnosticPreferenceAndDeactivationExplainTemporaryHide() {
+        QWidget content;
+        content.resize(600, 300);
+        QWidget toolbar(&content);
+        toolbar.setGeometry(450, 0, 150, 30);
+        RecordingDiagnosticSink sink;
+        ToolbarVisibilityController controller(&content, &toolbar);
+        controller.setDiagnosticSink(&sink);
+        controller.receiverStateChanged(ReceiverState::Connected);
+        const QPoint top = content.mapToGlobal(QPoint(5, 1));
+        controller.evaluatePointer(top, true);
+        controller.setHoverRevealEnabled(false);
+        QCOMPARE(sink.events.size(), 3);
+        QCOMPARE(sink.events.constLast().fields, toolbarFields(false, false, false, false, false,
+                                                              QStringLiteral("preference")));
+        controller.setHoverRevealEnabled(false);
+        controller.evaluatePointer(top, true);
+        QCOMPARE(sink.events.size(), 3);
+
+        controller.setHoverRevealEnabled(true);
+        QCOMPARE(sink.events.size(), 3);
+        controller.evaluatePointer(top, true);
+        controller.preserveVisibilityUntilPointerMoves(top);
+        controller.evaluatePointer(top, false);
+        QCOMPARE(sink.events.size(), 5);
+        QCOMPARE(sink.events.constLast().fields, toolbarFields(false, false, false, true, false,
+                                                              QStringLiteral("deactivated")));
+        controller.evaluatePointer(top, false);
+        QCOMPARE(sink.events.size(), 5);
+    }
+    void disabledAndNullDiagnosticSinksPreserveControllerBehavior() {
+        QWidget content;
+        content.resize(600, 300);
+        QWidget toolbar(&content);
+        toolbar.setGeometry(450, 0, 150, 30);
+        RecordingDiagnosticSink sink;
+        sink.active = false;
+        ToolbarVisibilityController controller(&content, &toolbar);
+        controller.setDiagnosticSink(&sink);
+        controller.receiverStateChanged(ReceiverState::Connected);
+        QVERIFY(!controller.isVisible());
+        const QPoint top = content.mapToGlobal(QPoint(5, 1));
+        controller.evaluatePointer(top, true);
+        QVERIFY(controller.isVisible());
+        controller.toggleManually(top);
+        QVERIFY(!controller.isVisible());
+        QVERIFY(sink.events.isEmpty());
+
+        sink.active = true;
+        controller.setDiagnosticSink(nullptr);
+        controller.toggleManually(top);
+        QVERIFY(controller.isVisible());
+        controller.receiverStateChanged(ReceiverState::Connected);
+        QVERIFY(controller.isVisible());
+        controller.receiverStateChanged(ReceiverState::Discoverable);
+        controller.toggleManually(top);
+        QVERIFY(!controller.isVisible());
+        QVERIFY(sink.events.isEmpty());
+    }
     void baselineAndManualPolicy() {
         QWidget content;
         QWidget toolbar(&content);
