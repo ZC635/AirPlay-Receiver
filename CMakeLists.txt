@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(AirPlayReceiver VERSION 0.1.0 LANGUAGES CXX RC)
+project(AirPlayReceiver VERSION 0.4.1 LANGUAGES CXX RC)
 
 set(AIRPLAY_BUILD_ID "" CACHE STRING "Optional build identity for diagnostic logs")
 
