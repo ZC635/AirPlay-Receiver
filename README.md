@@ -24,6 +24,12 @@ Default global shortcuts are available as soon as the receiver starts: `Ctrl+Alt
 
 The toolbar uses monochrome icons. Hover over a button to see its localized label and any configured global shortcuts.
 
+Aspect-ratio lock and video fit are enabled by default unless different preferences have already been saved. Aspect-ratio lock follows the decoded video ratio when resizing the window; video fit preserves that ratio while keeping the whole frame visible.
+
+Click the **Fullscreen** icon or press `F11` to toggle fullscreen; press `Esc` to exit. These fixed window shortcuts work only while the main window is active and no modal dialog or popup is open. Exiting restores the previous window size, position, and maximized state. Fullscreen exits when a mirroring session ends and is not restored on the next launch.
+
+The toolbar hides when a mirroring connection becomes active. `Ctrl+Alt+B` toggles its visibility; a manually shown toolbar stays visible until hidden again or the receiver state changes. By default, moving the pointer to the top of the active receiver's content area temporarily reveals a hidden toolbar in both windowed and fullscreen modes. Leaving that top area, the toolbar, and its controls hides the temporary toolbar again. Change this behavior under **Settings > General > Show hidden toolbar when the pointer reaches the top**, then click **Apply**.
+
 ## Usage
 
 ### Prerequisites
@@ -87,14 +93,16 @@ cmake --build build-uxplay
 ctest --test-dir build-uxplay --output-on-failure
 ```
 
-Default build without UxPlay:
+Build without UxPlay:
 
 ```powershell
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -G Ninja -DAIRPLAY_WITH_UXPLAY=OFF -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+Windows QPA native window tests default to enabled for a new CMake configuration, except when the `CI` environment variable is defined; add `-DAIRPLAY_ENABLE_WINDOWS_QPA_TESTS=OFF` to the configure command to disable them. Offscreen tests do not verify actual desktop focus.
 
 ### Portable Build
 
@@ -150,8 +158,11 @@ The recording pipeline selects an available H.264 encoder at runtime, preferring
 - Synchronized audio playback
 - MP4 recording of mirrored video and available audio through UxPlay raw-sample taps, with a toolbar control and configurable global shortcut
 - Bidirectional volume synchronization between iPhone AirPlay volume callbacks and the toolbar slider
-- Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, recording control, and settings button
-- Settings dialog for receiver name, video quality, recording output, and configurable shortcuts:
+- Overlay toolbar with volume slider, always-on-top toggle, aspect-ratio lock, video-fit toggle, recording control, fullscreen toggle, and settings button
+- Aspect-ratio lock and video fit enabled by default, while retaining saved preferences
+- Fullscreen with a toolbar button, window shortcuts (`F11` / `Esc`), and restoration of the previous window state
+- Configurable hover reveal for a hidden toolbar in windowed and fullscreen modes, enabled by default
+- Settings dialog for language, toolbar hover reveal, receiver name, video quality, recording output, and configurable shortcuts:
   - Receiver name shown in the iPhone Screen Mirroring list
   - Video quality: 540p, 720p, or 1080p; 15, 30, or 60 fps
   - Toggle always on top (`Ctrl+Alt+T`)
