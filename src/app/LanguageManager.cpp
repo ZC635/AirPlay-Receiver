@@ -1,4 +1,5 @@
 #include "app/LanguageManager.h"
+#include "diagnostics/DiagnosticLogSink.h"
 
 #include <QCoreApplication>
 #include <QLocale>
@@ -16,6 +17,14 @@ QString normalizedSelection(const QString &selection) {
     return normalized.isEmpty() ? QStringLiteral("system") : normalized;
 }
 
+QString diagnosticSelection(const QString &selection) {
+    if (selection == QStringLiteral("system") || selection == QStringLiteral("en")
+        || selection == QStringLiteral("zh-CN")) {
+        return selection;
+    }
+    return QStringLiteral("unsupported");
+}
+
 } // namespace
 
 LanguageManager::LanguageManager(QCoreApplication *application,
@@ -24,6 +33,7 @@ LanguageManager::LanguageManager(QCoreApplication *application,
                                  TranslatorLoader translatorLoader)
     : QObject(parent),
       application_(application),
+      diagnosticSink_(&nullDiagnosticLogSink()),
       translatorFactory_(std::move(translatorFactory)),
       translatorLoader_(std::move(translatorLoader)) {
     if (!translatorFactory_) {
@@ -90,6 +100,8 @@ bool LanguageManager::apply(const QString &selection, const QLocale &systemLocal
         return true;
     }
 
+    const QString catalogId = nextEffectiveLanguage == QStringLiteral("zh-CN")
+        ? QStringLiteral("airplay_zh_CN") : QStringLiteral("none");
     bool applied = true;
     std::unique_ptr<QTranslator> nextTranslator;
     if (nextEffectiveLanguage == QStringLiteral("zh-CN")) {
@@ -121,6 +133,18 @@ bool LanguageManager::apply(const QString &selection, const QLocale &systemLocal
         || nextEffectiveLanguage != effectiveLanguage_;
     selection_ = requestedSelection;
     effectiveLanguage_ = nextEffectiveLanguage;
+    if (diagnosticSink_->isActive()) {
+        diagnosticSink_->record(makeDiagnosticEvent(
+            applied ? DiagnosticSeverity::Info : DiagnosticSeverity::Warning,
+            QStringLiteral("language"),
+            applied ? QStringLiteral("language_applied") : QStringLiteral("translation_load_failed"),
+            {{QStringLiteral("language_selection"), diagnosticSelection(selection_)},
+             {QStringLiteral("effective_language"), effectiveLanguage_},
+             {QStringLiteral("catalog_id"), catalogId},
+             {QStringLiteral("phase"), QStringLiteral("runtime")},
+             {QStringLiteral("result"), applied ? QStringLiteral("applied") : QStringLiteral("fallback")}},
+            !applied));
+    }
     if (changed) {
         emit languageChanged(selection_, effectiveLanguage_);
     }
@@ -130,6 +154,10 @@ bool LanguageManager::apply(const QString &selection, const QLocale &systemLocal
 
 QString LanguageManager::selection() const {
     return selection_;
+}
+
+void LanguageManager::setDiagnosticSink(DiagnosticLogSink *sink) {
+    diagnosticSink_ = sink ? sink : &nullDiagnosticLogSink();
 }
 
 QString LanguageManager::effectiveLanguage() const {

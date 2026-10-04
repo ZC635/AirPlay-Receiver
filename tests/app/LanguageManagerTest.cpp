@@ -1,11 +1,14 @@
 #include <QtTest/QtTest>
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 
 #include <memory>
 
 #include "app/LanguageManager.h"
+#include "diagnostics/DiagnosticSession.h"
 
 namespace {
 
@@ -16,6 +19,17 @@ constexpr const char *probeContext() {
 constexpr const char *probeSource() {
     return "probe source";
 }
+
+class CapturingLanguageSink final : public DiagnosticLogSink {
+public:
+    explicit CapturingLanguageSink(bool active = true) : active_(active) {}
+    void record(DiagnosticEvent event) override { events.append(std::move(event)); }
+    bool isActive() const override { return active_; }
+    QList<DiagnosticEvent> events;
+
+private:
+    bool active_;
+};
 
 } // namespace
 
@@ -206,6 +220,121 @@ private slots:
 
         QVERIFY(manager.apply("system", QLocale("en-US")));
         QCOMPARE(languageChanges.count(), 2);
+    }
+
+    void languageApplicationsLogControlledFieldsAndSkipNoops() {
+        CapturingLanguageSink sink;
+        LanguageManager manager(QCoreApplication::instance());
+        manager.setDiagnosticSink(&sink);
+
+        QVERIFY(manager.apply("zh-CN", QLocale("en-US")));
+        QCOMPARE(sink.events.size(), 1);
+        const DiagnosticEvent chinese = sink.events.constFirst();
+        QCOMPARE(chinese.name, QStringLiteral("language_applied"));
+        QCOMPARE(chinese.severity, DiagnosticSeverity::Info);
+        QCOMPARE(chinese.fields.value("language_selection"), QStringLiteral("zh-CN"));
+        QCOMPARE(chinese.fields.value("effective_language"), QStringLiteral("zh-CN"));
+        QCOMPARE(chinese.fields.value("catalog_id"), QStringLiteral("airplay_zh_CN"));
+        QCOMPARE(chinese.fields.value("phase"), QStringLiteral("runtime"));
+        QCOMPARE(chinese.fields.value("result"), QStringLiteral("applied"));
+        QVERIFY(!chinese.fields.contains("resource_path"));
+
+        QVERIFY(manager.apply("zh-CN", QLocale("en-US")));
+        QCOMPARE(sink.events.size(), 1);
+        QVERIFY(manager.apply("en", QLocale("zh-CN")));
+        QCOMPARE(sink.events.size(), 2);
+        QCOMPARE(sink.events.constLast().fields.value("effective_language"), QStringLiteral("en"));
+        QCOMPARE(sink.events.constLast().fields.value("catalog_id"), QStringLiteral("none"));
+        QVERIFY(manager.apply("en", QLocale("zh-CN")));
+        QCOMPARE(sink.events.size(), 2);
+
+        QVERIFY(manager.apply("Private language value", QLocale("en-US")));
+        QCOMPARE(sink.events.size(), 3);
+        QCOMPARE(sink.events.constLast().fields.value("language_selection"),
+                 QStringLiteral("unsupported"));
+        QVERIFY(!sink.events.constLast().fields.values().join(' ').contains("Private"));
+        QVERIFY(manager.apply("system", QLocale("en-US")));
+        QCOMPARE(sink.events.size(), 4);
+        QCOMPARE(sink.events.constLast().fields.value("language_selection"), QStringLiteral("system"));
+        QVERIFY(manager.apply("system", QLocale("en-US")));
+        QCOMPARE(sink.events.size(), 4);
+
+        manager.setDiagnosticSink(nullptr);
+        QVERIFY(manager.apply("en", QLocale("zh-CN")));
+        QCOMPARE(sink.events.size(), 4);
+    }
+
+    void runtimeCatalogFailuresAreFlushedAndRetriedUntilApplied() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        DiagnosticSessionOptions options;
+        options.applicationDirectory = directory.path();
+        auto created = DiagnosticSession::create(std::move(options));
+        QVERIFY2(created.session != nullptr, qPrintable(created.error));
+        bool catalogAvailable = false;
+        LanguageManager manager(
+            QCoreApplication::instance(), nullptr,
+            [] { return std::make_unique<QTranslator>(); },
+            [&catalogAvailable](QTranslator *translator, const QString &resourcePath) {
+                return catalogAvailable && translator->load(resourcePath);
+            });
+        manager.setDiagnosticSink(created.session.get());
+
+        QVERIFY(!manager.apply("zh-CN", QLocale("en-US")));
+        QCOMPARE(manager.effectiveLanguage(), QStringLiteral("en"));
+        QFile flushedLog(created.session->filePath());
+        QVERIFY(flushedLog.open(QIODevice::ReadOnly));
+        const QByteArray firstFailure = flushedLog.readAll();
+        QVERIFY(firstFailure.contains("WARN language translation_load_failed"));
+        QVERIFY(firstFailure.contains("language_selection=zh-CN"));
+        QVERIFY(firstFailure.contains("effective_language=en"));
+        QVERIFY(firstFailure.contains("catalog_id=airplay_zh_CN"));
+        QVERIFY(firstFailure.contains("phase=runtime"));
+        QVERIFY(firstFailure.contains("result=fallback"));
+        QVERIFY(!firstFailure.contains(":/i18n/"));
+        flushedLog.close();
+
+        QVERIFY(!manager.apply("zh-CN", QLocale("en-US")));
+        catalogAvailable = true;
+        QVERIFY(manager.apply("zh-CN", QLocale("en-US")));
+        QCOMPARE(manager.effectiveLanguage(), QStringLiteral("zh-CN"));
+        QVERIFY(manager.apply("zh-CN", QLocale("en-US")));
+        created.session->closeNormally();
+
+        QFile finalLog(created.session->filePath());
+        QVERIFY(finalLog.open(QIODevice::ReadOnly));
+        const QByteArray output = finalLog.readAll();
+        QCOMPARE(output.count("WARN language translation_load_failed"), 1);
+        QVERIFY(output.contains("session duplicate_events_suppressed"));
+        QVERIFY(output.contains("event=translation_load_failed"));
+        QVERIFY(output.contains("count=1"));
+        QCOMPARE(output.count("INFO language language_applied"), 1);
+        QVERIFY(output.contains("effective_language=zh-CN"));
+        QVERIFY(output.contains("result=applied"));
+    }
+
+    void inactiveSinkDoesNotReceiveEventsOrChangeLanguageApply_data() {
+        QTest::addColumn<bool>("catalogAvailable");
+        QTest::addColumn<QString>("expectedEffective");
+        QTest::newRow("successful application") << true << "zh-CN";
+        QTest::newRow("English fallback") << false << "en";
+    }
+
+    void inactiveSinkDoesNotReceiveEventsOrChangeLanguageApply() {
+        QFETCH(bool, catalogAvailable);
+        QFETCH(QString, expectedEffective);
+        CapturingLanguageSink sink(false);
+        LanguageManager manager(QCoreApplication::instance(), nullptr,
+                                [] { return std::make_unique<QTranslator>(); },
+                                [catalogAvailable](QTranslator *translator, const QString &resourcePath) {
+            return catalogAvailable && translator->load(resourcePath);
+        });
+        manager.setDiagnosticSink(&sink);
+
+        QCOMPARE(manager.apply("zh-CN", QLocale("en-US")), catalogAvailable);
+        QCOMPARE(manager.selection(), QStringLiteral("zh-CN"));
+        QCOMPARE(manager.effectiveLanguage(), expectedEffective);
+        QVERIFY(sink.events.isEmpty());
     }
 };
 

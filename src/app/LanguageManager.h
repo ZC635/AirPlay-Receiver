@@ -11,6 +11,7 @@
 #include <QVector>
 
 class QCoreApplication;
+class DiagnosticLogSink;
 
 struct LanguageOption {
     QString id;
@@ -35,6 +36,7 @@ public:
     static QString resolveEffectiveLanguage(const QString &selection, const QLocale &systemLocale);
 
     bool apply(const QString &selection, const QLocale &systemLocale = QLocale::system());
+    void setDiagnosticSink(DiagnosticLogSink *sink);
     QString selection() const;
     QString effectiveLanguage() const;
 
@@ -46,6 +48,7 @@ private:
     void clearTranslator();
 
     QPointer<QCoreApplication> application_;
+    DiagnosticLogSink *diagnosticSink_ = nullptr;
     std::unique_ptr<QTranslator> translator_;
     TranslatorFactory translatorFactory_;
     TranslatorLoader translatorLoader_;
