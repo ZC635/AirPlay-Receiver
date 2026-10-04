@@ -32,6 +32,7 @@ struct SettingsApplyOutcome;
 enum class ReceiverApplyTiming;
 class VideoSurfaceWidget;
 class SettingsDialog;
+class DiagnosticLogSink;
 
 class DiagnosticUiPrompts {
 public:
@@ -51,6 +52,7 @@ struct MainWindowRuntimeServices {
     LanguageManager *languageManager = nullptr;
     bool diagnosticLoggingActive = false;
     std::function<void()> quitApplication;
+    DiagnosticLogSink *diagnosticSink = nullptr;
 };
 
 class MainWindow final : public QMainWindow {
@@ -105,7 +107,9 @@ private:
     void applyShortcutTooltips();
     QVector<HotkeyRegistrationFailure> registerHotkeys();
     QString formatHotkeyRegistrationFailures(const QVector<HotkeyRegistrationFailure> &failures) const;
-    bool saveSettings() const;
+    bool saveSettings(const char *origin = "control") const;
+    void changeFullscreenEnabled(bool enabled, const char *trigger);
+    void recordDisplayPreferenceChange(const char *setting, bool enabled, bool saved) const;
     void restoreWindowState();
     bool saveWindowState() const;
     void closeEvent(QCloseEvent *event) override;
@@ -143,6 +147,7 @@ private:
     QPointer<HotkeyService> hotkeys_;
     QPointer<AirPlayReceiver> receiver_;
     QPointer<LanguageManager> languageManager_;
+    DiagnosticLogSink *diagnosticSink_;
     std::unique_ptr<RecordingPathActions> ownedRecordingPathActions_;
     RecordingPathActions *recordingPathActions_ = nullptr;
     std::unique_ptr<DiagnosticLogFolderActions> ownedDiagnosticLogFolderActions_;

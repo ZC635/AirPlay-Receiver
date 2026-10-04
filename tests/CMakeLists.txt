@@ -54,6 +54,10 @@ add_executable(MainWindowSmokeTest app/MainWindowSmokeTest.cpp)
 target_link_libraries(MainWindowSmokeTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME MainWindowSmokeTest COMMAND MainWindowSmokeTest)
 
+add_executable(UiDiagnosticLoggingTest app/UiDiagnosticLoggingTest.cpp)
+target_link_libraries(UiDiagnosticLoggingTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME UiDiagnosticLoggingTest COMMAND UiDiagnosticLoggingTest)
+
 add_executable(RecordingStartupCleanupTest app/RecordingStartupCleanupTest.cpp)
 target_link_libraries(RecordingStartupCleanupTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME RecordingStartupCleanupTest COMMAND RecordingStartupCleanupTest)
@@ -341,6 +345,7 @@ set(AIRPLAY_QT_TESTS
     SettingsApplyCoordinatorTest
     UiMessageTest
     MainWindowSmokeTest
+    UiDiagnosticLoggingTest
     RecordingStartupCleanupTest
     AppSettingsTest
     AppSettingsStoreTest

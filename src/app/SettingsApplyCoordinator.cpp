@@ -1,4 +1,5 @@
 #include "app/SettingsApplyCoordinator.h"
+#include "app/SettingsDiagnostics.h"
 
 #include "app/SettingsChangeDeferrer.h"
 #include "app/UiMessage.h"
@@ -388,14 +389,15 @@ void compensateUnavailableReceiver(SettingsApplyOutcome *outcome,
                                    const ReceiverConfigurationBatchRequest &batch,
                                    const AppSettings &prospective,
                                    SettingsPersistence *persistence,
-                                   const ReceiverConfigurationBatchResult &unavailable) {
+                                   const ReceiverConfigurationBatchResult &unavailable,
+                                   DiagnosticLogSink *diagnosticSink) {
     if (outcome == nullptr) {
         return;
     }
     AppSettings compensated = prospective;
     restoreBatchFields(batch, &compensated);
-    const AppSettingsSaveResult compensation = persistence == nullptr
-        ? AppSettingsSaveResult{true} : persistence->save(compensated);
+    const AppSettingsSaveResult compensation = SettingsDiagnostics::save(
+        persistence, compensated, diagnosticSink, "compensation");
     if (compensation.success) {
         outcome->committedSettings = compensated;
         markUnavailableReceiverCompensated(outcome, batch, unavailable);
@@ -421,11 +423,13 @@ SettingsApplyOutcome makeDeferredCompletionOutcome(const AppSettings &currentlyC
 SettingsApplyCoordinator::SettingsApplyCoordinator(HotkeyService *hotkeys,
                                                    SettingsPersistence *persistence,
                                                    AirPlayReceiver *receiver,
-                                                   SettingsChangeDeferrer *deferrer)
+                                                   SettingsChangeDeferrer *deferrer,
+                                                   DiagnosticLogSink *diagnosticSink)
     : hotkeys_(hotkeys),
       persistence_(persistence),
       receiver_(receiver),
-      deferrer_(deferrer) {
+      deferrer_(deferrer),
+      diagnosticSink_(diagnosticSink) {
 }
 
 SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
@@ -515,6 +519,13 @@ SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
 
 SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &plan,
                                                        ReceiverApplyTiming timing) {
+    auto outcome = executePlan(plan, timing);
+    SettingsDiagnostics::recordApplyOutcome(diagnosticSink_, outcome, "apply", timing);
+    return outcome;
+}
+
+SettingsApplyOutcome SettingsApplyCoordinator::executePlan(const SettingsApplyPlan &plan,
+                                                           ReceiverApplyTiming timing) {
     SettingsApplyOutcome outcome;
     outcome.committedSettings = plan.baseline;
     outcome.fieldResults = plan.validationResults;
@@ -592,9 +603,8 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
                                       : SettingsFieldStatus::Unchanged;
     }
 
-    const AppSettingsSaveResult persistenceResult = persistence_ == nullptr
-        ? AppSettingsSaveResult{true}
-        : persistence_->save(prospective);
+    const AppSettingsSaveResult persistenceResult = SettingsDiagnostics::save(
+        persistence_, prospective, diagnosticSink_, "apply");
     if (persistenceResult.success) {
         outcome.committedSettings = prospective;
         const ReceiverConfigurationBatchRequest batch = receiverBatchForPlan(plan);
@@ -615,7 +625,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
                                                                             : receiver_->receiverName();
                 unavailable.knownRuntimeVideoQuality = receiver_ == nullptr
                     ? batch.rollbackVideoQuality : receiver_->videoQuality();
-                compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable);
+                compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable, diagnosticSink_);
             }
             updateMayClose(&outcome);
             return outcome;
@@ -636,7 +646,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
                                                                             : receiver_->receiverName();
                 unavailable.knownRuntimeVideoQuality = receiver_ == nullptr
                     ? batch.rollbackVideoQuality : receiver_->videoQuality();
-                compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable);
+                compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable, diagnosticSink_);
             }
             updateMayClose(&outcome);
             return outcome;
@@ -648,7 +658,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
             unavailable.recoveryError = QStringLiteral("No runtime receiver state is available");
             unavailable.knownRuntimeReceiverName = QStringLiteral("unavailable");
             unavailable.knownRuntimeVideoQuality = batch.rollbackVideoQuality;
-            compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable);
+            compensateUnavailableReceiver(&outcome, batch, prospective, persistence_, unavailable, diagnosticSink_);
             updateMayClose(&outcome);
             return outcome;
         }
@@ -666,8 +676,8 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
 
         AppSettings compensated = prospective;
         restoreBatchFields(batch, &compensated);
-        const AppSettingsSaveResult compensation = persistence_ == nullptr
-            ? AppSettingsSaveResult{true} : persistence_->save(compensated);
+        const AppSettingsSaveResult compensation = SettingsDiagnostics::save(
+            persistence_, compensated, diagnosticSink_, "compensation");
         if (compensation.success) {
             outcome.committedSettings = compensated;
             markReceiverRollback(&outcome, batch, result);
@@ -745,6 +755,14 @@ SettingsApplyOutcome SettingsApplyCoordinator::execute(const SettingsApplyPlan &
 SettingsApplyOutcome SettingsApplyCoordinator::completeDeferredReceiverApply(
     const ReceiverConfigurationBatchRequest &batch,
     const AppSettings &currentlyCommitted) {
+    auto outcome = completeDeferredReceiverApplyImpl(batch, currentlyCommitted);
+    SettingsDiagnostics::recordApplyOutcome(diagnosticSink_, outcome, "deferred_completion", std::nullopt);
+    return outcome;
+}
+
+SettingsApplyOutcome SettingsApplyCoordinator::completeDeferredReceiverApplyImpl(
+    const ReceiverConfigurationBatchRequest &batch,
+    const AppSettings &currentlyCommitted) {
     SettingsApplyOutcome outcome = makeDeferredCompletionOutcome(currentlyCommitted);
     if (!hasReceiverChanges(batch)) {
         updateMayClose(&outcome);
@@ -757,7 +775,7 @@ SettingsApplyOutcome SettingsApplyCoordinator::completeDeferredReceiverApply(
         unavailable.recoveryError = QStringLiteral("No runtime receiver state is available");
         unavailable.knownRuntimeReceiverName = QStringLiteral("unavailable");
         unavailable.knownRuntimeVideoQuality = batch.rollbackVideoQuality;
-        compensateUnavailableReceiver(&outcome, batch, currentlyCommitted, persistence_, unavailable);
+        compensateUnavailableReceiver(&outcome, batch, currentlyCommitted, persistence_, unavailable, diagnosticSink_);
         updateMayClose(&outcome);
         return outcome;
     }
@@ -781,8 +799,8 @@ SettingsApplyOutcome SettingsApplyCoordinator::completeDeferredReceiverApply(
 
     AppSettings compensated = currentlyCommitted;
     restoreBatchFields(batch, &compensated);
-    const AppSettingsSaveResult compensation = persistence_ == nullptr
-        ? AppSettingsSaveResult{true} : persistence_->save(compensated);
+    const AppSettingsSaveResult compensation = SettingsDiagnostics::save(
+        persistence_, compensated, diagnosticSink_, "compensation");
     if (compensation.success) {
         outcome.committedSettings = compensated;
         markReceiverRollback(&outcome, batch, result);

@@ -1,4 +1,6 @@
 #include "app/MainWindow.h"
+#include "diagnostics/DiagnosticLogSink.h"
+#include "app/SettingsDiagnostics.h"
 
 #include "app/AppSettingsStore.h"
 #include "app/DiagnosticRestartCoordinator.h"
@@ -148,14 +150,16 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
       hotkeys_(hotkeys),
       receiver_(receiver),
       languageManager_(runtimeServices.languageManager),
+      diagnosticSink_(runtimeServices.diagnosticSink ? runtimeServices.diagnosticSink : &nullDiagnosticLogSink()),
       settingsPath_(std::move(settingsPath)) {
     if (!settingsPath_.isEmpty()) {
         settingsStore_ = std::make_unique<AppSettingsStore>(settingsPath_);
     }
     settingsApplyCoordinator_ = std::make_unique<SettingsApplyCoordinator>(
-        hotkeys_.data(), settingsStore_.get(), receiver_.data(), &deferrer_);
+        hotkeys_.data(), settingsStore_.get(), receiver_.data(), &deferrer_, diagnosticSink_);
     if (recordingPathActions == nullptr) {
-        ownedRecordingPathActions_ = std::make_unique<WindowsRecordingPathActions>();
+        ownedRecordingPathActions_ = std::make_unique<WindowsRecordingPathActions>(
+            WindowsRecordingPathActions::ProcessLauncher{}, diagnosticSink_);
         recordingPathActions_ = ownedRecordingPathActions_.get();
     } else {
         recordingPathActions_ = recordingPathActions;
@@ -166,7 +170,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     }
     if (runtimeServices.diagnosticLogFolderActions == nullptr) {
         ownedDiagnosticLogFolderActions_ = std::make_unique<DiagnosticLogFolderActions>(
-            QCoreApplication::applicationDirPath());
+            QCoreApplication::applicationDirPath(), DiagnosticLogFolderOperations{}, diagnosticSink_);
         diagnosticLogFolderActions_ = ownedDiagnosticLogFolderActions_.get();
     } else {
         diagnosticLogFolderActions_ = runtimeServices.diagnosticLogFolderActions;
@@ -212,6 +216,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
 
     setCentralWidget(central);
     toolbarVisibility_ = new ToolbarVisibilityController(central, toolbar_, this);
+    toolbarVisibility_->setDiagnosticSink(diagnosticSink_);
     toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
     connect(toolbarVisibility_, &ToolbarVisibilityController::visibilityChanged, this, [this](bool visible) {
         toolbar_->setVisible(visible);
@@ -224,7 +229,9 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
 
     connect(toolbar_, &ToolbarWidget::volumeChanged, this, &MainWindow::setReceiverVolume);
     connect(toolbar_, &ToolbarWidget::alwaysOnTopToggled, this, &MainWindow::setAlwaysOnTopEnabled);
-    connect(toolbar_, &ToolbarWidget::fullscreenToggled, this, &MainWindow::setFullscreenEnabled);
+    connect(toolbar_, &ToolbarWidget::fullscreenToggled, this, [this](bool enabled) {
+        changeFullscreenEnabled(enabled, "toolbar");
+    });
     connect(toolbar_, &ToolbarWidget::settingsRequested, this, &MainWindow::showSettingsDialog);
     connect(toolbar_, &ToolbarWidget::aspectRatioToggled, this, &MainWindow::applyAspectRatioLock);
     connect(toolbar_, &ToolbarWidget::videoFitToggled, this, &MainWindow::applyVideoFitMode);
@@ -235,7 +242,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     fullscreenShortcut->setAutoRepeat(false);
     connect(fullscreenShortcut, &QShortcut::activated, this, [this] {
         if (QApplication::activeModalWidget() == nullptr && QApplication::activePopupWidget() == nullptr) {
-            setFullscreenEnabled(!isFullScreen());
+            changeFullscreenEnabled(!isFullScreen(), "f11");
         }
     });
     auto *exitFullscreenShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
@@ -244,7 +251,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     connect(exitFullscreenShortcut, &QShortcut::activated, this, [this] {
         if (isFullScreen() && QApplication::activeModalWidget() == nullptr
             && QApplication::activePopupWidget() == nullptr) {
-            setFullscreenEnabled(false);
+            changeFullscreenEnabled(false, "escape");
         }
     });
 
@@ -465,12 +472,17 @@ void MainWindow::setAlwaysOnTopEnabled(bool enabled) {
 }
 
 void MainWindow::setFullscreenEnabled(bool enabled) {
+    changeFullscreenEnabled(enabled, "api");
+}
+
+void MainWindow::changeFullscreenEnabled(bool enabled, const char *trigger) {
     if (enabled == isFullScreen()) {
         const QSignalBlocker blocker(toolbar_);
         toolbar_->setFullscreenChecked(enabled);
         return;
     }
 
+    const bool wasFullscreen = isFullScreen();
     toolbarVisibility_->preserveVisibilityUntilPointerMoves(QCursor::pos());
     if (enabled) {
         preFullscreenState_ = WindowStateSnapshot{saveGeometry(), saveState()};
@@ -480,8 +492,10 @@ void MainWindow::setFullscreenEnabled(bool enabled) {
     } else {
         showNormal();
         if (preFullscreenState_.has_value()) {
-            restoreGeometry(preFullscreenState_->geometry);
-            restoreState(preFullscreenState_->state);
+            const bool geometryRestored = restoreGeometry(preFullscreenState_->geometry);
+            const bool layoutRestored = restoreState(preFullscreenState_->state);
+            const char *strategy = "maximized";
+            const int screenCount = QGuiApplication::screens().size();
             if (preFullscreenMaximized_) {
                 showMaximized();
             } else {
@@ -490,13 +504,32 @@ void MainWindow::setFullscreenEnabled(bool enabled) {
                     availableScreens.append(screen->availableGeometry());
                 }
                 setGeometry(fullscreenRestoreGeometry(
-                    preFullscreenNormalGeometry_, geometry(), availableScreens));
+                    preFullscreenNormalGeometry_, geometry(), availableScreens, &strategy));
+            }
+            if (diagnosticSink_->isActive()) {
+                const bool restored = geometryRestored && layoutRestored;
+                diagnosticSink_->record(makeDiagnosticEvent(restored ? DiagnosticSeverity::Info : DiagnosticSeverity::Warning, QStringLiteral("ui"),
+                    QStringLiteral("fullscreen_geometry_restored"),
+                    {{QStringLiteral("geometry_result"), geometryRestored ? QStringLiteral("ok") : QStringLiteral("failed")},
+                     {QStringLiteral("layout_result"), layoutRestored ? QStringLiteral("ok") : QStringLiteral("failed")},
+                     {QStringLiteral("strategy"), QString::fromLatin1(strategy)},
+                     {QStringLiteral("screen_count"), QString::number(screenCount)}}, !restored));
             }
             preFullscreenState_.reset();
         }
     }
     const QSignalBlocker blocker(toolbar_);
     toolbar_->setFullscreenChecked(isFullScreen());
+    if (diagnosticSink_->isActive()) {
+        diagnosticSink_->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("ui"),
+            QStringLiteral("fullscreen_changed"),
+            {{QStringLiteral("from"), wasFullscreen ? QStringLiteral("fullscreen") : QStringLiteral("windowed")},
+             {QStringLiteral("desired"), enabled ? QStringLiteral("fullscreen") : QStringLiteral("windowed")},
+             {QStringLiteral("to"), isFullScreen() ? QStringLiteral("fullscreen") : QStringLiteral("windowed")},
+             {QStringLiteral("trigger"), QString::fromLatin1(trigger)},
+             {QStringLiteral("pre_maximized"), preFullscreenMaximized_ ? QStringLiteral("yes") : QStringLiteral("no")},
+             {QStringLiteral("toolbar_visible"), isToolbarVisible() ? QStringLiteral("yes") : QStringLiteral("no")}}));
+    }
 }
 
 void MainWindow::setVolume(int value) {
@@ -580,11 +613,8 @@ QString MainWindow::formatHotkeyRegistrationFailures(const QVector<HotkeyRegistr
     return tr("Could not register shortcuts: %1").arg(details.join(QStringLiteral("; ")));
 }
 
-bool MainWindow::saveSettings() const {
-    if (settingsStore_ == nullptr) {
-        return true;
-    }
-    return settingsStore_->save(settings_).success;
+bool MainWindow::saveSettings(const char *origin) const {
+    return SettingsDiagnostics::save(settingsStore_.get(), settings_, diagnosticSink_, origin).success;
 }
 
 void MainWindow::restoreWindowState() {
@@ -641,7 +671,7 @@ void MainWindow::syncVolumeFromReceiver(double volume) {
         const QSignalBlocker blocker(toolbar_);
         toolbar_->setVolume(clamped);
     }
-    if (changed && !saveSettings()) {
+    if (changed && !saveSettings("receiver")) {
         setStatus(StatusKind::SettingsSaveFailed);
     }
 }
@@ -652,7 +682,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
     receiverConnected_ = state == ReceiverState::Connected;
     receiverSessionActive_ = state == ReceiverState::Connecting || state == ReceiverState::Connected;
     if (wasSessionActive && !receiverSessionActive_ && isFullScreen()) {
-        setFullscreenEnabled(false);
+        changeFullscreenEnabled(false, "session_inactive");
     }
     toolbarVisibility_->receiverStateChanged(state);
     statusLabel_->setVisible(!receiverConnected_);
@@ -693,6 +723,7 @@ void MainWindow::showSettingsDialog() {
     }
     connect(&dialog, &SettingsDialog::applyRequested, this, [this, &dialog](const AppSettings &draft) {
         const QString previousLanguage = settings_.language();
+        const bool previousHoverReveal = settings_.toolbarHoverReveal();
         const RecordingState recordingState = receiver_ == nullptr
             ? RecordingState::Idle : receiver_->recordingState();
         const SettingsApplyPlan plan = settingsApplyCoordinator_->plan(
@@ -703,6 +734,10 @@ void MainWindow::showSettingsDialog() {
         }
         const SettingsApplyOutcome outcome = settingsApplyCoordinator_->execute(plan, *timing);
         settings_ = outcome.committedSettings;
+        if (settings_.toolbarHoverReveal() != previousHoverReveal) {
+            // A committed hover change confirms the initial save; receiver compensation is separate.
+            recordDisplayPreferenceChange("hover_reveal", settings_.toolbarHoverReveal(), true);
+        }
         toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
         if (!outcome.globalResult.has_value() && settings_.language() != previousLanguage
             && languageManager_ != nullptr) {
@@ -827,8 +862,10 @@ void MainWindow::applyAspectRatioLock(bool enabled) {
     aspectRatioLock_ = enabled;
     settings_.setAspectRatioLock(enabled);
     toolbar_->setAspectRatioChecked(enabled);
-    if (changed && !saveSettings()) {
-        setStatus(StatusKind::SettingsSaveFailed);
+    if (changed) {
+        const bool saved = saveSettings();
+        if (!saved) setStatus(StatusKind::SettingsSaveFailed);
+        recordDisplayPreferenceChange("aspect_lock", enabled, saved);
     }
     if (enabled && videoWidth_ > 0 && videoHeight_ > 0) {
         enforceAspectRatio();
@@ -853,9 +890,23 @@ void MainWindow::applyVideoFitMode(bool enabled) {
         receiver_->setVideoFitMode(enabled);
         videoSurface_->setVideoFitMode(enabled);
     }
-    if (changed && !saveSettings()) {
-        setStatus(StatusKind::SettingsSaveFailed);
+    if (changed) {
+        const bool saved = saveSettings();
+        if (!saved) setStatus(StatusKind::SettingsSaveFailed);
+        recordDisplayPreferenceChange("video_fit", enabled, saved);
     }
+}
+
+void MainWindow::recordDisplayPreferenceChange(const char *setting, bool enabled, bool saved) const {
+    if (!diagnosticSink_->isActive()) return;
+    diagnosticSink_->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("ui"),
+        QStringLiteral("display_preference_changed"),
+        {{QStringLiteral("setting"), QString::fromLatin1(setting)},
+         {QStringLiteral("from"), enabled ? QStringLiteral("no") : QStringLiteral("yes")},
+         {QStringLiteral("to"), enabled ? QStringLiteral("yes") : QStringLiteral("no")},
+         {QStringLiteral("persist_result"), settingsStore_ == nullptr ? QStringLiteral("not_configured")
+             : saved ? QStringLiteral("saved") : QStringLiteral("failed")},
+         {QStringLiteral("fullscreen"), isFullScreen() ? QStringLiteral("yes") : QStringLiteral("no")}}));
 }
 
 void MainWindow::toggleRecording() {

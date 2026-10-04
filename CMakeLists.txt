@@ -59,6 +59,8 @@ add_library(airplay_app_lib
     src/app/AppSettings.h
     src/app/AppSettingsStore.cpp
     src/app/AppSettingsStore.h
+    src/app/SettingsDiagnostics.cpp
+    src/app/SettingsDiagnostics.h
     src/app/UiMessage.cpp
     src/app/UiMessage.h
     src/app/SettingsApplyTypes.cpp

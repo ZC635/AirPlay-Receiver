@@ -10,13 +10,15 @@ class AirPlayReceiver;
 class HotkeyService;
 class SettingsChangeDeferrer;
 class SettingsPersistence;
+class DiagnosticLogSink;
 
 class SettingsApplyCoordinator {
 public:
     SettingsApplyCoordinator(HotkeyService *hotkeys,
                              SettingsPersistence *persistence,
                              AirPlayReceiver *receiver,
-                             SettingsChangeDeferrer *deferrer);
+                             SettingsChangeDeferrer *deferrer,
+                             DiagnosticLogSink *diagnosticSink = nullptr);
 
     SettingsApplyPlan plan(const AppSettings &baseline,
                            const AppSettings &candidate,
@@ -31,8 +33,12 @@ public:
         const AppSettings &currentlyCommitted);
 
 private:
+    SettingsApplyOutcome executePlan(const SettingsApplyPlan &plan, ReceiverApplyTiming timing);
+    SettingsApplyOutcome completeDeferredReceiverApplyImpl(
+        const ReceiverConfigurationBatchRequest &batch, const AppSettings &currentlyCommitted);
     QPointer<HotkeyService> hotkeys_;
     SettingsPersistence *persistence_ = nullptr;
     QPointer<AirPlayReceiver> receiver_;
     SettingsChangeDeferrer *deferrer_ = nullptr;
+    DiagnosticLogSink *diagnosticSink_ = nullptr;
 };
