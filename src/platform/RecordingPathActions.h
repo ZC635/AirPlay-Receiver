@@ -8,6 +8,7 @@
 #include <functional>
 
 class QWidget;
+class DiagnosticLogSink;
 
 class RecordingPathActions {
 public:
@@ -23,7 +24,8 @@ class WindowsRecordingPathActions final : public RecordingPathActions {
 public:
     using ProcessLauncher = std::function<bool(const QString &, const QStringList &)>;
 
-    explicit WindowsRecordingPathActions(ProcessLauncher processLauncher = {});
+    explicit WindowsRecordingPathActions(ProcessLauncher processLauncher = {},
+                                         DiagnosticLogSink *sink = nullptr);
 
     QString chooseExistingDirectory(QWidget *parent,
                                     const QString &initialDirectory) override;
@@ -32,4 +34,5 @@ public:
 
 private:
     ProcessLauncher processLauncher_;
+    DiagnosticLogSink *sink_;
 };

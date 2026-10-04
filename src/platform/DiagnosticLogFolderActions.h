@@ -7,6 +7,8 @@
 
 #include <functional>
 
+class DiagnosticLogSink;
+
 struct DiagnosticLogFolderOperations {
     std::function<UiMessage(const QString &)> createDirectory;
     std::function<UiMessage(const QUrl &)> openUrl;
@@ -15,11 +17,13 @@ struct DiagnosticLogFolderOperations {
 class DiagnosticLogFolderActions final {
 public:
     explicit DiagnosticLogFolderActions(QString applicationDirectory,
-                                        DiagnosticLogFolderOperations operations = {});
+                                        DiagnosticLogFolderOperations operations = {},
+                                        DiagnosticLogSink *sink = nullptr);
 
     UiMessage ensureAndOpen();
 
 private:
     QString applicationDirectory_;
     DiagnosticLogFolderOperations operations_;
+    DiagnosticLogSink *sink_;
 };
