@@ -34,6 +34,12 @@ constexpr bool kAudioSync = false;
 constexpr bool kVideoSync = false;
 constexpr unsigned int kPlaybinVersion = 3;
 
+const char *videoApplicationName() {
+    // GLib identity is process-wide; discovery names may change independently.
+    const char *name = g_get_application_name();
+    return name ? name : "AirPlay Receiver";
+}
+
 std::optional<qsizetype> boundedCStringLength(const char *value, qsizetype maximumLength) {
     for (qsizetype index = 0; index < maximumLength; ++index) {
         if (value[index] == '\0') {
@@ -452,14 +458,13 @@ void UxPlayReceiver::start() {
     logger_set_callback(logger, logCallback, m_callbackContext);
     logger_set_level(logger, LOGGER_INFO);
 
-    const QByteArray serverName = m_config.serverName.toUtf8();
     const QByteArray videoSink = m_config.videoSink.toUtf8();
     const QByteArray audioSink = m_config.audioSink.toUtf8();
     const bool h265Support = videoQualityH265Support();
     videoflip_t videoFlip[2] = {NONE, NONE};
     installVideoSampleTap();
     observeRendererCall(QStringLiteral("video_renderer_init"));
-    if (video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
+    if (video_renderer_init(logger, videoApplicationName(), videoFlip, "h264parse", "",
                              "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync, h265Support, false,
                              kPlaybinVersion, nullptr) != 0) {
         m_acceptingCallbacks.store(false);
@@ -1090,13 +1095,12 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
             m_videoRendererInitialized = false;
 
             auto *logger = static_cast<logger_t *>(m_logger);
-            const QByteArray serverName = m_config.serverName.toUtf8();
             const QByteArray videoSink = m_config.videoSink.toUtf8();
             const bool h265Support = videoQualityH265Support();
             videoflip_t videoFlip[2] = {NONE, NONE};
             installVideoSampleTap();
             observeRendererCall(QStringLiteral("video_renderer_init"));
-            if (video_renderer_init(logger, serverName.constData(), videoFlip, "h264parse", "",
+            if (video_renderer_init(logger, videoApplicationName(), videoFlip, "h264parse", "",
                                     "decodebin", "videoconvert", videoSink.constData(), "", false, kVideoSync,
                                     h265Support, false, kPlaybinVersion, nullptr) != 0) {
                 clearVideoSampleTap();
