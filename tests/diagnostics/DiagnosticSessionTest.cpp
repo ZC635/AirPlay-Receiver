@@ -146,6 +146,9 @@ private slots:
     void reportsStorageAndHeaderFailuresWithoutFallback();
     void retentionFailureDeletesTheCurrentSession();
     void writeFailureEmitsOnceAndDisablesTheSession();
+    void writeFailureSurvivesDeviceClose();
+    void finalWriteAndFlushFailuresAreReadable();
+    void workerFailureReadableBeforeQueuedDelivery();
     void duplicateNoticeFailureEmitsOnceAfterUnlock();
     void compactNoticeFailureEmitsOnceAfterUnlock();
     void closeDuplicateNoticeFailureEmitsOnceAfterUnlock();
@@ -480,6 +483,114 @@ void DiagnosticSessionTest::shortWriteEmitsOnceAndDisablesTheSession() {
     QVERIFY(!storage->file->bytes.contains("receiver short"));
     created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"), QStringLiteral("later")));
     QCOMPARE(storage->file->writes, 2);
+}
+
+void DiagnosticSessionTest::writeFailureSurvivesDeviceClose() {
+    QTemporaryDir dir;
+    auto healthy = DiagnosticSession::create(testOptions(dir.path()));
+    QVERIFY2(healthy.session, qPrintable(healthy.error));
+    QVERIFY(healthy.session->writeFailure().isEmpty());
+    healthy.session->closeNormally();
+    QVERIFY(healthy.session->writeFailure().isEmpty());
+    healthy.session->closeNormally();
+    QVERIFY(healthy.session->writeFailure().isEmpty());
+
+    for (int failureMode = 0; failureMode != 3; ++failureMode) {
+        auto storage = std::make_shared<FakeSessionStorage>();
+        storage->file->clearErrorOnClose = true;
+        auto options = testOptions(dir.path());
+        options.storage = storage;
+        auto created = DiagnosticSession::create(options);
+        QVERIFY2(created.session, qPrintable(created.error));
+        QSignalSpy failures(created.session.get(), &DiagnosticSession::writeFailed);
+        QString readableInSignal;
+        connect(created.session.get(), &DiagnosticSession::writeFailed, created.session.get(),
+                [&](const QString &) { readableInSignal = created.session->writeFailure(); });
+        const QString expected = failureMode == 2 ? QStringLiteral("flush failure") :
+                                                    QStringLiteral("write failure");
+        if (failureMode == 0)
+            storage->file->failWriteAt = 2;
+        else if (failureMode == 1)
+            storage->file->shortWriteAt = 2;
+        else
+            storage->file->flushSucceeds = false;
+
+        created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Warning,
+            QStringLiteral("receiver"), QStringLiteral("failure")));
+        QCOMPARE(created.session->writeFailure(), expected);
+        QVERIFY(!created.session->isActive());
+        QCOMPARE(readableInSignal, expected);
+        QCOMPARE(failures.count(), 1);
+        QCOMPARE(failures.first().first().toString(), expected);
+        storage->file->writeError = QStringLiteral("later failure");
+        created.session->record(makeDiagnosticEvent(DiagnosticSeverity::Warning,
+            QStringLiteral("receiver"), QStringLiteral("later")));
+        created.session->closeNormally();
+        created.session->closeNormally();
+        QCOMPARE(created.session->writeFailure(), expected);
+        QCOMPARE(failures.count(), 1);
+    }
+}
+
+void DiagnosticSessionTest::finalWriteAndFlushFailuresAreReadable() {
+    QTemporaryDir dir;
+    for (int failureMode = 0; failureMode != 3; ++failureMode) {
+        auto storage = std::make_shared<FakeSessionStorage>();
+        storage->file->clearErrorOnClose = true;
+        auto options = testOptions(dir.path());
+        options.storage = storage;
+        auto created = DiagnosticSession::create(options);
+        QVERIFY2(created.session, qPrintable(created.error));
+        QSignalSpy failures(created.session.get(), &DiagnosticSession::writeFailed);
+        const QString expected = failureMode == 2 ? QStringLiteral("flush failure") :
+                                                    QStringLiteral("write failure");
+        if (failureMode == 0)
+            storage->file->failWriteAt = 2;
+        else if (failureMode == 1)
+            storage->file->shortWriteAt = 2;
+        else
+            storage->file->flushSucceeds = false;
+
+        created.session->closeNormally();
+        QCOMPARE(created.session->writeFailure(), expected);
+        QVERIFY(!created.session->isActive());
+        QCOMPARE(failures.count(), 1);
+        QCOMPARE(failures.first().first().toString(), expected);
+        created.session->closeNormally();
+        QCOMPARE(created.session->writeFailure(), expected);
+        QCOMPARE(failures.count(), 1);
+    }
+}
+
+void DiagnosticSessionTest::workerFailureReadableBeforeQueuedDelivery() {
+    QTemporaryDir dir;
+    auto storage = std::make_shared<FakeSessionStorage>();
+    storage->file->clearErrorOnClose = true;
+    auto options = testOptions(dir.path());
+    options.storage = storage;
+    auto created = DiagnosticSession::create(options);
+    QVERIFY2(created.session, qPrintable(created.error));
+    QObject receiver;
+    QString deliveredError;
+    int deliveries = 0;
+    connect(created.session.get(), &DiagnosticSession::writeFailed, &receiver,
+            [&](const QString &error) { deliveredError = error; ++deliveries; }, Qt::QueuedConnection);
+    storage->file->failWriteAt = 2;
+    std::thread worker([session = created.session.get()] {
+        session->record(makeDiagnosticEvent(DiagnosticSeverity::Warning,
+            QStringLiteral("worker"), QStringLiteral("failure")));
+    });
+    worker.join();
+
+    QCOMPARE(deliveries, 0);
+    QCOMPARE(created.session->writeFailure(), QStringLiteral("write failure"));
+    QVERIFY(!created.session->isActive());
+    created.session->closeNormally();
+    QCOMPARE(created.session->writeFailure(), QStringLiteral("write failure"));
+    QCOMPARE(deliveries, 0);
+    QCoreApplication::sendPostedEvents(&receiver, QEvent::MetaCall);
+    QCOMPARE(deliveries, 1);
+    QCOMPARE(deliveredError, QStringLiteral("write failure"));
 }
 
 void DiagnosticSessionTest::retentionIncludesCurrentWhenStorageOmitsIt() {
