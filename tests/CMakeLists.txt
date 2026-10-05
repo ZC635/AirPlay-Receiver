@@ -358,6 +358,12 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     set(AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY
         "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/gstreamer-startup-acceptance"
         CACHE PATH "Ignored report directory for real GStreamer startup acceptance")
+    add_test(NAME GStreamerStartupProcessContainmentTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/StartupProcessContainmentTest.ps1"
+            -Mode Regression
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/process-containment")
+    set_tests_properties(GStreamerStartupProcessContainmentTest PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
     get_filename_component(_gst_prefix "${AIRPLAY_GSTREAMER_BIN_DIR}" DIRECTORY)
     foreach(_mode Acceptance DetectionBypass DuplicateDialog HealthyAsNegative WrongReason)
         if(_mode STREQUAL "Acceptance")

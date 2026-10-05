@@ -16,50 +16,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'PeDependencyIsolation.ps1')
 
-# A private Windows job owns only our probe and descendants. Closing it on any
-# exit/timeout also stops a stuck plugin scanner without enumerating host PIDs.
-Add-Type @"
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-public static class AirPlayStartupTestJob {
-    [StructLayout(LayoutKind.Sequential)] struct Basic {
-        public long ProcessTime, JobTime;
-        public uint Flags;
-        public UIntPtr MinimumWorkingSet, MaximumWorkingSet;
-        public uint ActiveProcesses;
-        public UIntPtr Affinity;
-        public uint Priority, Scheduling;
-    }
-    [StructLayout(LayoutKind.Sequential)] struct IoCounters {
-        public ulong ReadOperations, WriteOperations, OtherOperations;
-        public ulong ReadBytes, WriteBytes, OtherBytes;
-    }
-    [StructLayout(LayoutKind.Sequential)] struct Extended {
-        public Basic BasicLimits;
-        public IoCounters Io;
-        public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
-    }
-    [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr attributes, string name);
-    [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int type, ref Extended info, uint size);
-    [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
-    public static IntPtr Create() {
-        IntPtr job = CreateJobObject(IntPtr.Zero, null);
-        if (job == IntPtr.Zero) throw new Win32Exception();
-        Extended info = new Extended();
-        info.BasicLimits.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if (!SetInformationJobObject(job, 9, ref info, (uint)Marshal.SizeOf(info))) {
-            int error = Marshal.GetLastWin32Error(); CloseHandle(job);
-            throw new Win32Exception(error);
-        }
-        return job;
-    }
-    public static void Assign(IntPtr job, IntPtr process) {
-        if (!AssignProcessToJobObject(job, process)) throw new Win32Exception();
-    }
-}
-"@
+. (Join-Path $PSScriptRoot 'StartupProcessContainment.ps1')
 
 # These are literal contract values, deliberately independent of production's
 # list and decisions. The positive control needs playback/core plugins only.
@@ -102,29 +59,23 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         $start.EnvironmentVariables["GST_REGISTRY$suffix"] = Join-Path $Fixture 'gstreamer-1.0/registry.x86_64.bin'
         $start.EnvironmentVariables["GST_PLUGIN_SCANNER$suffix"] = Join-Path $Fixture 'libexec/gstreamer-1.0/gst-plugin-scanner.exe'
     }
-    $process = [Diagnostics.Process]::new()
+    $name = Split-Path -Leaf $Fixture
+    $stdoutFile = Join-Path $ReportDirectory "$name-stdout.txt"
+    $stderrFile = Join-Path $ReportDirectory "$name-stderr.txt"
+    $process = $null
+    $native = $null
     $job = [AirPlayStartupTestJob]::Create()
     try {
-        $process.StartInfo = $start
-        if (-not $process.Start()) { throw 'Could not start isolated startup probe' }
-        try { [AirPlayStartupTestJob]::Assign($job, $process.Handle) }
-        catch {
-            if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
-            throw
-        }
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(45000)) {
-            $process.Kill()
-            $process.WaitForExit()
-            throw 'Startup probe timed out after 45 seconds'
-        }
-        # Close the job before waiting for pipe EOF: a scanner descendant must
-        # not keep inherited output handles alive after the probe exits.
+        $native = [AirPlayStartupTestJob]::StartSuspended($start, $stdoutFile, $stderrFile)
+        $process = $native
+        $native.EnrollAndResume($job)
+        if (-not $process.WaitForExit(45000)) { throw 'Startup probe timed out after 45 seconds' }
+        # All descendants were created after enrollment. Closing the job stops
+        # them before reading file output, with no unbounded pipe-EOF wait.
         [void][AirPlayStartupTestJob]::CloseHandle($job)
         $job = [IntPtr]::Zero
-        $out = $stdout.GetAwaiter().GetResult()
-        $err = $stderr.GetAwaiter().GetResult()
+        $out = [IO.File]::ReadAllText($stdoutFile)
+        $err = [IO.File]::ReadAllText($stderrFile)
         $name = Split-Path -Leaf $Fixture
         $out | Set-Content (Join-Path $ReportDirectory "$name-stdout.txt")
         $err | Set-Content (Join-Path $ReportDirectory "$name-stderr.txt")
@@ -137,7 +88,7 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         return [pscustomobject]@{ ExitCode=$process.ExitCode; Result=($json[0] | ConvertFrom-Json); Diagnostics=$diagnostics }
     } finally {
         if ($job -ne [IntPtr]::Zero) { [void][AirPlayStartupTestJob]::CloseHandle($job) }
-        $process.Dispose()
+        if ($native) { $native.Dispose() }
     }
 }
 
