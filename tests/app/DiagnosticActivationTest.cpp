@@ -30,6 +30,12 @@ public:
         if (source == QStringLiteral("Diagnostic logging stopped: %1")) {
             return QString::fromUtf8(u8"诊断日志已停止：%1");
         }
+        if (source == QStringLiteral("Diagnostic log may be incomplete: %1")) {
+            return QString::fromUtf8(u8"诊断日志可能不完整：%1");
+        }
+        if (source == QStringLiteral("Diagnostic log could not be fully saved: %1")) {
+            return QString::fromUtf8(u8"诊断日志未能完整保存：%1");
+        }
         return {};
     }
 };
@@ -378,6 +384,15 @@ void DiagnosticActivationTest::diagnosticLoggingBodiesTranslateWithoutChangingRa
              QString::fromUtf8(u8"无法启动诊断日志：access denied"));
     QCOMPARE(diagnosticLoggingStoppedMessage(QStringLiteral("disk full")),
              QString::fromUtf8(u8"诊断日志已停止：disk full"));
+    const QString mainError = QString::fromUtf8(u8"缺少文件：C:/应用/运行.dll\n请重新解压。");
+    const QString detail = QString::fromUtf8(u8"磁盘已满：C:/日志/会话.log\n原始错误");
+    QCOMPARE(startupFailureMessage(mainError, std::nullopt), mainError);
+    QCOMPARE(startupFailureMessage(mainError, DiagnosticFailure{DiagnosticFailureKind::Creation, detail}),
+             mainError + "\n\n" + QString::fromUtf8(u8"无法启动诊断日志：") + detail);
+    QCOMPARE(startupFailureMessage(mainError, DiagnosticFailure{DiagnosticFailureKind::Write, detail}),
+             mainError + "\n\n" + QString::fromUtf8(u8"诊断日志可能不完整：") + detail);
+    QCOMPARE(startupText("Diagnostic log could not be fully saved: %1").arg(detail),
+             QString::fromUtf8(u8"诊断日志未能完整保存：") + detail);
 }
 
 void DiagnosticActivationTest::skippedStandaloneRuntimeAvoidsManifestEntries() {
