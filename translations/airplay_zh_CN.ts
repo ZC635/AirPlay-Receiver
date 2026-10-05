@@ -726,6 +726,14 @@
 <context>
     <name>Startup</name>
     <message>
+        <source>Diagnostic log may be incomplete: %1</source>
+        <translation>诊断日志可能不完整：%1</translation>
+    </message>
+    <message>
+        <source>Diagnostic log could not be fully saved: %1</source>
+        <translation>诊断日志未能完整保存：%1</translation>
+    </message>
+    <message>
         <location filename="../src/app/main.cpp" line="85"/>
         <source>Diagnostic logging could not be started.</source>
         <translation>无法启动诊断日志。</translation>

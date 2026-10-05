@@ -22,6 +22,10 @@ add_executable(DiagnosticLifecycleTest app/DiagnosticLifecycleTest.cpp)
 target_link_libraries(DiagnosticLifecycleTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME DiagnosticLifecycleTest COMMAND DiagnosticLifecycleTest)
 
+add_executable(DiagnosticFailurePresentationTest app/DiagnosticFailurePresentationTest.cpp)
+target_link_libraries(DiagnosticFailurePresentationTest PRIVATE airplay_test_support Qt6::Test)
+add_test(NAME DiagnosticFailurePresentationTest COMMAND DiagnosticFailurePresentationTest)
+
 add_executable(QtDiagnosticMessageBridgeTest diagnostics/QtDiagnosticMessageBridgeTest.cpp)
 target_link_libraries(QtDiagnosticMessageBridgeTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME QtDiagnosticMessageBridgeTest COMMAND QtDiagnosticMessageBridgeTest)
@@ -367,6 +371,7 @@ set(AIRPLAY_QT_TESTS
     DiagnosticLogSinkTest
     DiagnosticActivationTest
     DiagnosticLifecycleTest
+    DiagnosticFailurePresentationTest
     QtDiagnosticMessageBridgeTest
     DiagnosticSanitizerTest
     DiagnosticSessionTest

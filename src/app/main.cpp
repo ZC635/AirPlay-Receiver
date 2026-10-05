@@ -80,12 +80,48 @@ QString diagnosticLoggingStoppedMessage(const QString &error) {
         "Startup", "Diagnostic logging stopped: %1")).arg(error);
 }
 
-void showDiagnosticLoggingStoppedWarning(const QString &error) {
-    QMessageBox::warning(nullptr,
-                         startupText(QT_TRANSLATE_NOOP(
-                             "Startup", "Diagnostic logging stopped")),
-                         diagnosticLoggingStoppedMessage(error));
+namespace {
+
+QString startupFailureMessage(const QString &mainError,
+                             const std::optional<DiagnosticFailure> &failure) {
+    if (!failure)
+        return mainError;
+    const QString detail = failure->kind == DiagnosticFailureKind::Creation
+        ? diagnosticLoggingUnavailableMessage(failure->error)
+        : startupText(QT_TRANSLATE_NOOP(
+            "Startup", "Diagnostic log may be incomplete: %1")).arg(failure->error);
+    return mainError + QStringLiteral("\n\n") + detail;
 }
+
+void showStartupFailure(DiagnosticLifecycle &diagnostics, const QString &reason,
+                        const QString &title, const QString &mainError) {
+    const auto failure = diagnostics.abortStartup(reason);
+    QMessageBox::critical(nullptr, title, startupFailureMessage(mainError, failure));
+}
+
+void showDiagnosticFailureWarning(const DiagnosticFailure &failure, bool exiting = false) {
+    if (failure.kind == DiagnosticFailureKind::Creation) {
+        QMessageBox::warning(nullptr,
+            startupText(QT_TRANSLATE_NOOP("Startup", "Diagnostic logging unavailable")),
+            diagnosticLoggingUnavailableMessage(failure.error));
+        return;
+    }
+    const QString message = exiting
+        ? startupText(QT_TRANSLATE_NOOP(
+            "Startup", "Diagnostic log could not be fully saved: %1")).arg(failure.error)
+        : diagnosticLoggingStoppedMessage(failure.error);
+    QMessageBox::warning(nullptr,
+        startupText(QT_TRANSLATE_NOOP("Startup", "Diagnostic logging stopped")), message);
+}
+
+void finishDiagnosticSessionForExit(DiagnosticLifecycle &diagnostics,
+                                    std::function<void()> stopReceiver) {
+    const auto failure = diagnostics.exitNormally(std::move(stopReceiver));
+    if (failure)
+        showDiagnosticFailureWarning(*failure, true);
+}
+
+} // namespace
 
 StandaloneRuntimeDecision diagnosticStandaloneRuntimeDecision(bool shouldCheck) {
     return {shouldCheck, shouldCheck ? QStringLiteral("checked") : QStringLiteral("skipped")};
@@ -330,10 +366,7 @@ int main(int argc, char *argv[]) {
         if (diagnosticWindow != nullptr) {
             if (failure.kind == DiagnosticFailureKind::Creation) {
                 diagnosticWindow->setDiagnosticLoggingActive(false);
-                QMessageBox::warning(diagnosticWindow,
-                                     startupText(QT_TRANSLATE_NOOP(
-                                         "Startup", "Diagnostic logging unavailable")),
-                                     diagnosticLoggingUnavailableMessage(failure.error));
+                showDiagnosticFailureWarning(failure);
             } else {
                 diagnosticWindow->handleDiagnosticWriteFailure(std::move(failure.error));
             }
@@ -362,8 +395,8 @@ int main(int argc, char *argv[]) {
     const RuntimePathStartupDecision runtimePathDecision =
         runtimePathStartupDecision(runtimePathCompatibility);
     if (!runtimePathDecision.continueApplication) {
-        QMessageBox::critical(nullptr, runtimePathDecision.title, runtimePathDecision.message);
-        diagnostics.abortStartup(runtimePathDecision.abortReason);
+        showStartupFailure(diagnostics, runtimePathDecision.abortReason,
+                           runtimePathDecision.title, runtimePathDecision.message);
         return 1;
     }
 #endif
@@ -393,14 +426,13 @@ int main(int argc, char *argv[]) {
             if (runtimeSnapshot.complete) {
                 return true;
             }
-            QMessageBox::critical(
-                nullptr,
+            showStartupFailure(
+                diagnostics, QStringLiteral("missing_runtime"),
                 startupText(QT_TRANSLATE_NOOP(
                     "Startup", "AirPlay Receiver dependencies missing")),
                 startupText(QT_TRANSLATE_NOOP(
                     "Startup", "This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again."))
                     .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
-            diagnostics.abortStartup(QStringLiteral("missing_runtime"));
             return false;
         },
         [&] {
@@ -424,8 +456,8 @@ int main(int argc, char *argv[]) {
             if (pluginDecision.continueApplication) {
                 return true;
             }
-            QMessageBox::critical(nullptr, pluginDecision.title, pluginDecision.message);
-            diagnostics.abortStartup(pluginDecision.abortReason);
+            showStartupFailure(diagnostics, pluginDecision.abortReason,
+                               pluginDecision.title, pluginDecision.message);
             return false;
         });
     if (!gstreamerStartupReady) {
@@ -484,7 +516,7 @@ int main(int argc, char *argv[]) {
     recordStartup(sink, QStringLiteral("window_constructed"), {}, true);
     QObject::connect(&window, &MainWindow::diagnosticLoggingStopped, &app,
                      [](const QString &error) {
-        showDiagnosticLoggingStoppedWarning(error);
+        showDiagnosticFailureWarning({DiagnosticFailureKind::Write, error});
     });
     diagnosticWindow = &window;
     recordStartup(sink, QStringLiteral("receiver_start_requested"), {}, true);
@@ -492,7 +524,7 @@ int main(int argc, char *argv[]) {
     window.show();
     diagnostics.enableFailureReporting();
     const int exitCode = app.exec();
-    diagnostics.exitNormally([&receiver] { receiver.stop(); });
+    finishDiagnosticSessionForExit(diagnostics, [&receiver] { receiver.stop(); });
     return exitCode;
 #else
     MainWindowRuntimeServices runtimeServices;
@@ -505,7 +537,7 @@ int main(int argc, char *argv[]) {
     recordStartup(sink, QStringLiteral("window_constructed"), {}, true);
     QObject::connect(&window, &MainWindow::diagnosticLoggingStopped, &app,
                      [](const QString &error) {
-        showDiagnosticLoggingStoppedWarning(error);
+        showDiagnosticFailureWarning({DiagnosticFailureKind::Write, error});
     });
     diagnosticWindow = &window;
     recordStartup(sink, QStringLiteral("receiver_start_requested"),
@@ -513,7 +545,7 @@ int main(int argc, char *argv[]) {
     window.show();
     diagnostics.enableFailureReporting();
     const int exitCode = app.exec();
-    diagnostics.exitNormally({});
+    finishDiagnosticSessionForExit(diagnostics, {});
     return exitCode;
 #endif
 }

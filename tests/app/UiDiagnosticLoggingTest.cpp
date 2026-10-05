@@ -1,6 +1,8 @@
 #include <QtTest>
 
 #include "app/AppSettingsStore.h"
+#include "app/DiagnosticLifecycle.h"
+#include "support/MemoryDiagnosticStorage.h"
 #include "app/MainWindow.h"
 #include "app/SettingsDialog.h"
 #include "app/SettingsApplyCoordinator.h"
@@ -33,6 +35,46 @@ public:
 class UiDiagnosticLoggingTest final : public QObject {
     Q_OBJECT
 private slots:
+    void runtimeFailureUsesWindowStatusAndSingleWarningSignal() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        auto storage = std::make_shared<DiagnosticTestSupport::MemoryStorage>();
+        DiagnosticLifecycleDependencies dependencies;
+        dependencies.sessionStorage = storage;
+        DiagnosticLifecycle diagnostics(qApp, dependencies);
+        MainWindow *diagnosticWindow = nullptr;
+        int reports = 0;
+        DiagnosticLifecycleStart start;
+        start.applicationDirectory = directory.path();
+        start.activation = {true, DiagnosticActivationSource::CommandArgument};
+        start.reportFailure = [&](DiagnosticFailure failure) {
+            ++reports;
+            QCOMPARE(failure.kind, DiagnosticFailureKind::Write);
+            QVERIFY(diagnosticWindow);
+            diagnosticWindow->handleDiagnosticWriteFailure(failure.error);
+        };
+        QVERIFY(diagnostics.start(std::move(start)).creationError.isEmpty());
+        MainWindowRuntimeServices services;
+        services.diagnosticSink = diagnostics.sink();
+        services.diagnosticLoggingActive = diagnostics.loggingActive();
+        MainWindow window(AppSettings::defaults(), nullptr, nullptr, {}, nullptr, nullptr, services);
+        QSignalSpy warning(&window, &MainWindow::diagnosticLoggingStopped);
+        const QString activeTitle = window.windowTitle();
+        diagnosticWindow = &window;
+        window.show();
+        diagnostics.enableFailureReporting();
+        storage->file->failWrites = true;
+        qWarning("runtime UI failure through the Qt diagnostic bridge");
+        QTRY_COMPARE(warning.size(), 1);
+        QCOMPARE(warning.front().front().toString(), QStringLiteral("disk full"));
+        QCOMPARE(reports, 1);
+        QVERIFY(window.windowTitle() != activeTitle);
+        QVERIFY(!diagnostics.exitNormally({}).has_value());
+        QCoreApplication::processEvents();
+        QCOMPARE(warning.size(), 1);
+        QCOMPARE(reports, 1);
+    }
+
     void settingsHoverPreferenceChangeIsLoggedEvenWhenVisibilityDoesNotChange() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
