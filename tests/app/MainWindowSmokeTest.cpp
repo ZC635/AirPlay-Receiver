@@ -26,6 +26,8 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMenu>
+#include <QRegularExpression>
+#include <QWindow>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QImage>
@@ -3336,6 +3338,7 @@ private slots:
 
     void nativeToolbarCursorFallbackAndPopupFocus() {
         if (QGuiApplication::platformName() != QStringLiteral("windows")) QSKIP("Windows QPA required");
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*must be a top level window\\.$")));
         const QPoint originalCursor = QCursor::pos();
         const auto restoreCursor = qScopeGuard([originalCursor] { QCursor::setPos(originalCursor); });
         MainWindow window;
@@ -3366,13 +3369,34 @@ private slots:
         auto *toolbar = window.findChild<QToolButton *>("settingsButton")->parentWidget();
         QMenu popup(toolbar);
         popup.addAction("Owned popup");
-        const QPoint popupOrigin = window.centralWidget()->mapToGlobal(QPoint(200, 100));
-        popup.popup(popupOrigin);
-        QCursor::setPos(popupOrigin + QPoint(5, 5));
-        controller->evaluatePointer(QCursor::pos(), true);
-        QTest::qWait(70);
-        QVERIFY(window.isToolbarVisible());
-        popup.hide();
+        // Open through a toolbar control so Qt selects the top-level transient
+        // parent while the popup remains owned by the toolbar's widget tree.
+        QToolButton popupButton(toolbar);
+        popupButton.setGeometry(0, 0, 32, 32);
+        popupButton.setPopupMode(QToolButton::InstantPopup);
+        popupButton.setMenu(&popup);
+        popupButton.show();
+        bool popupChecked = false;
+        QTimer::singleShot(0, &popup, [&] {
+            const auto hidePopup = qScopeGuard([&] { popup.hide(); });
+            QVERIFY(popup.isVisible());
+            QCOMPARE(QApplication::activePopupWidget(), &popup);
+            QCOMPARE(popup.parentWidget(), toolbar);
+            QVERIFY(popup.windowHandle());
+            QVERIFY(popup.windowHandle()->isTopLevel());
+            QCOMPARE(popup.windowHandle()->transientParent(), window.windowHandle());
+            QCursor::setPos(popup.mapToGlobal(QPoint(5, 5)));
+            const QRect topBand(window.centralWidget()->mapToGlobal(QPoint()),
+                                QSize(window.centralWidget()->width(), toolbar->height()));
+            QVERIFY(!topBand.contains(QCursor::pos()));
+            controller->evaluatePointer(QCursor::pos(), true);
+            QTest::qWait(70);
+            QVERIFY(window.isToolbarVisible());
+            popupChecked = true;
+        });
+        popupButton.showMenu();
+        QVERIFY(popupChecked);
+        popupButton.hide();
         QTRY_VERIFY(!window.isToolbarVisible());
         window.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&window));

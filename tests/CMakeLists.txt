@@ -530,7 +530,10 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR};QT_SCALE_FACTOR=2"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
     )
-    add_test(NAME MainWindowNativeToolbarHoverTest COMMAND MainWindowSmokeTest nativeToolbarCursorFallbackAndPopupFocus)
+    # GUI-subsystem test output may be absent from CTest's captured streams.
+    add_test(NAME MainWindowNativeToolbarHoverTest
+        COMMAND MainWindowSmokeTest nativeToolbarCursorFallbackAndPopupFocus
+            -o "${PROJECT_BINARY_DIR}/Testing/MainWindowNativeToolbarHoverTest.txt,txt")
     set_tests_properties(MainWindowNativeToolbarHoverTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
