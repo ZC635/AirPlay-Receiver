@@ -116,8 +116,7 @@ add_library(airplay_app_lib
     src/backend/UxPlayDiscovery.h
     src/backend/UxPlayReceiver.cpp
     src/backend/UxPlayReceiver.h
-    src/backend/GstAppSinkFrameSource.cpp
-    src/backend/GstAppSinkFrameSource.h
+    src/backend/AppSinkFrameSource.h
     src/backend/VideoFrameBridge.cpp
     src/backend/VideoFrameBridge.h
     src/backend/VideoQualitySettings.h
@@ -163,6 +162,8 @@ qt_add_translations(airplay_app_lib
 )
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE
+        src/backend/GstAppSinkFrameSource.cpp
+        src/backend/GstAppSinkFrameSource.h
         src/platform/MdnsServerAdapter.cpp
         src/platform/MdnsServerAdapter.h
         src/backend/RecordingController.cpp

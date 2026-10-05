@@ -199,13 +199,13 @@ if(AIRPLAY_WITH_UXPLAY)
 endif()
 add_test(NAME UxPlayDiscoveryTest COMMAND UxPlayDiscoveryTest)
 
-add_executable(VideoRendererLifecycleTest backend/VideoRendererLifecycleTest.cpp)
-target_link_libraries(VideoRendererLifecycleTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
+    add_executable(VideoRendererLifecycleTest backend/VideoRendererLifecycleTest.cpp)
+    target_link_libraries(VideoRendererLifecycleTest PRIVATE airplay_app_lib Qt6::Test)
     target_include_directories(VideoRendererLifecycleTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
     target_link_libraries(VideoRendererLifecycleTest PRIVATE renderers)
+    add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
 endif()
-add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
 
 add_executable(VideoFrameBridgeTest backend/VideoFrameBridgeTest.cpp)
 target_link_libraries(VideoFrameBridgeTest PRIVATE airplay_app_lib Qt6::Test)
@@ -302,11 +302,37 @@ if(NOT AIRPLAY_QT_CORE_LOCATION)
     get_target_property(AIRPLAY_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION)
 endif()
 get_filename_component(AIRPLAY_QT_BIN_DIR "${AIRPLAY_QT_CORE_LOCATION}" DIRECTORY)
+get_target_property(AIRPLAY_QMAKE_LOCATION Qt6::qmake IMPORTED_LOCATION)
+if(NOT AIRPLAY_QMAKE_LOCATION)
+    get_target_property(AIRPLAY_QMAKE_LOCATION Qt6::qmake IMPORTED_LOCATION_RELEASE)
+endif()
 execute_process(
-    COMMAND "${Qt6Core_QMAKE_EXECUTABLE}" -query QT_INSTALL_PLUGINS
+    COMMAND "${AIRPLAY_QMAKE_LOCATION}" -query QT_INSTALL_PLUGINS
     OUTPUT_VARIABLE AIRPLAY_QT_PLUGIN_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE AIRPLAY_QT_PLUGIN_QUERY_RESULT
 )
+if(NOT AIRPLAY_QT_PLUGIN_QUERY_RESULT EQUAL 0 OR NOT AIRPLAY_QT_PLUGIN_DIR)
+    message(FATAL_ERROR "Could not query the Qt plugin directory")
+endif()
+
+if(AIRPLAY_POWERSHELL AND NOT AIRPLAY_WITH_UXPLAY)
+    add_test(
+        NAME OffBuildDependencyTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/OffBuildDependencyTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -SmokeTestExecutable $<TARGET_FILE:VideoFrameBridgeTest>
+            -Objdump "C:/msys64/ucrt64/bin/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_QT_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -ReportDirectory "${PROJECT_BINARY_DIR}/off-dependency-report"
+    )
+    set_tests_properties(OffBuildDependencyTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+        TIMEOUT 120
+    )
+endif()
 
 if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     add_test(
@@ -377,13 +403,12 @@ set(AIRPLAY_QT_TESTS
     RecordingTimelineTest
     UxPlayReceiverConfigTest
     UxPlayDiscoveryTest
-    VideoRendererLifecycleTest
     VideoSurfaceWidgetTest
     VideoFrameBridgeTest
     VideoRenderGeometryTest
 )
 if(AIRPLAY_WITH_UXPLAY)
-    list(APPEND AIRPLAY_QT_TESTS GstAppSinkFrameSourceTest GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test)
+    list(APPEND AIRPLAY_QT_TESTS VideoRendererLifecycleTest GstAppSinkFrameSourceTest GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test)
 endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
