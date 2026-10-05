@@ -209,13 +209,13 @@ add_test(NAME VideoRendererLifecycleTest COMMAND VideoRendererLifecycleTest)
 
 add_executable(VideoFrameBridgeTest backend/VideoFrameBridgeTest.cpp)
 target_link_libraries(VideoFrameBridgeTest PRIVATE airplay_app_lib Qt6::Test)
-if(AIRPLAY_WITH_UXPLAY)
-    target_include_directories(VideoFrameBridgeTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
-    target_link_libraries(VideoFrameBridgeTest PRIVATE renderers)
-endif()
 add_test(NAME VideoFrameBridgeTest COMMAND VideoFrameBridgeTest)
 
 if(AIRPLAY_WITH_UXPLAY)
+    add_executable(GstAppSinkFrameSourceTest backend/GstAppSinkFrameSourceTest.cpp)
+    target_link_libraries(GstAppSinkFrameSourceTest PRIVATE airplay_app_lib Qt6::Test renderers)
+    add_test(NAME GstAppSinkFrameSourceTest COMMAND GstAppSinkFrameSourceTest)
+
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GST_PBUTILS REQUIRED IMPORTED_TARGET gstreamer-pbutils-1.0)
     add_executable(GstSampleQueueTest backend/GstSampleQueueTest.cpp)
@@ -383,7 +383,7 @@ set(AIRPLAY_QT_TESTS
     VideoRenderGeometryTest
 )
 if(AIRPLAY_WITH_UXPLAY)
-    list(APPEND AIRPLAY_QT_TESTS GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test)
+    list(APPEND AIRPLAY_QT_TESTS GstAppSinkFrameSourceTest GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test)
 endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
@@ -398,7 +398,7 @@ set_tests_properties(SettingsDialogHighDpiTest PROPERTIES
 )
 
 if(AIRPLAY_WITH_UXPLAY)
-    set_tests_properties(GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test PROPERTIES
+    set_tests_properties(GstAppSinkFrameSourceTest GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${AIRPLAY_QT_PLUGIN_DIR}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
