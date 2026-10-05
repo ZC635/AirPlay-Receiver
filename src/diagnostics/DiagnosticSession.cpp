@@ -170,6 +170,7 @@ public:
     bool active = true;
     bool closed = false;
     bool failureEmitted = false;
+    QString writeFailure;
     bool compact = false;
     qint64 bytesWritten = 0;
     qint64 compactOrSizeSuppressed = 0;
@@ -299,6 +300,11 @@ QString DiagnosticSession::filePath() const {
     return d->path;
 }
 
+QString DiagnosticSession::writeFailure() const {
+    QMutexLocker lock(&d->mutex);
+    return d->writeFailure;
+}
+
 void DiagnosticSession::record(DiagnosticEvent event) {
     QString failure;
     {
@@ -347,6 +353,8 @@ void DiagnosticSession::record(DiagnosticEvent event) {
             QString error = d->file->errorString();
             if (error.isEmpty())
                 error = QStringLiteral("diagnostic log write failed");
+            if (d->writeFailure.isEmpty())
+                d->writeFailure = error;
             d->active = false;
             d->file->close();
             if (!d->failureEmitted) {
@@ -426,6 +434,8 @@ void DiagnosticSession::closeNormally() {
             QString error = d->file->errorString();
             if (error.isEmpty())
                 error = QStringLiteral("diagnostic log write failed");
+            if (d->writeFailure.isEmpty())
+                d->writeFailure = error;
             d->active = false;
             d->file->close();
             if (!d->failureEmitted) {

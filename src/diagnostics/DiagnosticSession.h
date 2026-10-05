@@ -65,6 +65,7 @@ public:
     void record(DiagnosticEvent event) override;
     bool isActive() const override;
     QString filePath() const;
+    QString writeFailure() const;
     void closeNormally();
 
 signals:
