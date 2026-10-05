@@ -6,6 +6,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class AirPlayStartupTestJob {
@@ -76,6 +79,52 @@ public static class AirPlayStartupTestJob {
         IntPtr handle = CreateFileW(path, access, 3, ref attributes, disposition, 0x80, IntPtr.Zero);
         if (handle == new IntPtr(-1)) throw new Win32Exception();
         return handle;
+    }
+    public sealed class CapturedOutput {
+        public string Stdout { get; internal set; }
+        public string Stderr { get; internal set; }
+        public int Attempts { get; internal set; }
+    }
+    public static CapturedOutput ReadFinalOutput(string stdout, string stderr, int timeoutMilliseconds) {
+        return ReadFinalOutput(stdout, stderr, timeoutMilliseconds, null);
+    }
+    public static CapturedOutput ReadFinalOutput(string stdout, string stderr, int timeoutMilliseconds, EventWaitHandle writerObserved) {
+        if (timeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException("timeoutMilliseconds");
+        Stopwatch deadline = Stopwatch.StartNew();
+        int attempts = 0;
+        while (true) {
+            ++attempts;
+            try {
+                // Hold both files exclusively before reading either. This proves
+                // inherited writers have closed; job termination is asynchronous.
+                using (FileStream output = new FileStream(stdout, FileMode.Open, FileAccess.Read, FileShare.None))
+                using (FileStream error = new FileStream(stderr, FileMode.Open, FileAccess.Read, FileShare.None))
+                using (StreamReader outputReader = new StreamReader(output, Encoding.UTF8, true))
+                using (StreamReader errorReader = new StreamReader(error, Encoding.UTF8, true)) {
+                    return new CapturedOutput { Stdout = outputReader.ReadToEnd(), Stderr = errorReader.ReadToEnd(), Attempts = attempts };
+                }
+            } catch (IOException failure) {
+                int code = failure.HResult & 0xffff;
+                if (code != 32 && code != 33) throw; // retry only sharing/lock violations
+                if (writerObserved != null) writerObserved.Set();
+                long remaining = timeoutMilliseconds - deadline.ElapsedMilliseconds;
+                if (remaining <= 0) throw new TimeoutException("Output writers did not release files within " + timeoutMilliseconds + " ms", failure);
+                Thread.Sleep((int)Math.Min(20, remaining));
+                if (deadline.ElapsedMilliseconds >= timeoutMilliseconds)
+                    throw new TimeoutException("Output writers did not release files within " + timeoutMilliseconds + " ms", failure);
+            }
+        }
+    }
+    // Regression-only ownership transfer: keep an actual inherited writer alive
+    // briefly to exercise asynchronous cleanup completion deterministically.
+    public static Task<bool> BeginDelayedJobCleanup(IntPtr job, int delayMilliseconds, EventWaitHandle writerObserved) {
+        if (job == IntPtr.Zero || delayMilliseconds < 0 || writerObserved == null) throw new ArgumentOutOfRangeException();
+        return Task.Factory.StartNew(delegate {
+            // Start the delay only once the shared reader has encountered the
+            // writer. Bounded fallback still closes the owned job on test failure.
+            if (writerObserved.WaitOne(5000)) Thread.Sleep(delayMilliseconds);
+            return CloseHandle(job);
+        });
     }
     public sealed class SuspendedChild : IDisposable {
         IntPtr process, thread;
