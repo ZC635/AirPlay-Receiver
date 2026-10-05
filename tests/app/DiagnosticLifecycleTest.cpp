@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <thread>
 
 namespace {
 
@@ -147,7 +148,16 @@ private slots:
     void rejectedChildReleasesResourcesWithoutNormalMarker_data();
     void rejectedChildReleasesResourcesWithoutNormalMarker();
     void earlyWriteFailureIsQueuedAndDeliveredOnce();
-    void consumedFailureIsNotReplayedAfterWindowAttachment();
+    void earlyFailureSurvivesEventProcessing();
+    void creationFailureIsReportedWhenUiReady();
+    void missingHandlerKeepsFailureForTerminalResult_data();
+    void missingHandlerKeepsFailureForTerminalResult();
+    void handlerReentryDoesNotReportTwice();
+    void stopReceiverEventsDoNotReportBeforeReturn();
+    void terminalReentryDoesNotRepeatMarkers();
+    void abortBoundaryFailureReturned_data();
+    void abortBoundaryFailureReturned();
+    void destroyedOwnerDropsPendingDelivery();
     void environmentBaselineAvoidsSecondStartupCollection();
     void inactiveSessionSkipsEnvironmentAndMonitor_data();
     void inactiveSessionSkipsEnvironmentAndMonitor();
@@ -155,8 +165,8 @@ private slots:
     void normalExitKeepsBridgeAndMonitorThroughReceiverStop();
     void startupAbortRecordsReasonWithoutNormalMarker();
     void destructorOnlyCleansUp();
-    void finalCloseFailureRemainsQueued_data();
-    void finalCloseFailureRemainsQueued();
+    void terminalBoundaryFailureReturned_data();
+    void terminalBoundaryFailureReturned();
 };
 
 void DiagnosticLifecycleTest::normalLaunchCreatesNoLogButStillStopsReceiver() {
@@ -300,38 +310,223 @@ void DiagnosticLifecycleTest::earlyWriteFailureIsQueuedAndDeliveredOnce() {
     QString error;
     DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
     auto start = enabledStart(QStringLiteral("C:/test"));
-    start.reportWriteFailure = [&](QString text) { ++handled; error = std::move(text); };
+    start.reportFailure = [&](DiagnosticFailure failure) {
+        ++handled;
+        QCOMPARE(failure.kind, DiagnosticFailureKind::Write);
+        QCOMPARE(QThread::currentThread(), QCoreApplication::instance()->thread());
+        error = std::move(failure.error);
+    };
     diagnostics.start(std::move(start));
+    diagnostics.enableFailureReporting();
     storage->file->failWrites = true;
-    diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "before_window"));
+    std::thread writer([&] {
+        diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "worker_failure"));
+    });
+    writer.join();
     QVERIFY(!diagnostics.loggingActive());
     QCOMPARE(handled, 0);
     QTRY_COMPARE(handled, 1);
     QCOMPARE(error, QStringLiteral("disk full"));
     diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "another_failure"));
-    diagnostics.exitNormally({});
+    QVERIFY(!diagnostics.exitNormally({}));
     QCoreApplication::processEvents();
     QCOMPARE(handled, 1);
 }
 
-void DiagnosticLifecycleTest::consumedFailureIsNotReplayedAfterWindowAttachment() {
+void DiagnosticLifecycleTest::earlyFailureSurvivesEventProcessing() {
     auto storage = std::make_shared<MemoryStorage>();
     bool attached = false;
     int callbacks = 0;
     int warnings = 0;
     DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
     auto start = enabledStart(QStringLiteral("C:/test"));
-    start.reportWriteFailure = [&](QString) { ++callbacks; if (attached) ++warnings; };
+    start.reportFailure = [&](DiagnosticFailure) { ++callbacks; if (attached) ++warnings; };
     diagnostics.start(std::move(start));
     storage->file->failWrites = true;
     diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "before_window"));
     QCOMPARE(callbacks, 0);
     QCoreApplication::processEvents();
-    QCOMPARE(callbacks, 1);
+    QCOMPARE(callbacks, 0);
     attached = true;
+    diagnostics.enableFailureReporting();
+    QCOMPARE(callbacks, 1);
+    diagnostics.enableFailureReporting();
     QCoreApplication::processEvents();
     QCOMPARE(callbacks, 1);
-    QCOMPARE(warnings, 0);
+    QCOMPARE(warnings, 1);
+    QVERIFY(!diagnostics.exitNormally({}));
+}
+
+void DiagnosticLifecycleTest::creationFailureIsReportedWhenUiReady() {
+    auto storage = std::make_shared<MemoryStorage>();
+    storage->file->ensureError = "directory unavailable";
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
+    int handled = 0;
+    auto start = enabledStart(QStringLiteral("C:/test"));
+    start.reportFailure = [&](DiagnosticFailure failure) {
+        ++handled;
+        QCOMPARE(failure.kind, DiagnosticFailureKind::Creation);
+        QCOMPARE(failure.error, QStringLiteral("directory unavailable"));
+        QCOMPARE(QThread::currentThread(), QCoreApplication::instance()->thread());
+    };
+    const auto result = diagnostics.start(std::move(start));
+    QCOMPARE(result.creationError, QStringLiteral("directory unavailable"));
+    QCoreApplication::processEvents();
+    QCOMPARE(handled, 0);
+    diagnostics.enableFailureReporting();
+    QCOMPARE(handled, 1);
+    diagnostics.enableFailureReporting();
+    QVERIFY(!diagnostics.exitNormally({}));
+    QCoreApplication::processEvents();
+    QCOMPARE(handled, 1);
+}
+
+void DiagnosticLifecycleTest::missingHandlerKeepsFailureForTerminalResult_data() {
+    QTest::addColumn<bool>("creation");
+    QTest::newRow("creation") << true;
+    QTest::newRow("write") << false;
+}
+
+void DiagnosticLifecycleTest::missingHandlerKeepsFailureForTerminalResult() {
+    QFETCH(bool, creation);
+    auto storage = std::make_shared<MemoryStorage>();
+    if (creation)
+        storage->file->ensureError = "directory unavailable";
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
+    diagnostics.start(enabledStart(QStringLiteral("C:/test")));
+    diagnostics.enableFailureReporting();
+    if (!creation) {
+        storage->file->failWrites = true;
+        diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "failure"));
+    }
+    QCoreApplication::processEvents();
+    const auto failure = diagnostics.exitNormally({});
+    QVERIFY(failure);
+    QCOMPARE(failure->kind, creation ? DiagnosticFailureKind::Creation : DiagnosticFailureKind::Write);
+    QCOMPARE(failure->error, creation ? QStringLiteral("directory unavailable") : QStringLiteral("disk full"));
+    QVERIFY(!diagnostics.exitNormally({}));
+    QVERIFY(!diagnostics.abortStartup(QStringLiteral("late_abort")));
+}
+
+void DiagnosticLifecycleTest::handlerReentryDoesNotReportTwice() {
+    auto storage = std::make_shared<MemoryStorage>();
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
+    int handled = 0;
+    int stops = 0;
+    auto start = enabledStart(QStringLiteral("C:/test"));
+    start.reportFailure = [&](DiagnosticFailure) {
+        ++handled;
+        diagnostics.enableFailureReporting();
+        QCoreApplication::processEvents();
+        QVERIFY(!diagnostics.exitNormally([&] { ++stops; }));
+    };
+    diagnostics.start(std::move(start));
+    storage->file->failWrites = true;
+    diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "failure"));
+    diagnostics.enableFailureReporting();
+    QCOMPARE(handled, 1);
+    QCOMPARE(stops, 1);
+    diagnostics.enableFailureReporting();
+    QCoreApplication::processEvents();
+    QCOMPARE(handled, 1);
+}
+
+void DiagnosticLifecycleTest::stopReceiverEventsDoNotReportBeforeReturn() {
+    auto storage = std::make_shared<MemoryStorage>();
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
+    int handled = 0;
+    auto start = enabledStart(QStringLiteral("C:/test"));
+    start.reportFailure = [&](DiagnosticFailure) { ++handled; };
+    diagnostics.start(std::move(start));
+    diagnostics.enableFailureReporting();
+    // The queued signal predates Closing, but must remain available for the return value.
+    storage->file->failWrites = true;
+    diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "failure"));
+    const auto failure = diagnostics.exitNormally([&] {
+        diagnostics.enableFailureReporting();
+        QCoreApplication::processEvents();
+        QCOMPARE(handled, 0);
+    });
+    QVERIFY(failure);
+    QCOMPARE(failure->error, QStringLiteral("disk full"));
+    QCoreApplication::processEvents();
+    QCOMPARE(handled, 0);
+}
+
+void DiagnosticLifecycleTest::terminalReentryDoesNotRepeatMarkers() {
+    auto storage = std::make_shared<MemoryStorage>();
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
+    diagnostics.start(enabledStart(QStringLiteral("C:/test")));
+    int stops = 0;
+    QVERIFY(!diagnostics.exitNormally([&] {
+        ++stops;
+        QVERIFY(!diagnostics.exitNormally([&] { ++stops; }));
+        QVERIFY(!diagnostics.abortStartup(QStringLiteral("reentrant")));
+        diagnostics.enableFailureReporting();
+        QCoreApplication::processEvents();
+    }));
+    QVERIFY(!diagnostics.exitNormally([&] { ++stops; }));
+    QCOMPARE(stops, 1);
+    QCOMPARE(storage->file->bytes.count("shutdown_started"), 1);
+    QCOMPARE(storage->file->bytes.count("session_summary"), 1);
+    QVERIFY(!storage->file->bytes.contains("startup_aborted"));
+}
+
+void DiagnosticLifecycleTest::abortBoundaryFailureReturned_data() {
+    QTest::addColumn<QString>("boundary");
+    QTest::newRow("creation") << QString("creation");
+    QTest::newRow("early-write") << QString("early-write");
+    QTest::newRow("abort-write") << QString("write");
+    QTest::newRow("abort-flush") << QString("flush");
+}
+
+void DiagnosticLifecycleTest::abortBoundaryFailureReturned() {
+    QFETCH(QString, boundary);
+    auto storage = std::make_shared<MemoryStorage>();
+    if (boundary == "creation")
+        storage->file->ensureError = "directory unavailable";
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
+    int handled = 0;
+    auto start = enabledStart(QStringLiteral("C:/test"));
+    start.reportFailure = [&](DiagnosticFailure) { ++handled; };
+    diagnostics.start(std::move(start));
+    storage->file->failWrites = boundary == "write" || boundary == "early-write";
+    storage->file->failFlush = boundary == "flush";
+    if (boundary == "early-write") {
+        diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "failure"));
+        QCoreApplication::processEvents();
+        QCOMPARE(handled, 0);
+    }
+    const auto failure = diagnostics.abortStartup(QStringLiteral("missing_runtime"));
+    QVERIFY(failure);
+    QCOMPARE(failure->kind, boundary == "creation" ? DiagnosticFailureKind::Creation : DiagnosticFailureKind::Write);
+    QCOMPARE(failure->error, boundary == "creation" ? QStringLiteral("directory unavailable") : QStringLiteral("disk full"));
+    QCOMPARE(diagnostics.sink(), &nullDiagnosticLogSink());
+    QVERIFY(!storage->file->bytes.contains("normal_exit=yes"));
+    if (boundary == "flush")
+        QVERIFY(storage->file->bytes.contains("startup_aborted reason=missing_runtime"));
+    diagnostics.enableFailureReporting();
+    QCoreApplication::processEvents();
+    QCOMPARE(handled, 0);
+    QVERIFY(!diagnostics.abortStartup(QStringLiteral("again")));
+    QVERIFY(!diagnostics.exitNormally({}));
+}
+
+void DiagnosticLifecycleTest::destroyedOwnerDropsPendingDelivery() {
+    auto storage = std::make_shared<MemoryStorage>();
+    int handled = 0;
+    {
+        DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
+        auto start = enabledStart(QStringLiteral("C:/test"));
+        start.reportFailure = [&](DiagnosticFailure) { ++handled; };
+        diagnostics.start(std::move(start));
+        diagnostics.enableFailureReporting();
+        storage->file->failWrites = true;
+        diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "startup", "failure"));
+    }
+    QCoreApplication::processEvents();
+    QCOMPARE(handled, 0);
+    QVERIFY(!storage->file->bytes.contains("normal_exit=yes"));
 }
 
 void DiagnosticLifecycleTest::environmentBaselineAvoidsSecondStartupCollection() {
@@ -469,27 +664,49 @@ void DiagnosticLifecycleTest::destructorOnlyCleansUp() {
     QCOMPARE(logBytes(directory.path()), bytes);
 }
 
-void DiagnosticLifecycleTest::finalCloseFailureRemainsQueued_data() {
+void DiagnosticLifecycleTest::terminalBoundaryFailureReturned_data() {
+    QTest::addColumn<QString>("boundary");
     QTest::addColumn<bool>("flushFailure");
-    QTest::newRow("write") << false;
-    QTest::newRow("flush") << true;
+    QTest::newRow("shutdown-write") << QString("shutdown") << false;
+    QTest::newRow("shutdown-flush") << QString("shutdown") << true;
+    QTest::newRow("receiver-write") << QString("receiver") << false;
+    QTest::newRow("receiver-flush") << QString("receiver") << true;
+    QTest::newRow("summary-write") << QString("summary") << false;
+    QTest::newRow("summary-flush") << QString("summary") << true;
 }
 
-void DiagnosticLifecycleTest::finalCloseFailureRemainsQueued() {
+void DiagnosticLifecycleTest::terminalBoundaryFailureReturned() {
+    QFETCH(QString, boundary);
     QFETCH(bool, flushFailure);
     auto storage = std::make_shared<MemoryStorage>();
     int handled = 0;
     DiagnosticLifecycle diagnostics(QCoreApplication::instance(), memoryDependencies(storage));
     auto start = enabledStart(QStringLiteral("C:/test"));
-    start.reportWriteFailure = [&](QString) { ++handled; };
+    start.reportFailure = [&](DiagnosticFailure) { ++handled; };
     diagnostics.start(std::move(start));
-    diagnostics.exitNormally([&] {
+    diagnostics.enableFailureReporting();
+    auto injectFailure = [&] {
         storage->file->failWrites = !flushFailure;
         storage->file->failFlush = flushFailure;
+    };
+    if (boundary == "shutdown")
+        injectFailure();
+    const auto failure = diagnostics.exitNormally([&] {
+        injectFailure();
+        if (boundary == "receiver")
+            diagnostics.sink()->record(makeDiagnosticEvent(DiagnosticSeverity::Info, "receiver", "stop", {}, true));
+        QCoreApplication::processEvents();
+        QCOMPARE(handled, 0);
     });
+    QVERIFY(failure.has_value());
+    QCOMPARE(failure->kind, DiagnosticFailureKind::Write);
+    QCOMPARE(failure->error, QStringLiteral("disk full"));
     QVERIFY(!diagnostics.loggingActive());
     QCOMPARE(handled, 0);
-    QTRY_COMPARE(handled, 1);
+    diagnostics.enableFailureReporting();
+    QCoreApplication::processEvents();
+    QCOMPARE(handled, 0);
+    QVERIFY(!diagnostics.exitNormally({}));
 }
 
 QTEST_GUILESS_MAIN(DiagnosticLifecycleTest)

@@ -326,9 +326,17 @@ int main(int argc, char *argv[]) {
     diagnosticStart.applicationDirectory = QCoreApplication::applicationDirPath();
     diagnosticStart.activation = activation;
     diagnosticStart.beforeChildGateEvent = startupLanguageFailureEvent(translationLoadFailure);
-    diagnosticStart.reportWriteFailure = [&diagnosticWindow](QString error) {
+    diagnosticStart.reportFailure = [&diagnosticWindow](DiagnosticFailure failure) {
         if (diagnosticWindow != nullptr) {
-            diagnosticWindow->handleDiagnosticWriteFailure(std::move(error));
+            if (failure.kind == DiagnosticFailureKind::Creation) {
+                diagnosticWindow->setDiagnosticLoggingActive(false);
+                QMessageBox::warning(diagnosticWindow,
+                                     startupText(QT_TRANSLATE_NOOP(
+                                         "Startup", "Diagnostic logging unavailable")),
+                                     diagnosticLoggingUnavailableMessage(failure.error));
+            } else {
+                diagnosticWindow->handleDiagnosticWriteFailure(std::move(failure.error));
+            }
         }
     };
     const DiagnosticLifecycleStartupResult diagnosticResult = diagnostics.start(std::move(diagnosticStart));
@@ -337,12 +345,6 @@ int main(int argc, char *argv[]) {
     }
     DiagnosticLogSink *sink = diagnostics.sink();
     languageManager.setDiagnosticSink(sink);
-    if (!diagnosticResult.creationError.isEmpty()) {
-        QMessageBox::warning(nullptr,
-                             startupText(QT_TRANSLATE_NOOP(
-                                 "Startup", "Diagnostic logging unavailable")),
-                             diagnosticLoggingUnavailableMessage(diagnosticResult.creationError));
-    }
     recordStartup(sink, QStringLiteral("session_activation"),
                   {{QStringLiteral("activation_source"), activation.sourceName()}}, true);
     recordStartup(sink, QStringLiteral("application_identity"),
@@ -488,6 +490,7 @@ int main(int argc, char *argv[]) {
     recordStartup(sink, QStringLiteral("receiver_start_requested"), {}, true);
     receiver.start();
     window.show();
+    diagnostics.enableFailureReporting();
     const int exitCode = app.exec();
     diagnostics.exitNormally([&receiver] { receiver.stop(); });
     return exitCode;
@@ -508,6 +511,7 @@ int main(int argc, char *argv[]) {
     recordStartup(sink, QStringLiteral("receiver_start_requested"),
                   {{QStringLiteral("result"), QStringLiteral("not_built")}}, true);
     window.show();
+    diagnostics.enableFailureReporting();
     const int exitCode = app.exec();
     diagnostics.exitNormally({});
     return exitCode;

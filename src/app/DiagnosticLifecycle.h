@@ -11,11 +11,18 @@
 
 class DiagnosticSessionStorage;
 
+enum class DiagnosticFailureKind { Creation, Write };
+
+struct DiagnosticFailure {
+    DiagnosticFailureKind kind;
+    QString error;
+};
+
 struct DiagnosticLifecycleStart {
     QString applicationDirectory;
     DiagnosticActivation activation;
     std::optional<DiagnosticEvent> beforeChildGateEvent;
-    std::function<void(QString)> reportWriteFailure;
+    std::function<void(DiagnosticFailure)> reportFailure;
 };
 
 struct DiagnosticLifecycleStartupResult {
@@ -30,7 +37,8 @@ struct DiagnosticLifecycleDependencies {
     std::optional<NetworkMonitorOperations> networkMonitorOperations;
 };
 
-// Construct on the application thread before consumers that borrow sink().
+// Construct and call lifecycle methods on the application thread, before consumers
+// that borrow sink(). Borrowed sinks may record from worker threads.
 // start and environment collection are called once; the caller explicitly chooses
 // abortStartup or exitNormally. Destruction only releases resources.
 class DiagnosticLifecycle final {
@@ -43,9 +51,12 @@ public:
     DiagnosticLogSink *sink() const;
     bool loggingActive() const;
     void collectEnvironmentAndStartMonitor();
+    // Enable only after the window and its state/warning connections are ready.
+    void enableFailureReporting();
+    // Returned failures are already claimed; late queued delivery cannot replay them.
     // Borrowed sinks must not be used after abortStartup; normal close retains them.
-    void abortStartup(QString reason);
-    void exitNormally(std::function<void()> stopReceiver);
+    std::optional<DiagnosticFailure> abortStartup(QString reason);
+    std::optional<DiagnosticFailure> exitNormally(std::function<void()> stopReceiver);
 
 private:
     class Private;
