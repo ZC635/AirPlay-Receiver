@@ -21,6 +21,7 @@
 #include <utility>
 
 #if AIRPLAY_WITH_UXPLAY
+#include "backend/GstAppSinkFrameSource.h"
 #include "lib/logger.h"
 #include "lib/raop.h"
 #include <glib.h>
@@ -1361,7 +1362,7 @@ void UxPlayReceiver::attachVideoFrameBridgeToCurrentPipeline() {
         return;
     }
 
-    m_videoFrameBridge = new VideoFrameBridge(appsink, this);
+    m_videoFrameBridge = new VideoFrameBridge(std::make_unique<GstAppSinkFrameSource>(appsink), this);
     m_videoFrameBridge->start();
     QObject::connect(m_videoFrameBridge, &VideoFrameBridge::frameReady,
                      this, [this](QImage frame) {

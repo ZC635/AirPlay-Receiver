@@ -1,17 +1,16 @@
 #include "backend/VideoFrameBridge.h"
 
-VideoFrameBridge::VideoFrameBridge(GstElement *appsink, QObject *parent)
-    : QObject(parent), m_source(new GstAppSinkFrameSource(appsink)), m_ownsSource(true) {}
+#include <utility>
 
 VideoFrameBridge::VideoFrameBridge(AppSinkFrameSource *source, QObject *parent)
     : QObject(parent), m_source(source) {}
 
+VideoFrameBridge::VideoFrameBridge(std::unique_ptr<AppSinkFrameSource> source, QObject *parent)
+    : QObject(parent), m_ownedSource(std::move(source)), m_source(m_ownedSource.get()) {}
+
 VideoFrameBridge::~VideoFrameBridge() {
     if (m_source) {
         m_source->setFrameAvailableCallback({});
-    }
-    if (m_ownsSource) {
-        delete m_source;
     }
 }
 

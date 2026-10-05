@@ -3,17 +3,17 @@
 #include <QObject>
 #include <QImage>
 
-#include <gst/gst.h>
+#include <memory>
 
-#include "backend/GstAppSinkFrameSource.h"
+#include "backend/AppSinkFrameSource.h"
 
 class VideoFrameBridge : public QObject {
     Q_OBJECT
 
 public:
-    explicit VideoFrameBridge(GstElement *appsink, QObject *parent = nullptr);
     // Non-owning: caller must ensure source outlives this bridge.
     explicit VideoFrameBridge(AppSinkFrameSource *source, QObject *parent = nullptr);
+    explicit VideoFrameBridge(std::unique_ptr<AppSinkFrameSource> source, QObject *parent = nullptr);
     ~VideoFrameBridge() override;
     void start();
     void processFrame();
@@ -22,7 +22,7 @@ signals:
     void frameReady(QImage frame);
 
 private:
+    std::unique_ptr<AppSinkFrameSource> m_ownedSource;
     AppSinkFrameSource *m_source = nullptr;
-    bool m_ownsSource = false;
     bool m_started = false;
 };
