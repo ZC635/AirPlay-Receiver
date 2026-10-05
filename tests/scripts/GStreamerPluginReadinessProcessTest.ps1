@@ -70,15 +70,13 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         $process = $native
         $native.EnrollAndResume($job)
         if (-not $process.WaitForExit(45000)) { throw 'Startup probe timed out after 45 seconds' }
-        # All descendants were created after enrollment. Closing the job stops
-        # them before reading file output, with no unbounded pipe-EOF wait.
+        # Initiate descendant cleanup, then boundedly await closed output writers.
+        # Kill-on-close termination can complete after CloseHandle returns.
         [void][AirPlayStartupTestJob]::CloseHandle($job)
         $job = [IntPtr]::Zero
-        $out = [IO.File]::ReadAllText($stdoutFile)
-        $err = [IO.File]::ReadAllText($stderrFile)
-        $name = Split-Path -Leaf $Fixture
-        $out | Set-Content (Join-Path $ReportDirectory "$name-stdout.txt")
-        $err | Set-Content (Join-Path $ReportDirectory "$name-stderr.txt")
+        $captured = [AirPlayStartupTestJob]::ReadFinalOutput($stdoutFile, $stderrFile, 5000)
+        $out = $captured.Stdout
+        $err = $captured.Stderr
         $logs = @(Get-ChildItem -LiteralPath (Join-Path $Fixture 'logs') -Filter '*.log' -ErrorAction SilentlyContinue)
         $diagnostics = ($logs | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
         $diagnostics | Set-Content (Join-Path $ReportDirectory "$name-diagnostics.log")
