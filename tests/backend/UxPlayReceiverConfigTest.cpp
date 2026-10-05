@@ -2179,8 +2179,8 @@ private slots:
         QVERIFY(receiver.applyVideoQuality(quality));
 
         QCOMPARE(receiver.state(), ReceiverState::Idle);
-        QCOMPARE(receiver.m_config.videoQuality.resolution, VideoResolution::P720);
-        QCOMPARE(receiver.m_config.videoQuality.frameRate, VideoFrameRate::Fps15);
+        QCOMPARE(receiver.videoQuality().resolution, VideoResolution::P720);
+        QCOMPARE(receiver.videoQuality().frameRate, VideoFrameRate::Fps15);
     }
 
     void idlePartialVideoQualityBatchPreservesUnchangedFrameRate() {
