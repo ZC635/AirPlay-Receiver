@@ -1,4 +1,5 @@
 #include "platform/WindowsEnvironmentDiagnostics.h"
+#include "platform/CpuCompatibilityDiagnostics.h"
 
 #include "diagnostics/DiagnosticSanitizer.h"
 
@@ -212,6 +213,7 @@ EnvironmentDiagnosticProviders defaultProviders() {
     providers.cpuArchitecture = [](QDeadlineTimer) {
         return DiagnosticFact::available(QSysInfo::currentCpuArchitecture());
     };
+    providers.cpuCapabilities = windowsCpuCompatibilityFact;
     providers.processElevation = [](QDeadlineTimer) {
         HANDLE token = nullptr;
         if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))

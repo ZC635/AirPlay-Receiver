@@ -1,4 +1,5 @@
 #include "platform/EnvironmentDiagnostics.h"
+#include "app/BuildIdentity.h"
 
 #include "diagnostics/DiagnosticSanitizer.h"
 
@@ -143,6 +144,12 @@ EnvironmentSnapshot EnvironmentDiagnostics::collect(const EnvironmentDiagnosticP
     };
     snapshot.operatingSystem = fact(providers.operatingSystem);
     snapshot.cpuArchitecture = fact(providers.cpuArchitecture);
+    if (providers.cpuCapabilities) {
+        snapshot.cpuCapabilitiesCollected = true;
+        snapshot.cpuCapabilities = deadline.hasExpired()
+            ? DiagnosticValue<CpuEnvironmentFact>::timedOut()
+            : timedOutIfExpired(deadline, providers.cpuCapabilities(deadline));
+    }
     snapshot.processElevation = fact(providers.processElevation);
     if (!providers.network) {
         snapshot.network = DiagnosticValue<NetworkEnvironmentFact>::unavailable();
@@ -157,7 +164,7 @@ EnvironmentSnapshot EnvironmentDiagnostics::collect(const EnvironmentDiagnosticP
 QList<DiagnosticEvent> EnvironmentDiagnostics::events(const EnvironmentSnapshot &snapshot) {
     QMap<QString, QString> snapshotFields{
         {QStringLiteral("operating_system"), systemValue(snapshot.operatingSystem)},
-        {QStringLiteral("cpu_architecture"), systemValue(snapshot.cpuArchitecture)},
+        {QStringLiteral("cpu_architecture"), enumValue(snapshot.cpuArchitecture, {QStringLiteral("x86_64"), QStringLiteral("i386"), QStringLiteral("arm64"), QStringLiteral("arm")})},
         {QStringLiteral("process_elevation"), enumValue(snapshot.processElevation,
             {QStringLiteral("elevated"), QStringLiteral("not_elevated")})},
         {QStringLiteral("network"), statusText(snapshot.network.status)},
@@ -180,6 +187,41 @@ QList<DiagnosticEvent> EnvironmentDiagnostics::events(const EnvironmentSnapshot 
     QList<DiagnosticEvent> result;
     result.append(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("environment"),
                                       QStringLiteral("environment_snapshot"), snapshotFields, true));
+    if (snapshot.cpuCapabilitiesCollected) {
+        const auto &cpu = snapshot.cpuCapabilities.value;
+        const QStringList allowedFeatures{QStringLiteral("sse2"), QStringLiteral("sse3"),
+            QStringLiteral("ssse3"), QStringLiteral("sse4_1"), QStringLiteral("sse4_2"),
+            QStringLiteral("popcnt"), QStringLiteral("cx16"), QStringLiteral("avx"),
+            QStringLiteral("avx2"), QStringLiteral("fma")};
+        QStringList hardware, usable;
+        for (const QString &feature : allowedFeatures) {
+            if (cpu.hardwareFeatures.contains(feature)) hardware.append(feature);
+            if (cpu.hardwareFeatures.contains(feature) && cpu.usableFeatures.contains(feature))
+                usable.append(feature);
+        }
+        const auto featuresValue = [&snapshot](const QStringList &features) {
+            if (snapshot.cpuCapabilities.status != DiagnosticFactStatus::Available)
+                return statusText(snapshot.cpuCapabilities.status);
+            return features.isEmpty() ? QStringLiteral("none") : features.join(QLatin1Char(','));
+        };
+        const bool available = snapshot.cpuCapabilities.status == DiagnosticFactStatus::Available;
+        QMap<QString, QString> fields{
+            {QStringLiteral("status"), statusText(snapshot.cpuCapabilities.status)},
+            {QStringLiteral("architecture"), enumValue(snapshot.cpuArchitecture,
+                {QStringLiteral("x86_64"), QStringLiteral("i386"), QStringLiteral("arm64"), QStringLiteral("arm")})},
+            {QStringLiteral("vendor"), available ? enumValue(cpu.vendor,
+                {QStringLiteral("intel"), QStringLiteral("amd"), QStringLiteral("other")})
+                : statusText(snapshot.cpuCapabilities.status)},
+            {QStringLiteral("hardware_features"), featuresValue(hardware)},
+            {QStringLiteral("usable_features"), featuresValue(usable)},
+            {QStringLiteral("avx_os_state"), available ? enumValue(cpu.avxOsState,
+                {QStringLiteral("enabled"), QStringLiteral("disabled")})
+                : statusText(snapshot.cpuCapabilities.status)},
+            {QStringLiteral("build_cpu_policy"), QString::fromUtf16(AirPlayBuildIdentity::cpuBuildPolicy)},
+        };
+        result.append(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("environment"),
+            QStringLiteral("cpu_compatibility"), fields, true));
+    }
     if (snapshot.network.status == DiagnosticFactStatus::Unavailable || !hasNetworkDetails)
         return result;
 

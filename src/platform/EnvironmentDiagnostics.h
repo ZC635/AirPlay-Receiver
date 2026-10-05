@@ -19,6 +19,13 @@ struct DiagnosticFact {
     static DiagnosticFact timedOut();
 };
 
+struct CpuEnvironmentFact {
+    DiagnosticFact vendor;
+    QStringList hardwareFeatures;
+    QStringList usableFeatures;
+    DiagnosticFact avxOsState;
+};
+
 struct NetworkAdapterFact {
     int sessionIndex = 0;
     QString type;
@@ -55,6 +62,8 @@ struct EnvironmentSnapshot {
     DiagnosticFact cpuArchitecture;
     DiagnosticFact processElevation;
     DiagnosticValue<NetworkEnvironmentFact> network;
+    DiagnosticValue<CpuEnvironmentFact> cpuCapabilities;
+    bool cpuCapabilitiesCollected = false;
 };
 
 struct EnvironmentDiagnosticProviders {
@@ -62,6 +71,7 @@ struct EnvironmentDiagnosticProviders {
     std::function<DiagnosticFact(QDeadlineTimer)> cpuArchitecture;
     std::function<DiagnosticFact(QDeadlineTimer)> processElevation;
     std::function<DiagnosticValue<NetworkEnvironmentFact>(QDeadlineTimer)> network;
+    std::function<DiagnosticValue<CpuEnvironmentFact>(QDeadlineTimer)> cpuCapabilities;
 };
 
 bool shouldCollectEnvironmentDiagnostics(bool diagnosticSessionActive);
