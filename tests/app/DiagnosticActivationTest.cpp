@@ -6,6 +6,7 @@
 
 #include "app/DiagnosticActivation.h"
 #include "app/LanguageManager.h"
+#include "diagnostics/DiagnosticSession.h"
 
 #define main diagnosticActivationTestMain
 #include "app/main.cpp"
@@ -63,19 +64,16 @@ private slots:
     void rejectsInvalidAndDuplicateParentPids();
     void repeatedDiagnosticFlagIsIdempotent();
     void ignoresOrdinaryStartupArguments();
-    void directCreationFailureFallsBackToNullMode();
-    void successfulCreationEnablesTitleSuffix();
     void missingSettingsFileIsDefaulted();
     void invalidSettingsFileIsDefaulted();
     void validSettingsObjectIsLoaded();
-    void savedChineseLanguageIsAppliedBeforeDiagnosticStartupDecision();
+    void savedChineseLanguageIsAppliedBeforeDiagnosticStartup();
     void missingStartupCatalogFallsBackToEnglishAndRecordsOneDiagnosticEvent();
     void startupTranslationFailureSurvivesPrivacyFiltering();
     void startupTranslationFailureRedactsUnsupportedSelection();
     void startupSettingsSnapshotSurvivesPrivacyFiltering_data();
     void startupSettingsSnapshotSurvivesPrivacyFiltering();
     void diagnosticLoggingBodiesTranslateWithoutChangingRawDetails();
-    void missingRuntimeAbortsWithoutNormalDiagnosticClose();
     void skippedStandaloneRuntimeAvoidsManifestEntries();
     void incompatibleRuntimePathStopsWithActionableMessage();
     void compatibleRuntimePathContinuesWithoutStartupError();
@@ -88,8 +86,6 @@ private slots:
     void missingCorePluginsInAsciiPathReportsPluginLoadFailure();
     void readyCorePluginsContinueStartup();
     void pluginReadinessFieldsAreBoundedAndPathFree();
-    void inactiveCreatedSessionDoesNotEnableDiagnosticTitle();
-    void queuedPreWindowFailureReachesOneConfiguredHandler();
 };
 
 void DiagnosticActivationTest::normalLaunchIsDisabled() {
@@ -168,23 +164,6 @@ void DiagnosticActivationTest::ignoresOrdinaryStartupArguments() {
     QVERIFY(!activation.enabled);
 }
 
-void DiagnosticActivationTest::directCreationFailureFallsBackToNullMode() {
-    const auto decision = diagnosticStartupDecision(
-        DiagnosticActivation{true, DiagnosticActivationSource::CommandArgument},
-        false, "access denied");
-    QVERIFY(!decision.loggingActive);
-    QVERIFY(decision.continueApplication);
-    QCOMPARE(decision.userError, QString("access denied"));
-}
-
-void DiagnosticActivationTest::successfulCreationEnablesTitleSuffix() {
-    const auto decision = diagnosticStartupDecision(
-        DiagnosticActivation{true, DiagnosticActivationSource::CommandArgument}, true, {});
-    QVERIFY(decision.loggingActive);
-    QVERIFY(decision.continueApplication);
-    QVERIFY(decision.userError.isEmpty());
-}
-
 void DiagnosticActivationTest::missingSettingsFileIsDefaulted() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -214,7 +193,7 @@ void DiagnosticActivationTest::validSettingsObjectIsLoaded() {
     QVERIFY(settingsFileContainsObject(file.fileName()));
 }
 
-void DiagnosticActivationTest::savedChineseLanguageIsAppliedBeforeDiagnosticStartupDecision() {
+void DiagnosticActivationTest::savedChineseLanguageIsAppliedBeforeDiagnosticStartup() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     AppSettings saved = AppSettings::defaults();
@@ -232,6 +211,7 @@ void DiagnosticActivationTest::savedChineseLanguageIsAppliedBeforeDiagnosticStar
     QCOMPARE(settingsLoadCount, 1);
     QCOMPARE(startupSettings.settings.language(), QStringLiteral("zh-CN"));
 
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance());
     LanguageManager languageManager(QCoreApplication::instance(), nullptr,
                                     [] { return std::make_unique<QTranslator>(); },
                                     [](QTranslator *, const QString &) { return true; });
@@ -241,9 +221,12 @@ void DiagnosticActivationTest::savedChineseLanguageIsAppliedBeforeDiagnosticStar
     QVERIFY(!failure.has_value());
     QCOMPARE(languageManager.selection(), QStringLiteral("zh-CN"));
     QCOMPARE(languageManager.effectiveLanguage(), QStringLiteral("zh-CN"));
-    QVERIFY(diagnosticStartupDecision(
-                DiagnosticActivation{true, DiagnosticActivationSource::CommandArgument}, true, {})
-                .loggingActive);
+    DiagnosticLifecycleStart start;
+    start.applicationDirectory = directory.path();
+    start.activation = {true, DiagnosticActivationSource::CommandArgument};
+    const auto result = diagnostics.start(std::move(start));
+    QVERIFY(result.creationError.isEmpty());
+    QVERIFY(diagnostics.loggingActive());
 }
 
 void DiagnosticActivationTest::missingStartupCatalogFallsBackToEnglishAndRecordsOneDiagnosticEvent() {
@@ -265,7 +248,7 @@ void DiagnosticActivationTest::missingStartupCatalogFallsBackToEnglishAndRecords
     QCOMPARE(QCoreApplication::translate("Startup", "Diagnostic logging unavailable"),
              QStringLiteral("Diagnostic logging unavailable"));
     languageManager.setDiagnosticSink(&sink);
-    recordStartupLanguageFailure(&sink, failure);
+    sink.record(*startupLanguageFailureEvent(failure));
     QCOMPARE(sink.events.size(), 1);
     QCOMPARE(sink.events.constFirst().name, QStringLiteral("translation_load_failed"));
     QCOMPARE(sink.events.constFirst().severity, DiagnosticSeverity::Warning);
@@ -291,9 +274,9 @@ void DiagnosticActivationTest::startupTranslationFailureSurvivesPrivacyFiltering
     auto created = DiagnosticSession::create(std::move(options));
     QVERIFY2(created.session != nullptr, qPrintable(created.error));
 
-    recordStartupLanguageFailure(created.session.get(),
-                                TranslationLoadFailure{QStringLiteral("zh-CN"),
-                                    QStringLiteral(":/i18n/airplay_zh_CN.qm")});
+    created.session->record(*startupLanguageFailureEvent(
+        TranslationLoadFailure{QStringLiteral("zh-CN"),
+                               QStringLiteral(":/i18n/airplay_zh_CN.qm")}));
 
     QFile log(created.session->filePath());
     QVERIFY(log.open(QIODevice::ReadOnly));
@@ -317,9 +300,9 @@ void DiagnosticActivationTest::startupTranslationFailureRedactsUnsupportedSelect
     auto created = DiagnosticSession::create(std::move(options));
     QVERIFY2(created.session != nullptr, qPrintable(created.error));
 
-    recordStartupLanguageFailure(created.session.get(),
-                                TranslationLoadFailure{QStringLiteral("Private language value"),
-                                    QStringLiteral("C:/Users/Private/catalog.qm")});
+    created.session->record(*startupLanguageFailureEvent(
+        TranslationLoadFailure{QStringLiteral("Private language value"),
+                               QStringLiteral("C:/Users/Private/catalog.qm")}));
 
     QFile log(created.session->filePath());
     QVERIFY(log.open(QIODevice::ReadOnly));
@@ -395,14 +378,6 @@ void DiagnosticActivationTest::diagnosticLoggingBodiesTranslateWithoutChangingRa
              QString::fromUtf8(u8"无法启动诊断日志：access denied"));
     QCOMPARE(diagnosticLoggingStoppedMessage(QStringLiteral("disk full")),
              QString::fromUtf8(u8"诊断日志已停止：disk full"));
-}
-
-void DiagnosticActivationTest::missingRuntimeAbortsWithoutNormalDiagnosticClose() {
-    const auto decision = diagnosticShutdownDecision(false);
-
-    QVERIFY(decision.recordStartupAborted);
-    QVERIFY(!decision.recordShutdownStarted);
-    QVERIFY(!decision.closeNormally);
 }
 
 void DiagnosticActivationTest::skippedStandaloneRuntimeAvoidsManifestEntries() {
@@ -563,21 +538,6 @@ void DiagnosticActivationTest::pluginReadinessFieldsAreBoundedAndPathFree() {
     QCOMPARE(fields.value("has_non_ascii"), QString("yes"));
     QCOMPARE(fields.value("reason"), QString("path_load_failure"));
     QVERIFY(!fields.values().join(' ').contains(QStringLiteral("C:\\")));
-}
-
-void DiagnosticActivationTest::inactiveCreatedSessionDoesNotEnableDiagnosticTitle() {
-    QVERIFY(!diagnosticLoggingActiveForSession(true, false));
-}
-
-void DiagnosticActivationTest::queuedPreWindowFailureReachesOneConfiguredHandler() {
-    DiagnosticWriteFailureRelay relay;
-    int handled = 0;
-    QMetaObject::invokeMethod(QCoreApplication::instance(), [&relay] {
-        relay.deliver("disk full");
-    }, Qt::QueuedConnection);
-    relay.setHandler([&handled](QString) { ++handled; });
-
-    QTRY_COMPARE(handled, 1);
 }
 
 QTEST_GUILESS_MAIN(DiagnosticActivationTest)
