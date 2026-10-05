@@ -215,14 +215,14 @@ class UxPlayReceiverConfigTest : public QObject {
     Q_OBJECT
 
 private slots:
+#if AIRPLAY_WITH_UXPLAY
     void initTestCase() {
-#if AIRPLAY_WITH_UXPLAY
         gst_init(nullptr, nullptr);
-#endif
     }
+#endif
 
-    void sampleTapCallbacksUseExactBorrowedSampleAbi() {
 #if AIRPLAY_WITH_UXPLAY
+    void sampleTapCallbacksUseExactBorrowedSampleAbi() {
         using SampleTap = void (*)(GstSample *, void *);
         static_assert(std::is_same_v<decltype(&UxPlayReceiver::videoSampleTap), SampleTap>);
         static_assert(std::is_same_v<decltype(&UxPlayReceiver::audioSampleTap), SampleTap>);
@@ -259,11 +259,11 @@ private slots:
         QVERIFY(receiver.m_recordingController->available());
         gst_sample_unref(audio);
         gst_sample_unref(video);
-#endif
     }
+#endif
 
-    void fullRecordingQueueDropsTapImmediatelyWithoutLeakingSampleRef() {
 #if AIRPLAY_WITH_UXPLAY
+    void fullRecordingQueueDropsTapImmediatelyWithoutLeakingSampleRef() {
         TapControllerEnvironment environment;
         environment.blockVideoPush.store(true);
         UxPlayReceiverConfig config;
@@ -325,11 +325,11 @@ private slots:
 
         environment.releaseVideoPush.store(true);
         receiver.m_recordingController->discard();
-#endif
     }
+#endif
 
-    void recordingAvailabilityTracksVideoTapDisconnectResetAndCleanup() {
 #if AIRPLAY_WITH_UXPLAY
+    void recordingAvailabilityTracksVideoTapDisconnectResetAndCleanup() {
         FakeMdnsPublishing publisher;
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Recording Availability Test";
@@ -387,11 +387,11 @@ private slots:
         receiver.stop();
         QVERIFY(!receiver.recordingAvailable());
         QCOMPARE(availabilitySpy.last().at(0).toBool(), false);
-#endif
     }
+#endif
 
-    void h265RendererResetKeepsH265TapPathRecordable() {
 #if AIRPLAY_WITH_UXPLAY
+    void h265RendererResetKeepsH265TapPathRecordable() {
         FakeMdnsPublishing publisher;
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver H265 Recording Reset Test";
@@ -424,11 +424,11 @@ private slots:
         gst_sample_unref(afterReset);
         QTRY_VERIFY(receiver.recordingAvailable());
         receiver.stop();
-#endif
     }
+#endif
 
-    void onVideoPlayResetDoesNotEndRecordingOrDisableCurrentTap() {
 #if AIRPLAY_WITH_UXPLAY
+    void onVideoPlayResetDoesNotEndRecordingOrDisableCurrentTap() {
         TapControllerEnvironment environment;
         FakeMdnsPublishing publisher;
         UxPlayReceiverConfig config;
@@ -459,11 +459,11 @@ private slots:
         QCOMPARE(environment.discardCalls.load(), 0);
         receiver.discardRecording();
         receiver.stop();
-#endif
     }
+#endif
 
-    void videoResetClearsOldTapBeforeDestroyAndRegistersNewTapBeforeInit() {
 #if AIRPLAY_WITH_UXPLAY
+    void videoResetClearsOldTapBeforeDestroyAndRegistersNewTapBeforeInit() {
         FakeMdnsPublishing publisher;
         QStringList calls;
         UxPlayReceiverConfig config;
@@ -500,11 +500,11 @@ private slots:
         QVERIFY(displaySink != nullptr);
         gst_object_unref(displaySink);
         receiver.stop();
-#endif
     }
+#endif
 
-    void videoResetCodecSelectionFailureIsBrokenBackendError() {
 #if AIRPLAY_WITH_UXPLAY
+    void videoResetCodecSelectionFailureIsBrokenBackendError() {
         FakeMdnsPublishing publisher;
         QStringList calls;
         int chooseCalls = 0;
@@ -550,11 +550,11 @@ private slots:
         QVERIFY(calls.contains(QStringLiteral("cleanup_after_recording_boundary")));
         QVERIFY(calls.contains(QStringLiteral("video_renderer_destroy")));
         QVERIFY(calls.contains(QStringLiteral("audio_renderer_destroy")));
-#endif
     }
+#endif
 
-    void receiverStopWaitsForRecordingFinalizeBeforeClearingRendererTaps() {
 #if AIRPLAY_WITH_UXPLAY
+    void receiverStopWaitsForRecordingFinalizeBeforeClearingRendererTaps() {
         TapControllerEnvironment environment;
         environment.blockFinalize.store(true);
         bool clearSawFinalizeCompleted = false;
@@ -619,11 +619,11 @@ private slots:
         QVERIFY(cleanupBoundarySawFinalizeCompleted);
         QVERIFY(clearSawFinalizeCompleted);
         QCOMPARE(finalizingSignalThread, receiver.thread());
-#endif
     }
+#endif
 
-    void recoverableBackendErrorFinalizesAndSavesBeforeRendererCleanup() {
 #if AIRPLAY_WITH_UXPLAY
+    void recoverableBackendErrorFinalizesAndSavesBeforeRendererCleanup() {
         TapControllerEnvironment environment;
         FakeMdnsPublishing publisher;
         CollectingSink sink;
@@ -680,11 +680,11 @@ private slots:
         QCOMPARE(failure.fields.value(QStringLiteral("result")), QStringLiteral("failed"));
         QVERIFY(failure.flushImmediately);
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("Injected recoverable backend error")));
-#endif
     }
+#endif
 
-    void recoverableBackendErrorForwardsFinalizeFailureBeforeRendererCleanup() {
 #if AIRPLAY_WITH_UXPLAY
+    void recoverableBackendErrorForwardsFinalizeFailureBeforeRendererCleanup() {
         TapControllerEnvironment environment;
         environment.finalizeSucceeds = false;
         environment.finalizeError = QStringLiteral("Injected safe finalize failure");
@@ -737,11 +737,11 @@ private slots:
         QCOMPARE(environment.discardCalls.load(), 1);
         QVERIFY(cleanupSawFailedRecording);
         QCOMPARE(failedThread, receiver.thread());
-#endif
     }
+#endif
 
-    void brokenBackendEndsRecordingWithoutUnsafeFinalize() {
 #if AIRPLAY_WITH_UXPLAY
+    void brokenBackendEndsRecordingWithoutUnsafeFinalize() {
         TapControllerEnvironment environment;
         FakeMdnsPublishing publisher;
         bool cleanupSawAbortedRecording = false;
@@ -785,11 +785,11 @@ private slots:
         QCOMPARE(environment.discardCalls.load(), 1);
         QVERIFY(cleanupSawAbortedRecording);
         QCOMPARE(failedThread, receiver.thread());
-#endif
     }
+#endif
 
-    void receiverDestructorDiscardsActiveRecordingInsteadOfAutoSaving() {
 #if AIRPLAY_WITH_UXPLAY
+    void receiverDestructorDiscardsActiveRecordingInsteadOfAutoSaving() {
         TapControllerEnvironment environment;
         UxPlayReceiverConfig config;
         config.recordingControllerHooks = environment.hooks();
@@ -810,11 +810,11 @@ private slots:
         QCOMPARE(environment.finalizeCalls.load(), 0);
         QCOMPARE(environment.commitCalls.load(), 0);
         QCOMPARE(environment.discardCalls.load(), 1);
-#endif
     }
+#endif
 
-    void recordingContractMethodsAndSignalsForwardToController() {
 #if AIRPLAY_WITH_UXPLAY
+    void recordingContractMethodsAndSignalsForwardToController() {
         TapControllerEnvironment environment;
         UxPlayReceiverConfig config;
         config.recordingControllerHooks = environment.hooks();
@@ -857,11 +857,11 @@ private slots:
         receiver.discardRecording();
         QCOMPARE(receiver.recordingState(), RecordingState::Idle);
         QCOMPARE(finishedSpy.count(), 1);
-#endif
     }
+#endif
 
-    void qualityRestartUpdatesFallbackFrameRateForNextRecordingSession() {
 #if AIRPLAY_WITH_UXPLAY
+    void qualityRestartUpdatesFallbackFrameRateForNextRecordingSession() {
         TapControllerEnvironment environment;
         FakeMdnsPublishing publisher;
         UxPlayReceiverConfig config;
@@ -914,11 +914,11 @@ private slots:
         QCOMPARE(environment.configs().at(1).video.fpsDenominator, 1);
         receiver.discardRecording();
         receiver.stop();
-#endif
     }
+#endif
 
-    void recordingControllerAndRendererTapLifecycleUseRequiredOrder() {
 #if AIRPLAY_WITH_UXPLAY
+    void recordingControllerAndRendererTapLifecycleUseRequiredOrder() {
         FakeMdnsPublishing publisher;
         QStringList calls;
         UxPlayReceiverConfig config;
@@ -943,8 +943,8 @@ private slots:
         QVERIFY(indexOf("video_renderer_destroy") > indexOf("video_clear_sample_callback"));
         QVERIFY(indexOf("audio_clear_sample_callback") >= 0);
         QVERIFY(indexOf("audio_renderer_destroy") > indexOf("audio_clear_sample_callback"));
-#endif
     }
+#endif
 
     void defaultConfigUsesWindowsFriendlySinks() {
         const UxPlayReceiverConfig config;
@@ -953,8 +953,8 @@ private slots:
         QVERIFY(config.audioSink.contains("wasapi") || config.audioSink == "autoaudiosink");
     }
 
-    void startWithoutUxPlayReportsBuildError() {
 #if !AIRPLAY_WITH_UXPLAY
+    void startWithoutUxPlayReportsBuildError() {
         UxPlayReceiver receiver;
         QSignalSpy stateSpy(&receiver, &AirPlayReceiver::stateChanged);
         QSignalSpy errorSpy(&receiver, &AirPlayReceiver::errorChanged);
@@ -965,11 +965,11 @@ private slots:
         QCOMPARE(stateSpy.count(), 1);
         QCOMPARE(errorSpy.count(), 1);
         QCOMPARE(errorSpy.at(0).at(0).toString(), QString("UxPlay support is not enabled in this build"));
-#endif
     }
+#endif
 
-    void startWithUxPlayStartsReceiverLifecycle() {
 #if AIRPLAY_WITH_UXPLAY
+    void startWithUxPlayStartsReceiverLifecycle() {
         FakeMdnsPublishing publisher;
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Test";
@@ -991,11 +991,11 @@ private slots:
 
         receiver.stop();
         QCOMPARE(receiver.state(), ReceiverState::Idle);
-#endif
     }
+#endif
 
-    void startAndStopUseInjectedMdnsPublisherForDiscoveryLifecycle() {
 #if AIRPLAY_WITH_UXPLAY
+    void startAndStopUseInjectedMdnsPublisherForDiscoveryLifecycle() {
         FakeMdnsPublishing publisher;
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Publishing Seam Test";
@@ -1022,11 +1022,11 @@ private slots:
 
         QCOMPARE(receiver.state(), ReceiverState::Idle);
         QVERIFY(publisher.stopCalls >= 1);
-#endif
     }
+#endif
 
-    void publishFailurePreventsUxPlayReceiverFromBecomingDiscoverable() {
 #if AIRPLAY_WITH_UXPLAY
+    void publishFailurePreventsUxPlayReceiverFromBecomingDiscoverable() {
         FakeMdnsPublishing publisher;
         publisher.publishResult = false;
         UxPlayReceiverConfig config;
@@ -1044,11 +1044,11 @@ private slots:
         QVERIFY(errorSpy.count() >= 1);
         QCOMPARE(errorSpy.last().at(0).toString(), QString("Failed to publish mDNS services"));
         QVERIFY(publisher.stopCalls >= 1);
-#endif
     }
+#endif
 
-    void defaultConfigCreatesOwnedMdnsPublisherOnSuccessfulStart() {
 #if AIRPLAY_WITH_UXPLAY
+    void defaultConfigCreatesOwnedMdnsPublisherOnSuccessfulStart() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Default Publisher Test";
         config.videoSink = "fakesink";
@@ -1065,11 +1065,11 @@ private slots:
         QVERIFY(receiver.m_config.mdnsPublisher == nullptr);
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void stoppedUxPlayReceiverIgnoresLateCallbackState() {
 #if AIRPLAY_WITH_UXPLAY
+    void stoppedUxPlayReceiverIgnoresLateCallbackState() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Late Callback Test";
         config.videoSink = "fakesink";
@@ -1083,11 +1083,11 @@ private slots:
         receiver.setStateFromUxPlayCallback(ReceiverState::Discoverable);
 
         QCOMPARE(receiver.state(), ReceiverState::Idle);
-#endif
     }
+#endif
 
-    void stoppedUxPlayReceiverIgnoresLateVideoReset() {
 #if AIRPLAY_WITH_UXPLAY
+    void stoppedUxPlayReceiverIgnoresLateVideoReset() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Late Video Reset Test";
         config.videoSink = "fakesink";
@@ -1101,11 +1101,11 @@ private slots:
         receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
 
         QCOMPARE(receiver.state(), ReceiverState::Idle);
-#endif
     }
+#endif
 
-    void clientVolumeCallbackReturnsCurrentVolumeAsAirPlayDb() {
 #if AIRPLAY_WITH_UXPLAY
+    void clientVolumeCallbackReturnsCurrentVolumeAsAirPlayDb() {
         UxPlayReceiver receiver;
 
         receiver.setVolume(0.0);
@@ -1116,11 +1116,11 @@ private slots:
 
         receiver.setVolume(0.5);
         QVERIFY(std::abs(receiver.currentVolumeForUxPlayClientVolumeCallback() - (20.0 * std::log10(0.5))) < 0.000001);
-#endif
     }
+#endif
 
-    void uxPlayVolumeCallbackEmitsNormalizedVolume() {
 #if AIRPLAY_WITH_UXPLAY
+    void uxPlayVolumeCallbackEmitsNormalizedVolume() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         QSignalSpy volumeSpy(&receiver, &AirPlayReceiver::volumeChanged);
@@ -1129,11 +1129,11 @@ private slots:
 
         QCOMPARE(volumeSpy.count(), 1);
         QCOMPARE(volumeSpy.at(0).at(0).toDouble(), 0.4);
-#endif
     }
+#endif
 
-    void uxPlayVolumeLogUpdatesReceiverVolume() {
 #if AIRPLAY_WITH_UXPLAY
+    void uxPlayVolumeLogUpdatesReceiverVolume() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         QSignalSpy volumeSpy(&receiver, &AirPlayReceiver::volumeChanged);
@@ -1142,11 +1142,11 @@ private slots:
 
         QCOMPARE(volumeSpy.count(), 1);
         QVERIFY(std::abs(volumeSpy.at(0).at(0).toDouble() - std::pow(10.0, 0.05 * -15.0)) < 0.000001);
-#endif
     }
+#endif
 
-    void callbackDispatchRejectsStaleGenerationUniformly() {
 #if AIRPLAY_WITH_UXPLAY
+    void callbackDispatchRejectsStaleGenerationUniformly() {
         std::atomic_bool acceptingCallbacks = true;
         std::atomic<quint64> callbackGeneration = 7;
         std::atomic_bool renderersStarted = true;
@@ -1161,11 +1161,11 @@ private slots:
 
         QCOMPARE(stateCallbackCount, 0);
         QCOMPARE(resetCallbackCount, 0);
-#endif
     }
+#endif
 
-    void callbackDispatchGuardsRendererStartedUniformly() {
 #if AIRPLAY_WITH_UXPLAY
+    void callbackDispatchGuardsRendererStartedUniformly() {
         std::atomic_bool acceptingCallbacks = true;
         std::atomic<quint64> callbackGeneration = 7;
         std::atomic_bool renderersStarted = false;
@@ -1180,11 +1180,11 @@ private slots:
 
         QCOMPARE(audioCallbackCount, 0);
         QCOMPARE(videoCallbackCount, 0);
-#endif
     }
+#endif
 
-    void uxPlayReceiverRejectsStaleGenerationAcrossCallbackPaths() {
 #if AIRPLAY_WITH_UXPLAY
+    void uxPlayReceiverRejectsStaleGenerationAcrossCallbackPaths() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(7);
@@ -1198,11 +1198,11 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Connected);
         QVERIFY(receiver.m_videoRendererStopped.load());
         receiver.m_renderersStarted.store(false);
-#endif
     }
+#endif
 
-    void uxPlayReceiverRejectsStaleGenerationBeforeConnectionRendererMutation() {
 #if AIRPLAY_WITH_UXPLAY
+    void uxPlayReceiverRejectsStaleGenerationBeforeConnectionRendererMutation() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(7);
@@ -1216,11 +1216,11 @@ private slots:
         receiver.stopVideoPipelineForDisconnect(6);
         QVERIFY(!receiver.m_videoRendererStopped.load());
         receiver.m_renderersStarted.store(false);
-#endif
     }
+#endif
 
-    void uxPlayReceiverGuardsRendererStartedAcrossCallbackPaths() {
 #if AIRPLAY_WITH_UXPLAY
+    void uxPlayReceiverGuardsRendererStartedAcrossCallbackPaths() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(7);
@@ -1231,11 +1231,11 @@ private slots:
         receiver.m_videoRendererStopped.store(true);
         receiver.restartVideoPipelineForConnect();
         QVERIFY(receiver.m_videoRendererStopped.load());
-#endif
     }
+#endif
 
-    void queuedCoverArtCallbackRevalidatesGenerationBeforeEmit() {
 #if AIRPLAY_WITH_UXPLAY
+    void queuedCoverArtCallbackRevalidatesGenerationBeforeEmit() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(7);
@@ -1248,11 +1248,11 @@ private slots:
         QCoreApplication::processEvents();
 
         QCOMPARE(coverArtSpy.count(), 0);
-#endif
     }
+#endif
 
-    void queuedMetadataCallbackRevalidatesGenerationBeforeEmit() {
 #if AIRPLAY_WITH_UXPLAY
+    void queuedMetadataCallbackRevalidatesGenerationBeforeEmit() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(7);
@@ -1278,11 +1278,11 @@ private slots:
         QCoreApplication::processEvents();
 
         QCOMPARE(metadataSpy.count(), 0);
-#endif
     }
+#endif
 
-    void queuedProgressCallbackRevalidatesGenerationBeforeEmit() {
 #if AIRPLAY_WITH_UXPLAY
+    void queuedProgressCallbackRevalidatesGenerationBeforeEmit() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(7);
@@ -1294,11 +1294,11 @@ private slots:
         QCoreApplication::processEvents();
 
         QCOMPARE(progressSpy.count(), 0);
-#endif
     }
+#endif
 
-    void staleCallbackContextAfterRestartCannotMutateReceiver() {
 #if AIRPLAY_WITH_UXPLAY
+    void staleCallbackContextAfterRestartCannotMutateReceiver() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(8);
@@ -1308,11 +1308,11 @@ private slots:
         receiver.setStateFromUxPlayCallback(ReceiverState::Connected, oldContext.generation);
 
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
-#endif
     }
+#endif
 
-    void closedCallbackContextRejectsNewCallbacks() {
 #if AIRPLAY_WITH_UXPLAY
+    void closedCallbackContextRejectsNewCallbacks() {
         UxPlayReceiver receiver;
         UxPlayReceiver::CallbackContext context(&receiver, 7);
         UxPlayReceiver *enteredReceiver = nullptr;
@@ -1326,11 +1326,11 @@ private slots:
         enteredReceiver = &receiver;
         QVERIFY(!context.enter(&enteredReceiver));
         QVERIFY(enteredReceiver == nullptr);
-#endif
     }
+#endif
 
-    void callbackContextCloseWaitsForInflightCallback() {
 #if AIRPLAY_WITH_UXPLAY
+    void callbackContextCloseWaitsForInflightCallback() {
         UxPlayReceiver receiver;
         UxPlayReceiver::CallbackContext context(&receiver, 7);
         UxPlayReceiver *enteredReceiver = nullptr;
@@ -1354,11 +1354,11 @@ private slots:
         context.leave();
         QVERIFY(closer.wait(1000));
         QVERIFY(closeReturned.load());
-#endif
     }
+#endif
 
-    void staleVolumeLogCallbackAfterRestartCannotMutateReceiver() {
 #if AIRPLAY_WITH_UXPLAY
+    void staleVolumeLogCallbackAfterRestartCannotMutateReceiver() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(8);
@@ -1367,11 +1367,11 @@ private slots:
         receiver.handleLogMessageFromUxPlayCallback(LOGGER_DEBUG, "volume: -15.000000 ", 7);
 
         QCOMPARE(volumeSpy.count(), 0);
-#endif
     }
+#endif
 
-    void queuedVideoSizeCallbackRevalidatesGenerationBeforeEmit() {
 #if AIRPLAY_WITH_UXPLAY
+    void queuedVideoSizeCallbackRevalidatesGenerationBeforeEmit() {
         UxPlayReceiver receiver;
         receiver.m_acceptingCallbacks.store(true);
         receiver.m_callbackGeneration.store(7);
@@ -1383,11 +1383,11 @@ private slots:
         QCoreApplication::processEvents();
 
         QCOMPARE(sizeSpy.count(), 0);
-#endif
     }
+#endif
 
-    void discoverableReceiverNameChangeRestartsDiscoveryOnly() {
 #if AIRPLAY_WITH_UXPLAY
+    void discoverableReceiverNameChangeRestartsDiscoveryOnly() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Before Rename";
         config.videoSink = "fakesink";
@@ -1414,11 +1414,11 @@ private slots:
         }
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void disconnectRestartTracksStoppedVideoRendererAtomically() {
 #if AIRPLAY_WITH_UXPLAY
+    void disconnectRestartTracksStoppedVideoRendererAtomically() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Video Restart Test";
         config.videoSink = "fakesink";
@@ -1435,11 +1435,11 @@ private slots:
         QVERIFY(!receiver.m_videoRendererStopped.load());
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void lateVideoResetAfterDisconnectDoesNotRecreateRenderer() {
 #if AIRPLAY_WITH_UXPLAY
+    void lateVideoResetAfterDisconnectDoesNotRecreateRenderer() {
         CollectingSink sink;
         UxPlayReceiverConfig config;
         config.diagnosticSink = &sink;
@@ -1459,11 +1459,11 @@ private slots:
         receiver.stop();
 
         QCOMPARE(countEvents(sink, QStringLiteral("reset")), 0);
-#endif
     }
+#endif
 
-    void clientRequestRecordsOnlySafeModel() {
 #if AIRPLAY_WITH_UXPLAY
+    void clientRequestRecordsOnlySafeModel() {
         UxPlayReceiverConfig config;
         CollectingSink sink;
         config.diagnosticSink = &sink;
@@ -1479,11 +1479,11 @@ private slots:
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("device_id")));
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("client_name")));
         QVERIFY(event.flushImmediately);
-#endif
     }
+#endif
 
-    void boundedCallbackStringsNeverReadPastDiagnosticLimits() {
 #if AIRPLAY_WITH_UXPLAY
+    void boundedCallbackStringsNeverReadPastDiagnosticLimits() {
         UxPlayReceiverConfig config;
         CollectingSink sink;
         config.diagnosticSink = &sink;
@@ -1502,11 +1502,11 @@ private slots:
         QVERIFY(!client.fields.contains(QStringLiteral("model")));
         QCOMPARE(countEvents(sink, QStringLiteral("message_suppressed")), 1);
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("xxxxxxxx")));
-#endif
     }
+#endif
 
-    void suppressedUxPlayMessagesKeepUpstreamSeverityWithoutRawText() {
 #if AIRPLAY_WITH_UXPLAY
+    void suppressedUxPlayMessagesKeepUpstreamSeverityWithoutRawText() {
         UxPlayReceiverConfig config;
         CollectingSink sink;
         config.diagnosticSink = &sink;
@@ -1528,11 +1528,11 @@ private slots:
             QVERIFY(event.flushImmediately);
         }
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("private")));
-#endif
     }
+#endif
 
-    void productionClientRequestCallbackOnlyRecordsSafeModel() {
 #if AIRPLAY_WITH_UXPLAY
+    void productionClientRequestCallbackOnlyRecordsSafeModel() {
         UxPlayReceiverConfig config;
         CollectingSink sink;
         config.diagnosticSink = &sink;
@@ -1560,11 +1560,11 @@ private slots:
             &stale, deviceId, model, name, &admit);
         QVERIFY(admit);
         QCOMPARE(sink.events.size(), 0);
-#endif
     }
+#endif
 
-    void connectionResetIsOnlyReportedOncePerCallbackGeneration() {
 #if AIRPLAY_WITH_UXPLAY
+    void connectionResetIsOnlyReportedOncePerCallbackGeneration() {
         UxPlayReceiverConfig config;
         CollectingSink sink;
         config.diagnosticSink = &sink;
@@ -1584,11 +1584,11 @@ private slots:
         receiver.handleConnectionInitializedFromUxPlayCallback(2);
         receiver.handleConnectionResetFromUxPlayCallback(1, 2);
         QCOMPARE(countEvents(sink, QStringLiteral("reset")), 2);
-#endif
     }
+#endif
 
-    void startupRecordsOrderedInitializationFacts() {
 #if AIRPLAY_WITH_UXPLAY
+    void startupRecordsOrderedInitializationFacts() {
         CollectingSink sink;
         UxPlayReceiverConfig config;
         config.diagnosticSink = &sink;
@@ -1611,11 +1611,11 @@ private slots:
             QStringLiteral("raop_init"), QStringLiteral("pairing_init"),
             QStringLiteral("discovery_start")}));
         receiver.stop();
-#endif
     }
+#endif
 
-    void audioCompressionRecordsOnlyKnownCodecAndStartFacts() {
 #if AIRPLAY_WITH_UXPLAY
+    void audioCompressionRecordsOnlyKnownCodecAndStartFacts() {
         CollectingSink sink;
         UxPlayReceiverConfig config;
         config.diagnosticSink = &sink;
@@ -1662,11 +1662,11 @@ private slots:
             rejected.callbackGenerationForUxPlayCallback() - 1);
         QCOMPARE(sink.events.size(), 0);
         rejected.stop();
-#endif
     }
+#endif
 
-    void unsafeClientModelAndMediaPayloadsNeverReachDiagnosticSink() {
 #if AIRPLAY_WITH_UXPLAY
+    void unsafeClientModelAndMediaPayloadsNeverReachDiagnosticSink() {
         UxPlayReceiverConfig config;
         CollectingSink sink;
         config.diagnosticSink = &sink;
@@ -1690,11 +1690,11 @@ private slots:
         QVERIFY(!event.fields.contains(QStringLiteral("model")));
         QVERIFY(!joinedFields(sink).contains(coverArt));
         QVERIFY(!joinedFields(sink).contains(QStringLiteral("Alice")));
-#endif
     }
+#endif
 
-    void uxPlayLogsTranslateReviewedFactsAndSuppressAllOtherMessages() {
 #if AIRPLAY_WITH_UXPLAY
+    void uxPlayLogsTranslateReviewedFactsAndSuppressAllOtherMessages() {
         UxPlayReceiverConfig config;
         CollectingSink sink;
         config.diagnosticSink = &sink;
@@ -1722,11 +1722,11 @@ private slots:
         for (const auto &event : sink.events) {
             QVERIFY(event.flushImmediately);
         }
-#endif
     }
+#endif
 
-    void coverArtCallbacksDoNotRestartVideoRenderer() {
 #if AIRPLAY_WITH_UXPLAY
+    void coverArtCallbacksDoNotRestartVideoRenderer() {
         CollectingSink sink;
         UxPlayReceiverConfig config;
         config.diagnosticSink = &sink;
@@ -1749,11 +1749,11 @@ private slots:
 
         QCOMPARE(coverArtSpy.at(0).at(0).toByteArray(), coverArt);
         QVERIFY(!joinedFields(sink).contains(coverArt));
-#endif
     }
+#endif
 
-    void discoverableReceiverNameAcceptedEagerly() {
 #if AIRPLAY_WITH_UXPLAY
+    void discoverableReceiverNameAcceptedEagerly() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Failure Test";
         config.videoSink = "fakesink";
@@ -1771,11 +1771,11 @@ private slots:
 
         receiver.stop();
         QCOMPARE(receiver.state(), ReceiverState::Idle);
-#endif
     }
+#endif
 
-    void renameRecoveryWhenRestartSucceedsDoesNotLeaveError() {
 #if AIRPLAY_WITH_UXPLAY
+    void renameRecoveryWhenRestartSucceedsDoesNotLeaveError() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Recovery Test";
         config.videoSink = "fakesink";
@@ -1799,11 +1799,11 @@ private slots:
 
         receiver.stop();
         QCOMPARE(receiver.state(), ReceiverState::Idle);
-#endif
     }
+#endif
 
-    void doubleRenameDoesNotRaceRestart() {
 #if AIRPLAY_WITH_UXPLAY
+    void doubleRenameDoesNotRaceRestart() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Double Rename Test";
         config.videoSink = "fakesink";
@@ -1821,11 +1821,11 @@ private slots:
         QCOMPARE(errorSpy.count(), 0);
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void rtpShutdownRecreatesVideoRenderer() {
 #if AIRPLAY_WITH_UXPLAY
+    void rtpShutdownRecreatesVideoRenderer() {
         CollectingSink sink;
         UxPlayReceiverConfig config;
         config.diagnosticSink = &sink;
@@ -1845,11 +1845,11 @@ private slots:
 
         QVERIFY(hasEvent(sink, QStringLiteral("renderer_started")));
         QVERIFY(hasEvent(sink, QStringLiteral("reset")));
-#endif
     }
+#endif
 
-    void videoResetReattachesAppsinkFrameBridge() {
 #if AIRPLAY_WITH_UXPLAY
+    void videoResetReattachesAppsinkFrameBridge() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Appsink Reset Test";
         config.videoSink = "appsink";
@@ -1892,11 +1892,11 @@ private slots:
         QVERIFY(appsinkHasOneFrameHandler());
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void workerCodecSelectionAttachesFrameBridgeOnReceiverThread() {
 #if AIRPLAY_WITH_UXPLAY
+    void workerCodecSelectionAttachesFrameBridgeOnReceiverThread() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Worker Codec Thread Test";
         config.videoSink = "appsink";
@@ -1921,11 +1921,11 @@ private slots:
         QCOMPARE(receiver.m_videoFrameBridge->thread(), receiver.thread());
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void queuedWorkerCodecSelectionSkipsStaleGeneration() {
 #if AIRPLAY_WITH_UXPLAY
+    void queuedWorkerCodecSelectionSkipsStaleGeneration() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Stale Codec Generation Test";
         config.videoSink = "appsink";
@@ -1950,11 +1950,11 @@ private slots:
         QVERIFY(receiver.m_videoFrameBridge == nullptr);
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void queuedWorkerCodecSelectionSkipsStoppedRenderer() {
 #if AIRPLAY_WITH_UXPLAY
+    void queuedWorkerCodecSelectionSkipsStoppedRenderer() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Stopped Codec Renderer Test";
         config.videoSink = "appsink";
@@ -1979,8 +1979,8 @@ private slots:
         QVERIFY(receiver.m_videoFrameBridge == nullptr);
 
         receiver.stop();
-#endif
     }
+#endif
 
     void fakeReceiverRecordsLastVideoFitMode() {
         FakeAirPlayReceiver fake;
@@ -1991,8 +1991,8 @@ private slots:
         QVERIFY(!fake.lastVideoFitMode());
     }
 
-    void uxplayReceiverStoresVideoFitMode() {
 #if AIRPLAY_WITH_UXPLAY
+    void uxplayReceiverStoresVideoFitMode() {
         UxPlayReceiverConfig config;
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
@@ -2003,11 +2003,11 @@ private slots:
         QVERIFY(receiver.m_videoFitMode.load());
         receiver.setVideoFitMode(false);
         QVERIFY(!receiver.m_videoFitMode.load());
-#endif
     }
+#endif
 
-    void setVideoFitModeUpdatesRenderer() {
 #if AIRPLAY_WITH_UXPLAY
+    void setVideoFitModeUpdatesRenderer() {
         UxPlayReceiverConfig config;
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
@@ -2025,11 +2025,11 @@ private slots:
         QVERIFY(!video_renderer_get_force_aspect_ratio());
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void videoFitModePersistsAfterRendererRestart() {
 #if AIRPLAY_WITH_UXPLAY
+    void videoFitModePersistsAfterRendererRestart() {
         UxPlayReceiverConfig config;
         config.videoSink = "fakesink";
         config.audioSink = "fakesink";
@@ -2048,8 +2048,8 @@ private slots:
         QVERIFY(video_renderer_get_force_aspect_ratio());
 
         receiver.stop();
-#endif
     }
+#endif
 
     void dnssdDoesNotRequireExternalRuntimeOnWindows() {
 #ifdef _WIN32
@@ -2060,8 +2060,8 @@ private slots:
 #endif
     }
 
-    void dnssdProducesValidTxtRecordsOnWindows() {
 #if AIRPLAY_WITH_UXPLAY && defined(_WIN32)
+    void dnssdProducesValidTxtRecordsOnWindows() {
         const char hw_addr[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
         int error = -1;
         dnssd_t *dnssd = dnssd_init("TestReceiver", 12, hw_addr, sizeof(hw_addr), &error, 0);
@@ -2095,8 +2095,8 @@ private slots:
         dnssd_unregister_raop(dnssd);
         dnssd_unregister_airplay(dnssd);
         dnssd_destroy(dnssd);
-#endif
     }
+#endif
 
     void videoQualityDefaultConfigIs1080p30() {
         const VideoQualitySettings quality;
@@ -2144,8 +2144,8 @@ private slots:
         QCOMPARE(videoQualityHeight(quality.resolution), 540);
     }
 
-    void dnsSdFeatureBit42AlwaysAdvertisesH265() {
 #if AIRPLAY_WITH_UXPLAY && defined(_WIN32)
+    void dnsSdFeatureBit42AlwaysAdvertisesH265() {
         const char hw_addr[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
         int error = -1;
         dnssd_t *dnssd = dnssd_init("TestReceiver", 12, hw_addr, sizeof(hw_addr), &error, 0);
@@ -2161,8 +2161,8 @@ private slots:
         QVERIFY(!((features_h264 >> 42) & 1ULL));
 
         dnssd_destroy(dnssd);
-#endif
     }
+#endif
 
     void idleVideoQualityChangeStoresWithoutStarting() {
         UxPlayReceiverConfig config;
@@ -2207,8 +2207,8 @@ private slots:
         QCOMPARE(stateSpy.count(), 0);
     }
 
-    void discoverableVideoQualityChangeRestartsWithNewDnsFeature() {
 #if AIRPLAY_WITH_UXPLAY
+    void discoverableVideoQualityChangeRestartsWithNewDnsFeature() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Quality DNS Test";
         config.videoSink = "fakesink";
@@ -2229,11 +2229,11 @@ private slots:
         QCOMPARE(receiver.m_config.videoQuality.resolution, VideoResolution::P720);
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void combinedNameAndQualityChangeUsesOneDiscoveryRestart() {
 #if AIRPLAY_WITH_UXPLAY
+    void combinedNameAndQualityChangeUsesOneDiscoveryRestart() {
         FakeMdnsPublishing mdns;
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Batch Test";
@@ -2262,11 +2262,11 @@ private slots:
         QCOMPARE(receiver.receiverName(), request.requestedReceiverName);
         QCOMPARE(receiver.videoQuality(), request.requestedVideoQuality);
         receiver.stop();
-#endif
     }
+#endif
 
-    void discoverableBatchesPreserveReceiverNameRecoveryOnlyWhenChanged() {
 #if AIRPLAY_WITH_UXPLAY
+    void discoverableBatchesPreserveReceiverNameRecoveryOnlyWhenChanged() {
         auto scheduledRecoveryName = [](const ReceiverConfigurationBatchRequest &request) {
             FakeMdnsPublishing mdns;
             UxPlayReceiverConfig config;
@@ -2307,11 +2307,11 @@ private slots:
         qualityRequest.requestedVideoQuality = {VideoResolution::P720, VideoFrameRate::Fps30};
         qualityRequest.rollbackVideoQuality = {VideoResolution::P1080, VideoFrameRate::Fps30};
         QCOMPARE(scheduledRecoveryName(qualityRequest), QString{});
-#endif
     }
+#endif
 
-    void connectedApplyVideoQualityRestartsReceiverAndUpdatesDnsFeature() {
 #if AIRPLAY_WITH_UXPLAY
+    void connectedApplyVideoQualityRestartsReceiverAndUpdatesDnsFeature() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Connected Quality Test";
         config.videoSink = "fakesink";
@@ -2335,11 +2335,11 @@ private slots:
         QCOMPARE(receiver.m_config.videoQuality.frameRate, VideoFrameRate::Fps15);
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void repeatedApplySameVideoQualityReturnsTrueAndIsNoop() {
 #if AIRPLAY_WITH_UXPLAY
+    void repeatedApplySameVideoQualityReturnsTrueAndIsNoop() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Same Quality Test";
         config.videoSink = "fakesink";
@@ -2355,11 +2355,11 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void applyVideoQualityRejectedInErrorState() {
 #if AIRPLAY_WITH_UXPLAY
+    void applyVideoQualityRejectedInErrorState() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Error Reject Test";
         config.videoSink = "fakesink";
@@ -2381,11 +2381,11 @@ private slots:
         QCOMPARE(receiver.m_config.videoQuality, originalQuality);
 
         receiver.stop();
-#endif
     }
+#endif
 
-    void applyVideoQualityRejectedInStartingState() {
 #if AIRPLAY_WITH_UXPLAY
+    void applyVideoQualityRejectedInStartingState() {
         UxPlayReceiverConfig config;
         config.serverName = "AirPlay Receiver Starting Reject Test";
         config.videoSink = "fakesink";
@@ -2402,8 +2402,8 @@ private slots:
 
         QCOMPARE(receiver.state(), ReceiverState::Starting);
         QCOMPARE(receiver.m_config.videoQuality, originalQuality);
-#endif
     }
+#endif
 };
 
 QTEST_GUILESS_MAIN(UxPlayReceiverConfigTest)

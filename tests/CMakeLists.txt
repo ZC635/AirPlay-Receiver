@@ -148,17 +148,17 @@ target_link_libraries(MdnsPublisherTest PRIVATE airplay_app_lib Qt6::Test)
 target_include_directories(MdnsPublisherTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
 
-add_executable(MdnsServerAdapterTest platform/MdnsServerAdapterTest.cpp)
-target_link_libraries(MdnsServerAdapterTest PRIVATE airplay_app_lib Qt6::Test)
-target_include_directories(MdnsServerAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 if(AIRPLAY_WITH_UXPLAY)
+    add_executable(MdnsServerAdapterTest platform/MdnsServerAdapterTest.cpp)
+    target_link_libraries(MdnsServerAdapterTest PRIVATE airplay_app_lib Qt6::Test)
+    target_include_directories(MdnsServerAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     get_target_property(_qmdns_test_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
     if(_qmdns_test_inc)
         target_include_directories(MdnsServerAdapterTest PRIVATE ${_qmdns_test_inc})
     endif()
     target_link_libraries(MdnsServerAdapterTest PRIVATE qmdnsengine)
+    add_test(NAME MdnsServerAdapterTest COMMAND MdnsServerAdapterTest)
 endif()
-add_test(NAME MdnsServerAdapterTest COMMAND MdnsServerAdapterTest)
 
 add_executable(DiscoveryRestartControllerTest backend/DiscoveryRestartControllerTest.cpp)
 target_link_libraries(DiscoveryRestartControllerTest PRIVATE airplay_app_lib Qt6::Test)
@@ -195,13 +195,13 @@ if(AIRPLAY_WITH_UXPLAY)
 endif()
 add_test(NAME UxPlayReceiverConfigTest COMMAND UxPlayReceiverConfigTest)
 
-add_executable(UxPlayDiscoveryTest backend/UxPlayDiscoveryTest.cpp)
-target_link_libraries(UxPlayDiscoveryTest PRIVATE airplay_app_lib Qt6::Test)
 if(AIRPLAY_WITH_UXPLAY)
+    add_executable(UxPlayDiscoveryTest backend/UxPlayDiscoveryTest.cpp)
+    target_link_libraries(UxPlayDiscoveryTest PRIVATE airplay_app_lib Qt6::Test)
     target_include_directories(UxPlayDiscoveryTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
     target_link_libraries(UxPlayDiscoveryTest PRIVATE renderers)
+    add_test(NAME UxPlayDiscoveryTest COMMAND UxPlayDiscoveryTest)
 endif()
-add_test(NAME UxPlayDiscoveryTest COMMAND UxPlayDiscoveryTest)
 
 if(AIRPLAY_WITH_UXPLAY)
     add_executable(VideoRendererLifecycleTest backend/VideoRendererLifecycleTest.cpp)
@@ -399,7 +399,6 @@ set(AIRPLAY_QT_TESTS
     EnvironmentDiagnosticsTest
     NetworkDiagnosticsMonitorTest
     MdnsPublisherTest
-    MdnsServerAdapterTest
     DiscoveryRestartControllerTest
     ReceiverStatePolicyTest
     ReceiverConfigurationChangeTest
@@ -407,13 +406,12 @@ set(AIRPLAY_QT_TESTS
     RecordingFileTransactionTest
     RecordingTimelineTest
     UxPlayReceiverConfigTest
-    UxPlayDiscoveryTest
     VideoSurfaceWidgetTest
     VideoFrameBridgeTest
     VideoRenderGeometryTest
 )
 if(AIRPLAY_WITH_UXPLAY)
-    list(APPEND AIRPLAY_QT_TESTS VideoRendererLifecycleTest GstAppSinkFrameSourceTest GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test)
+    list(APPEND AIRPLAY_QT_TESTS UxPlayDiscoveryTest MdnsServerAdapterTest VideoRendererLifecycleTest GstAppSinkFrameSourceTest GstSampleQueueTest RecordingMuxFeasibilityTest GstRecordingPipelineTest RecordingControllerTest RecordingSyntheticMp4Test)
 endif()
 foreach(AIRPLAY_QT_TEST IN LISTS AIRPLAY_QT_TESTS)
     set_tests_properties(${AIRPLAY_QT_TEST} PROPERTIES
