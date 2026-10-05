@@ -351,18 +351,39 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
         SKIP_RETURN_CODE 77
         TIMEOUT 30
     )
-    add_test(
-        NAME GStreamerPluginReadinessProcessTest
-        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
-            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerPluginReadinessProcessTest.ps1"
-            -Executable $<TARGET_FILE:airplay_receiver>
-    )
-    set_tests_properties(GStreamerPluginReadinessProcessTest PROPERTIES
-        ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
-        SKIP_RETURN_CODE 77
-        TIMEOUT 120
-    )
+    add_executable(GStreamerStartupProbe app/GStreamerStartupProbe.cpp)
+    target_link_libraries(GStreamerStartupProbe PRIVATE airplay_test_support PkgConfig::GST_PBUTILS)
+    add_library(GStreamerNonPluginFixture SHARED support/GStreamerNonPluginFixture.cpp)
+    set_target_properties(GStreamerNonPluginFixture PROPERTIES PREFIX "" AUTOMOC OFF)
+    set(AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY
+        "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/gstreamer-startup-acceptance"
+        CACHE PATH "Ignored report directory for real GStreamer startup acceptance")
+    get_filename_component(_gst_prefix "${AIRPLAY_GSTREAMER_BIN_DIR}" DIRECTORY)
+    foreach(_mode Acceptance DetectionBypass DuplicateDialog HealthyAsNegative WrongReason)
+        if(_mode STREQUAL "Acceptance")
+            set(_test_name GStreamerPluginReadinessProcessTest)
+            set(_control_argument)
+        else()
+            set(_test_name GStreamerStartup${_mode}ControlTest)
+            set(_control_argument -ExpectRejection)
+        endif()
+        add_test(NAME ${_test_name}
+            COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerPluginReadinessProcessTest.ps1"
+                -Executable $<TARGET_FILE:airplay_receiver>
+                -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+                -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+                -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+                -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+                -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+                -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+                -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+                -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/${_mode}"
+                -Mode ${_mode} ${_control_argument})
+        set_tests_properties(${_test_name} PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+            TIMEOUT 240 RUN_SERIAL TRUE)
+    endforeach()
 endif()
 
 set(AIRPLAY_QT_TESTS
