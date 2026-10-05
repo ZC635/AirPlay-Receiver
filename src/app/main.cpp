@@ -18,32 +18,15 @@
 #include "app/AppSettings.h"
 #include "app/AppSettingsStore.h"
 #include "app/BuildIdentity.h"
-#include "app/DiagnosticActivation.h"
+#include "app/DiagnosticLifecycle.h"
 #include "app/LanguageManager.h"
 #include "app/MainWindow.h"
 #include "app/RecordingStartupCleanup.h"
 #include "backend/AirPlayReceiver.h"
 #include "backend/UxPlayReceiver.h"
 #include "diagnostics/DiagnosticLogSink.h"
-#include "diagnostics/DiagnosticSession.h"
-#include "diagnostics/QtDiagnosticMessageBridge.h"
 #include "platform/DependencyDiagnostics.h"
-#include "platform/EnvironmentDiagnostics.h"
-#include "platform/NetworkDiagnosticsMonitor.h"
-#include "platform/WindowsEnvironmentDiagnostics.h"
 #include "platform/WindowsHotkeyService.h"
-
-struct DiagnosticStartupDecision {
-    bool loggingActive = false;
-    bool continueApplication = true;
-    QString userError;
-};
-
-struct DiagnosticShutdownDecision {
-    bool recordStartupAborted = false;
-    bool recordShutdownStarted = false;
-    bool closeNormally = false;
-};
 
 struct StandaloneRuntimeDecision {
     bool emitManifestEntries = false;
@@ -102,19 +85,6 @@ void showDiagnosticLoggingStoppedWarning(const QString &error) {
                          startupText(QT_TRANSLATE_NOOP(
                              "Startup", "Diagnostic logging stopped")),
                          diagnosticLoggingStoppedMessage(error));
-}
-
-DiagnosticStartupDecision diagnosticStartupDecision(
-    const DiagnosticActivation &activation, bool sessionCreated,
-    const QString &creationError) {
-    if (!activation.enabled) {
-        return {};
-    }
-    return {sessionCreated, true, sessionCreated ? QString() : creationError};
-}
-
-DiagnosticShutdownDecision diagnosticShutdownDecision(bool normalExit) {
-    return { !normalExit, normalExit, normalExit };
 }
 
 StandaloneRuntimeDecision diagnosticStandaloneRuntimeDecision(bool shouldCheck) {
@@ -188,26 +158,6 @@ QMap<QString, QString> gstreamerPluginReadinessFields(
             {QStringLiteral("reason"), reason}};
 }
 
-bool diagnosticLoggingActiveForSession(bool sessionCreated, bool sessionActive) {
-    return sessionCreated && sessionActive;
-}
-
-class DiagnosticWriteFailureRelay {
-public:
-    void setHandler(std::function<void(QString)> handler) {
-        handler_ = std::move(handler);
-    }
-
-    void deliver(QString error) const {
-        if (handler_) {
-            handler_(std::move(error));
-        }
-    }
-
-private:
-    std::function<void(QString)> handler_;
-};
-
 namespace {
 
 void recordStartup(DiagnosticLogSink *sink, QString name,
@@ -271,18 +221,18 @@ std::optional<TranslationLoadFailure> applyStartupLanguage(
     return failure;
 }
 
-void recordStartupLanguageFailure(
-    DiagnosticLogSink *sink, const std::optional<TranslationLoadFailure> &failure) {
+std::optional<DiagnosticEvent> startupLanguageFailureEvent(
+    const std::optional<TranslationLoadFailure> &failure) {
     if (!failure.has_value()) {
-        return;
+        return std::nullopt;
     }
-    sink->record(makeDiagnosticEvent(DiagnosticSeverity::Warning, QStringLiteral("startup"),
+    return makeDiagnosticEvent(DiagnosticSeverity::Warning, QStringLiteral("startup"),
         QStringLiteral("translation_load_failed"),
         {{QStringLiteral("language_selection"), diagnosticLanguageSelection(failure->requestedLanguage)},
          {QStringLiteral("effective_language"), QStringLiteral("en")},
          {QStringLiteral("catalog_id"), QStringLiteral("airplay_zh_CN")},
          {QStringLiteral("phase"), QStringLiteral("startup")},
-         {QStringLiteral("result"), QStringLiteral("fallback")}}, true));
+         {QStringLiteral("result"), QStringLiteral("fallback")}}, true);
 }
 
 void recordStartupSettings(DiagnosticLogSink *sink, const StartupSettings &settings,
@@ -298,46 +248,6 @@ void recordStartupSettings(DiagnosticLogSink *sink, const StartupSettings &setti
                    {QStringLiteral("language_selection"),
                         diagnosticLanguageSelection(settings.settings.language())},
                    {QStringLiteral("effective_language"), languageManager.effectiveLanguage()}}, true);
-}
-
-void closeDiagnosticSession(DiagnosticLogSink *sink,
-                            std::optional<QtDiagnosticMessageBridge> &qtBridge,
-                            std::unique_ptr<DiagnosticSession> &session,
-                            std::unique_ptr<NetworkDiagnosticsMonitor> &networkMonitor,
-                            AirPlayReceiver *receiver) {
-    const DiagnosticShutdownDecision decision = diagnosticShutdownDecision(true);
-    if (decision.recordShutdownStarted) {
-        recordStartup(sink, QStringLiteral("shutdown_started"), {}, true);
-    }
-    if (receiver != nullptr) {
-        receiver->stop();
-    }
-    if (networkMonitor) {
-        networkMonitor->stop();
-        networkMonitor.reset();
-    }
-    qtBridge.reset();
-    if (decision.closeNormally && session) {
-        session->closeNormally();
-    }
-}
-
-void abortDiagnosticSession(DiagnosticLogSink *sink,
-                            std::optional<QtDiagnosticMessageBridge> &qtBridge,
-                            std::unique_ptr<DiagnosticSession> &session,
-                            std::unique_ptr<NetworkDiagnosticsMonitor> &networkMonitor,
-                            const QString &reason) {
-    const DiagnosticShutdownDecision decision = diagnosticShutdownDecision(false);
-    if (decision.recordStartupAborted) {
-        recordStartup(sink, QStringLiteral("startup_aborted"),
-                      {{QStringLiteral("reason"), reason}}, true);
-    }
-    if (networkMonitor) {
-        networkMonitor->stop();
-        networkMonitor.reset();
-    }
-    qtBridge.reset();
-    session.reset();
 }
 
 } // namespace
@@ -404,58 +314,34 @@ int main(int argc, char *argv[]) {
 
     const StartupSettings startupSettings = loadStartupSettings(
         QCoreApplication::applicationDirPath());
+    MainWindow *diagnosticWindow = nullptr;
+    DiagnosticLifecycle diagnostics(&app);
     LanguageManager languageManager(&app);
     const std::optional<TranslationLoadFailure> translationLoadFailure =
         applyStartupLanguage(languageManager, startupSettings.settings);
 
     const DiagnosticActivation activation = DiagnosticActivation::parse(
         QCoreApplication::arguments(), qgetenv("AIRPLAY_DEBUG_LOG"));
-    std::unique_ptr<DiagnosticSession> session;
-    DiagnosticLogSink *sink = &nullDiagnosticLogSink();
-    QString creationError;
-    if (activation.enabled) {
-        DiagnosticSessionOptions options;
-        options.applicationDirectory = QCoreApplication::applicationDirPath();
-        options.activationSource = activation.sourceName();
-        auto created = DiagnosticSession::create(std::move(options));
-        creationError = created.error;
-        if (created.session) {
-            session = std::move(created.session);
-            sink = session.get();
-        }
-    }
-    languageManager.setDiagnosticSink(sink);
-    MainWindow *diagnosticWindow = nullptr;
-    DiagnosticWriteFailureRelay writeFailureRelay;
-    writeFailureRelay.setHandler([&diagnosticWindow](QString error) {
+    DiagnosticLifecycleStart diagnosticStart;
+    diagnosticStart.applicationDirectory = QCoreApplication::applicationDirPath();
+    diagnosticStart.activation = activation;
+    diagnosticStart.beforeChildGateEvent = startupLanguageFailureEvent(translationLoadFailure);
+    diagnosticStart.reportWriteFailure = [&diagnosticWindow](QString error) {
         if (diagnosticWindow != nullptr) {
             diagnosticWindow->handleDiagnosticWriteFailure(std::move(error));
         }
-    });
-    if (session) {
-        QObject::connect(session.get(), &DiagnosticSession::writeFailed, &app,
-                         [&writeFailureRelay](const QString &error) {
-            writeFailureRelay.deliver(error);
-        }, Qt::QueuedConnection);
-    }
-    std::optional<QtDiagnosticMessageBridge> qtBridge;
-    if (session) {
-        qtBridge.emplace(sink);
-    }
-    recordStartupLanguageFailure(sink, translationLoadFailure);
-    if (runDiagnosticChildGate(activation, session.get(), creationError, {}) ==
-        DiagnosticChildGateResult::ExitChild) {
-        qtBridge.reset();
-        session.reset();
+    };
+    const DiagnosticLifecycleStartupResult diagnosticResult = diagnostics.start(std::move(diagnosticStart));
+    if (diagnosticResult.childGate == DiagnosticChildGateResult::ExitChild) {
         return 1;
     }
-    const DiagnosticStartupDecision startupDecision = diagnosticStartupDecision(
-        activation, session != nullptr, creationError);
-    if (!startupDecision.userError.isEmpty()) {
+    DiagnosticLogSink *sink = diagnostics.sink();
+    languageManager.setDiagnosticSink(sink);
+    if (!diagnosticResult.creationError.isEmpty()) {
         QMessageBox::warning(nullptr,
                              startupText(QT_TRANSLATE_NOOP(
                                  "Startup", "Diagnostic logging unavailable")),
-                             diagnosticLoggingUnavailableMessage(startupDecision.userError));
+                             diagnosticLoggingUnavailableMessage(diagnosticResult.creationError));
     }
     recordStartup(sink, QStringLiteral("session_activation"),
                   {{QStringLiteral("activation_source"), activation.sourceName()}}, true);
@@ -465,7 +351,6 @@ int main(int argc, char *argv[]) {
                    {QStringLiteral("executable_name"), QFileInfo(QCoreApplication::applicationFilePath()).fileName()},
                    {QStringLiteral("version"), QString::fromUtf16(AirPlayBuildIdentity::version)}}, true);
 
-    std::unique_ptr<NetworkDiagnosticsMonitor> networkMonitor;
 #if AIRPLAY_WITH_UXPLAY
     const RuntimePathCompatibility runtimePathCompatibility =
         DependencyDiagnostics::checkRuntimePathCompatibility(
@@ -476,28 +361,12 @@ int main(int argc, char *argv[]) {
         runtimePathStartupDecision(runtimePathCompatibility);
     if (!runtimePathDecision.continueApplication) {
         QMessageBox::critical(nullptr, runtimePathDecision.title, runtimePathDecision.message);
-        abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
-                               runtimePathDecision.abortReason);
+        diagnostics.abortStartup(runtimePathDecision.abortReason);
         return 1;
     }
 #endif
 
-    if (shouldCollectEnvironmentDiagnostics(session && session->isActive())) {
-        const EnvironmentSnapshot environmentSnapshot = EnvironmentDiagnostics::collect(
-            windowsEnvironmentDiagnosticProviders(), 3000);
-        for (const DiagnosticEvent &event : EnvironmentDiagnostics::events(environmentSnapshot)) {
-            sink->record(event);
-        }
-        if (shouldCollectEnvironmentDiagnostics(session && session->isActive())) {
-            networkMonitor = std::make_unique<NetworkDiagnosticsMonitor>(
-                sink, windowsNetworkMonitorOperations(), environmentSnapshot.network);
-            if (!networkMonitor->start()) {
-                recordStartup(sink, QStringLiteral("network_monitor"),
-                              {{QStringLiteral("result"), QStringLiteral("unavailable")}}, true);
-                networkMonitor.reset();
-            }
-        }
-    }
+    diagnostics.collectEnvironmentAndStartMonitor();
 
 #if AIRPLAY_WITH_UXPLAY
     const StandaloneRuntimeDecision runtimeDecision = diagnosticStandaloneRuntimeDecision(
@@ -529,8 +398,7 @@ int main(int argc, char *argv[]) {
                 startupText(QT_TRANSLATE_NOOP(
                     "Startup", "This standalone build is missing required runtime files:\n\n%1\n\nRun scripts\\build.ps1 -Deploy, then launch airplay_receiver.exe again."))
                     .arg(runtimeSnapshot.missingRelativePaths.join('\n')));
-            abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
-                                   QStringLiteral("missing_runtime"));
+            diagnostics.abortStartup(QStringLiteral("missing_runtime"));
             return false;
         },
         [&] {
@@ -555,8 +423,7 @@ int main(int argc, char *argv[]) {
                 return true;
             }
             QMessageBox::critical(nullptr, pluginDecision.title, pluginDecision.message);
-            abortDiagnosticSession(sink, qtBridge, session, networkMonitor,
-                                   pluginDecision.abortReason);
+            diagnostics.abortStartup(pluginDecision.abortReason);
             return false;
         });
     if (!gstreamerStartupReady) {
@@ -608,8 +475,7 @@ int main(int argc, char *argv[]) {
     MainWindowRuntimeServices runtimeServices;
     runtimeServices.diagnosticSink = sink;
     runtimeServices.languageManager = &languageManager;
-    runtimeServices.diagnosticLoggingActive = diagnosticLoggingActiveForSession(
-        session != nullptr, session && session->isActive());
+    runtimeServices.diagnosticLoggingActive = diagnostics.loggingActive();
     runtimeServices.quitApplication = [&app] { app.quit(); };
     MainWindow window(settings, &hotkeys, &receiver, settingsPath, nullptr, nullptr,
                       runtimeServices);
@@ -623,14 +489,13 @@ int main(int argc, char *argv[]) {
     receiver.start();
     window.show();
     const int exitCode = app.exec();
-    closeDiagnosticSession(sink, qtBridge, session, networkMonitor, &receiver);
+    diagnostics.exitNormally([&receiver] { receiver.stop(); });
     return exitCode;
 #else
     MainWindowRuntimeServices runtimeServices;
     runtimeServices.diagnosticSink = sink;
     runtimeServices.languageManager = &languageManager;
-    runtimeServices.diagnosticLoggingActive = diagnosticLoggingActiveForSession(
-        session != nullptr, session && session->isActive());
+    runtimeServices.diagnosticLoggingActive = diagnostics.loggingActive();
     runtimeServices.quitApplication = [&app] { app.quit(); };
     MainWindow window(settings, &hotkeys, nullptr, settingsPath, nullptr, nullptr,
                       runtimeServices);
@@ -644,7 +509,7 @@ int main(int argc, char *argv[]) {
                   {{QStringLiteral("result"), QStringLiteral("not_built")}}, true);
     window.show();
     const int exitCode = app.exec();
-    closeDiagnosticSession(sink, qtBridge, session, networkMonitor, nullptr);
+    diagnostics.exitNormally({});
     return exitCode;
 #endif
 }
