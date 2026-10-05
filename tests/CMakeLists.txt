@@ -490,3 +490,40 @@ if(WIN32 AND AIRPLAY_ENABLE_WINDOWS_QPA_TESTS)
         RUN_SERIAL TRUE
     )
 endif()
+
+# Only ON Windows tests own these harmless import/load regression fixtures.
+if(WIN32 AND AIRPLAY_WITH_UXPLAY)
+    add_library(DnssdExternalRuntimeFixture SHARED support/DnssdExternalRuntimeFixture.cpp)
+    set_target_properties(DnssdExternalRuntimeFixture PROPERTIES PREFIX "" OUTPUT_NAME "dnssd" AUTOMOC OFF)
+    add_library(DnssdTransitiveFixture SHARED support/DnssdTransitiveFixture.cpp)
+    set_target_properties(DnssdTransitiveFixture PROPERTIES PREFIX "" AUTOMOC OFF)
+    target_link_libraries(DnssdTransitiveFixture PRIVATE DnssdExternalRuntimeFixture)
+    add_executable(DnssdDirectImportFixture support/DnssdImportFixture.cpp)
+    target_link_libraries(DnssdDirectImportFixture PRIVATE DnssdExternalRuntimeFixture)
+    add_executable(DnssdTransitiveImportFixture support/DnssdImportFixture.cpp)
+    target_compile_definitions(DnssdTransitiveImportFixture PRIVATE DNSSD_TRANSITIVE_FIXTURE)
+    target_link_libraries(DnssdTransitiveImportFixture PRIVATE DnssdTransitiveFixture)
+    set_target_properties(DnssdDirectImportFixture DnssdTransitiveImportFixture PROPERTIES AUTOMOC OFF)
+    add_executable(DnssdRuntimeProbe backend/DnssdRuntimeProbe.cpp)
+    target_link_libraries(DnssdRuntimeProbe PRIVATE airplay_test_support Qt6::Test qmdnsengine)
+    if(NOT AIRPLAY_POWERSHELL)
+        message(FATAL_ERROR "Windows DNS-SD runtime acceptance requires PowerShell")
+    endif()
+    foreach(_mode Acceptance DirectImport TransitiveImport DynamicLoad)
+        add_test(NAME DnssdRuntime${_mode}Test
+            COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/DnssdRuntimeAcceptanceTest.ps1"
+                -Executable $<TARGET_FILE:airplay_receiver>
+                -ProbeExecutable $<TARGET_FILE:DnssdRuntimeProbe>
+                -Objdump "C:/msys64/ucrt64/bin/objdump.exe"
+                -DependencyBinDirectory "${AIRPLAY_QT_BIN_DIR}"
+                -FixtureExecutable "$<IF:$<STREQUAL:${_mode},TransitiveImport>,$<TARGET_FILE:DnssdTransitiveImportFixture>,$<TARGET_FILE:DnssdDirectImportFixture>>"
+                -FixtureDll $<TARGET_FILE:DnssdExternalRuntimeFixture>
+                -Mode ${_mode}
+                -ReportDirectory "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/dnssd-runtime-acceptance/${_mode}"
+        )
+        set_tests_properties(DnssdRuntime${_mode}Test PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+            TIMEOUT 120 RUN_SERIAL TRUE)
+    endforeach()
+endif()
