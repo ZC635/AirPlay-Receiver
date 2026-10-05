@@ -346,6 +346,18 @@ if(AIRPLAY_POWERSHELL AND NOT AIRPLAY_WITH_UXPLAY)
     )
 endif()
 
+if(AIRPLAY_WITH_UXPLAY)
+    add_executable(GlibApplicationIdentityProcessTest backend/GlibApplicationIdentityProcessTest.cpp)
+    target_link_libraries(GlibApplicationIdentityProcessTest PRIVATE airplay_app_lib)
+    foreach(_mode same rename reset preseed program)
+        add_test(NAME GlibApplicationIdentity_${_mode}Test
+            COMMAND GlibApplicationIdentityProcessTest ${_mode})
+        set_tests_properties(GlibApplicationIdentity_${_mode}Test PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR};PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+            TIMEOUT 30 RUN_SERIAL TRUE)
+    endforeach()
+endif()
 if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     add_test(
         NAME RuntimePathCompatibilityProcessTest
