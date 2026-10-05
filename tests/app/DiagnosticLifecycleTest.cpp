@@ -137,7 +137,15 @@ private slots:
 void DiagnosticLifecycleTest::normalLaunchCreatesNoLogButStillStopsReceiver() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    DiagnosticLifecycle diagnostics(QCoreApplication::instance());
+    int cpuCollections = 0;
+    DiagnosticLifecycleDependencies dependencies;
+    EnvironmentDiagnosticProviders providers;
+    providers.cpuCapabilities = [&cpuCollections](QDeadlineTimer) {
+        ++cpuCollections;
+        return DiagnosticValue<CpuEnvironmentFact>::available({});
+    };
+    dependencies.environmentProviders = std::move(providers);
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), std::move(dependencies));
     DiagnosticLifecycleStart start;
     start.applicationDirectory = directory.path();
     const auto result = diagnostics.start(std::move(start));
@@ -146,6 +154,7 @@ void DiagnosticLifecycleTest::normalLaunchCreatesNoLogButStillStopsReceiver() {
     QVERIFY(!diagnostics.loggingActive());
     QCOMPARE(diagnostics.sink(), &nullDiagnosticLogSink());
     diagnostics.collectEnvironmentAndStartMonitor();
+    QCOMPARE(cpuCollections, 0);
     int stops = 0;
     diagnostics.exitNormally([&stops] { ++stops; });
     QCOMPARE(stops, 1);
@@ -497,19 +506,33 @@ void DiagnosticLifecycleTest::destroyedOwnerDropsPendingDelivery() {
 void DiagnosticLifecycleTest::environmentBaselineAvoidsSecondStartupCollection() {
     QTemporaryDir directory;
     NetworkOperations network;
-    int collections = 0;
+    int collections = 0, cpuCollections = 0;
     qint64 deadline = -1;
-    DiagnosticLifecycle diagnostics(QCoreApplication::instance(),
-        environmentDependencies(network, collections, deadline));
+    auto dependencies = environmentDependencies(network, collections, deadline);
+    dependencies.environmentProviders->cpuCapabilities = [&cpuCollections](QDeadlineTimer) {
+        ++cpuCollections;
+        CpuEnvironmentFact cpu;
+        cpu.vendor = DiagnosticFact::available(QStringLiteral("intel"));
+        cpu.hardwareFeatures = {QStringLiteral("sse2")};
+        cpu.usableFeatures = cpu.hardwareFeatures;
+        cpu.avxOsState = DiagnosticFact::available(QStringLiteral("disabled"));
+        return DiagnosticValue<CpuEnvironmentFact>::available(cpu);
+    };
+    DiagnosticLifecycle diagnostics(QCoreApplication::instance(), std::move(dependencies));
     diagnostics.start(enabledStart(directory.path()));
     QCOMPARE(collections, 0);
+    QCOMPARE(cpuCollections, 0);
     QCOMPARE(network.registrations, 0);
     diagnostics.collectEnvironmentAndStartMonitor();
+    diagnostics.collectEnvironmentAndStartMonitor();
     QCOMPARE(collections, 1);
+    QCOMPARE(cpuCollections, 1);
     QVERIFY(deadline > 0 && deadline <= 3000);
     QCOMPARE(network.registrations, 2);
     QCOMPARE(network.recollections, 0);
-    QVERIFY(logBytes(directory.path()).contains("environment_snapshot"));
+    const auto bytes = logBytes(directory.path());
+    QVERIFY(bytes.contains("environment_snapshot"));
+    QCOMPARE(bytes.count("cpu_compatibility"), 1);
     diagnostics.exitNormally({});
     QCOMPARE(network.cancellations, 2);
 }

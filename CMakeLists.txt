@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(AirPlayReceiver VERSION 0.4.1 LANGUAGES CXX RC)
 
+include(cmake/CpuCompatibility.cmake)
+
 set(AIRPLAY_BUILD_ID "" CACHE STRING "Optional build identity for diagnostic logs")
 
 function(airplay_escape_cpp_string output input)
@@ -19,7 +21,7 @@ airplay_escape_cpp_string(_airplay_build_id_cpp "${AIRPLAY_BUILD_ID}")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/app")
 file(CONFIGURE
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/app/BuildIdentity.h"
-    CONTENT "#pragma once\n\nnamespace AirPlayBuildIdentity {\ninline constexpr char16_t version[] = u\"@_airplay_version_cpp@\";\ninline constexpr char16_t buildId[] = u\"@_airplay_build_id_cpp@\";\n}\n"
+    CONTENT "#pragma once\n\nnamespace AirPlayBuildIdentity {\ninline constexpr char16_t version[] = u\"@_airplay_version_cpp@\";\ninline constexpr char16_t buildId[] = u\"@_airplay_build_id_cpp@\";\ninline constexpr char16_t cpuBuildPolicy[] = u\"@AIRPLAY_CPU_BASELINE@\";\n}\n"
     @ONLY
     NEWLINE_STYLE LF
 )
@@ -124,6 +126,8 @@ add_library(airplay_app_lib
     src/platform/DependencyDiagnostics.h
     src/platform/DiagnosticLogFolderActions.cpp
     src/platform/DiagnosticLogFolderActions.h
+    src/platform/CpuCompatibilityDiagnostics.cpp
+    src/platform/CpuCompatibilityDiagnostics.h
     src/platform/EnvironmentDiagnostics.cpp
     src/platform/EnvironmentDiagnostics.h
     src/platform/NetworkDiagnosticsMonitor.cpp

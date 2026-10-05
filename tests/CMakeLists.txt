@@ -320,6 +320,14 @@ if(NOT AIRPLAY_QT_PLUGIN_QUERY_RESULT EQUAL 0 OR NOT AIRPLAY_QT_PLUGIN_DIR)
     message(FATAL_ERROR "Could not query the Qt plugin directory")
 endif()
 
+if(AIRPLAY_POWERSHELL AND AIRPLAY_CPU_BASELINE STREQUAL "x86-64"
+   AND CMAKE_GENERATOR STREQUAL "Ninja")
+    add_test(NAME CpuCompatibilityTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/CpuCompatibilityTest.ps1"
+            -BuildDirectory "${PROJECT_BINARY_DIR}")
+    set_tests_properties(CpuCompatibilityTest PROPERTIES TIMEOUT 30)
+endif()
 if(AIRPLAY_POWERSHELL AND NOT AIRPLAY_WITH_UXPLAY)
     add_test(
         NAME OffBuildDependencyTest

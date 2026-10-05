@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "platform/EnvironmentDiagnostics.h"
+#include "platform/CpuCompatibilityDiagnostics.h"
 #include "platform/WindowsEnvironmentDiagnostics.h"
 
 namespace {
@@ -59,6 +60,109 @@ class EnvironmentDiagnosticsTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void avxUsabilityRequiresHardwareAndOsState_data() {
+        QTest::addColumn<bool>("hardwareAvx");
+        QTest::addColumn<bool>("xsave");
+        QTest::addColumn<bool>("osxsave");
+        QTest::addColumn<bool>("xstateKnown");
+        QTest::addColumn<quint64>("xstate");
+        QTest::addColumn<bool>("usable");
+        QTest::newRow("available") << true << true << true << true << quint64(6) << true;
+        QTest::newRow("no-hardware-avx") << false << true << true << true << quint64(6) << false;
+        QTest::newRow("no-xsave") << true << false << true << true << quint64(6) << false;
+        QTest::newRow("no-osxsave") << true << true << false << true << quint64(6) << false;
+        QTest::newRow("unknown-os-state") << true << true << true << false << quint64(6) << false;
+        QTest::newRow("no-ymm-state") << true << true << true << true << quint64(2) << false;
+        QTest::newRow("no-xmm-state") << true << true << true << true << quint64(4) << false;
+    }
+
+    void avxUsabilityRequiresHardwareAndOsState() {
+        QFETCH(bool, hardwareAvx);
+        QFETCH(bool, xsave);
+        QFETCH(bool, osxsave);
+        QFETCH(bool, xstateKnown);
+        QFETCH(quint64, xstate);
+        QFETCH(bool, usable);
+        CpuCapabilityProbe probe;
+        probe.cpuidAvailable = true;
+        probe.vendorId = QStringLiteral("GenuineIntel");
+        probe.leaf1Edx = quint32(1) << 26;
+        probe.leaf1Ecx = (quint32(hardwareAvx) << 28) | (quint32(xsave) << 26)
+            | (quint32(osxsave) << 27) | (quint32(1) << 12);
+        probe.leaf7Ebx = quint32(1) << 5;
+        probe.xstateAvailable = xstateKnown;
+        probe.enabledXstate = xstate;
+        const auto result = cpuCapabilitiesFromProbe(probe);
+        QCOMPARE(result.status, DiagnosticFactStatus::Available);
+        QCOMPARE(result.value.vendor.value, QStringLiteral("intel"));
+        QCOMPARE(result.value.hardwareFeatures.contains(QStringLiteral("avx")), hardwareAvx);
+        QVERIFY(result.value.hardwareFeatures.contains(QStringLiteral("avx2")));
+        QVERIFY(result.value.usableFeatures.contains(QStringLiteral("sse2")));
+        QCOMPARE(result.value.usableFeatures.contains(QStringLiteral("avx")), usable);
+        QCOMPARE(result.value.usableFeatures.contains(QStringLiteral("avx2")), usable);
+        QCOMPARE(result.value.usableFeatures.contains(QStringLiteral("fma")), usable);
+        if (!xstateKnown)
+            QCOMPARE(result.value.avxOsState.status, DiagnosticFactStatus::Unavailable);
+    }
+
+    void cpuEventsRejectIdentityFieldsAndUnsupportedFeatureTokens() {
+        EnvironmentSnapshot snapshot;
+        snapshot.cpuCapabilitiesCollected = true;
+        snapshot.cpuArchitecture = DiagnosticFact::available(QStringLiteral("Workstation-77"));
+        CpuEnvironmentFact cpu;
+        cpu.vendor = DiagnosticFact::available(QStringLiteral("Alice CPU model serial-123"));
+        cpu.avxOsState = DiagnosticFact::available(QStringLiteral("Alice"));
+        cpu.hardwareFeatures = {QStringLiteral("sse2"), QStringLiteral("Alice"),
+            QStringLiteral("C:\\Users\\Alice"), QStringLiteral("sse2")};
+        cpu.usableFeatures = {QStringLiteral("sse2"), QStringLiteral("avx2"),
+            QStringLiteral("aa:bb:cc:dd:ee:ff")};
+        snapshot.cpuCapabilities = DiagnosticValue<CpuEnvironmentFact>::available(cpu);
+        const auto events = EnvironmentDiagnostics::events(snapshot);
+        const auto event = events.constLast();
+        QCOMPARE(event.name, QStringLiteral("cpu_compatibility"));
+        QCOMPARE(event.fields.value(QStringLiteral("vendor")), QStringLiteral("unavailable"));
+        QCOMPARE(event.fields.value(QStringLiteral("architecture")), QStringLiteral("unavailable"));
+        QCOMPARE(event.fields.value(QStringLiteral("avx_os_state")), QStringLiteral("unavailable"));
+        QCOMPARE(event.fields.value(QStringLiteral("hardware_features")), QStringLiteral("sse2"));
+        QCOMPARE(event.fields.value(QStringLiteral("usable_features")), QStringLiteral("sse2"));
+        QVERIFY(!containsForbiddenData(events));
+    }
+
+    void cpuUnknownAndTimeoutStatesStayExplicit() {
+        QCOMPARE(cpuCapabilitiesFromProbe({}).status, DiagnosticFactStatus::Unavailable);
+        auto providers = fakeProviders();
+        providers.cpuCapabilities = [](QDeadlineTimer) {
+            return DiagnosticValue<CpuEnvironmentFact>::timedOut();
+        };
+        auto snapshot = EnvironmentDiagnostics::collect(providers, 1000);
+        QCOMPARE(snapshot.cpuCapabilities.status, DiagnosticFactStatus::TimedOut);
+        const auto events = EnvironmentDiagnostics::events(snapshot);
+        const auto cpuEvent = std::find_if(events.cbegin(), events.cend(), [](const auto &event) {
+            return event.name == QStringLiteral("cpu_compatibility");
+        });
+        QVERIFY(cpuEvent != events.cend());
+        QCOMPARE(cpuEvent->fields.value(QStringLiteral("hardware_features")), QStringLiteral("timed_out"));
+        QCOMPARE(windowsCpuCompatibilityFact(QDeadlineTimer(0)).status, DiagnosticFactStatus::TimedOut);
+    }
+
+    void nativeCpuCompatibilityEventHasOnlyBoundedAnonymousFields() {
+        auto providers = windowsEnvironmentDiagnosticProviders();
+        providers.network = [](QDeadlineTimer) {
+            return DiagnosticValue<NetworkEnvironmentFact>::unavailable();
+        };
+        const auto events = EnvironmentDiagnostics::events(EnvironmentDiagnostics::collect(providers, 1000));
+        const auto found = std::find_if(events.cbegin(), events.cend(), [](const auto &event) {
+            return event.name == QStringLiteral("cpu_compatibility");
+        });
+        QVERIFY2(found != events.cend(), "Active environment collection must report CPU compatibility");
+        QCOMPARE(found->fields.keys(), QStringList({QStringLiteral("architecture"),
+            QStringLiteral("avx_os_state"), QStringLiteral("build_cpu_policy"),
+            QStringLiteral("hardware_features"), QStringLiteral("status"),
+            QStringLiteral("usable_features"), QStringLiteral("vendor")}));
+        QVERIFY(QStringList({QStringLiteral("intel"), QStringLiteral("amd"),
+            QStringLiteral("other"), QStringLiteral("unavailable")}).contains(found->fields.value(QStringLiteral("vendor"))));
+        QVERIFY(!containsForbiddenData(events));
+    }
     void collectionPolicyRequiresActiveDiagnosticSession() {
         QVERIFY(!shouldCollectEnvironmentDiagnostics(false));
         QVERIFY(shouldCollectEnvironmentDiagnostics(true));
