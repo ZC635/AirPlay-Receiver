@@ -33,7 +33,40 @@ function Get-Sha256([string]$Path) {
 }
 $root = $null
 
+function Assert-FixtureRecordingDirectory([string]$Fixture) {
+    try {
+        $fixturePath = [IO.Path]::GetFullPath($Fixture).TrimEnd('\','/')
+        $ownedRoot = [IO.Path]::GetFullPath($root).TrimEnd('\','/') + '\'
+        if (-not $fixturePath.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'case escaped the owned runtime root' }
+        $json = [Text.UTF8Encoding]::new($false, $true).GetString([IO.File]::ReadAllBytes((Join-Path $fixturePath 'airplay-settings.json')))
+        if (-not $json.TrimStart().StartsWith('{')) { throw 'settings root must be a JSON object' }
+        $settings = $json | ConvertFrom-Json
+        $language = @($settings.PSObject.Properties | Where-Object { $_.Name -ceq 'language' })
+        $recording = @($settings.PSObject.Properties | Where-Object { $_.Name -ceq 'recording' })
+        if ($language.Count -ne 1 -or $language[0].Value -cne 'en') { throw 'settings must retain language en' }
+        if ($recording.Count -ne 1 -or $recording[0].Value -isnot [pscustomobject]) { throw 'recording must be an explicit JSON object' }
+        $output = @($recording[0].Value.PSObject.Properties | Where-Object { $_.Name -ceq 'outputDirectory' })
+        if ($output.Count -ne 1 -or $output[0].Value -isnot [string] -or $output[0].Value -notmatch '^[A-Za-z]:[\\/]') { throw 'recording.outputDirectory must be an explicit absolute Windows path' }
+        # PowerShell accepts JSON dialects Qt rejects; require our exact UTF-8
+        # fixture serialization rather than treating its permissive parser as Qt.
+        $canonical = [ordered]@{ language='en'; recording=[ordered]@{ outputDirectory=$output[0].Value } } | ConvertTo-Json -Depth 3
+        if ($json -cne $canonical) { throw 'settings must use the generated UTF-8 fixture JSON serialization' }
+        $path = [IO.Path]::GetFullPath($output[0].Value).TrimEnd('\','/')
+        $expected = Join-Path $fixturePath 'recording-output'
+        if (-not $path.StartsWith($fixturePath + '\', [StringComparison]::OrdinalIgnoreCase) -or $path -ine $expected) { throw 'recording.outputDirectory must name this case recording-output directory' }
+        foreach ($directory in @($fixturePath, $path)) {
+            if (-not [IO.Directory]::Exists($directory) -or
+                ([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint)) { throw 'owned case/output directories must exist without reparse points' }
+        }
+        return $path
+    } catch { throw "Unsafe recording fixture: $($_.Exception.Message)" }
+}
+
 function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = '') {
+    $recordingDirectory = Assert-FixtureRecordingDirectory $Fixture
+    $caseName = Split-Path -Leaf $Fixture
+    Copy-Item -LiteralPath (Join-Path $Fixture 'airplay-settings.json') -Destination (Join-Path $ReportDirectory "$caseName-settings.json")
+    $audit.Add("$caseName pre-launch recording.outputDirectory=$recordingDirectory")
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = Join-Path $Fixture (Split-Path -Leaf $ProbeExecutable)
     $start.WorkingDirectory = $Fixture
@@ -125,7 +158,74 @@ function New-Fixture([string]$Name) {
     New-Item -ItemType Directory -Path $fixture | Out-Null
     # Copies, never hardlinks: substitutions cannot affect template or sources.
     Get-ChildItem -LiteralPath $template -Force | Copy-Item -Destination $fixture -Recurse
+    $recordingDirectory = [IO.Path]::GetFullPath((Join-Path $fixture 'recording-output'))
+    New-Item -ItemType Directory -Path $recordingDirectory | Out-Null
+    $settings = [ordered]@{ language='en'; recording=[ordered]@{ outputDirectory=$recordingDirectory } }
+    [IO.File]::WriteAllText((Join-Path $fixture 'airplay-settings.json'), ($settings | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
+    [void](Assert-FixtureRecordingDirectory $fixture)
     return $fixture
+}
+
+function Test-RecordingDirectoryGuard {
+    # Guard-only owned fixture: contains no executable and never launches GUI.
+    $fixture = Join-Path $root 'recording-settings-guard'
+    $output = Join-Path $fixture 'recording-output'
+    New-Item -ItemType Directory -Path $output -Force | Out-Null
+    $settingsFile = Join-Path $fixture 'airplay-settings.json'
+    $valid = [ordered]@{ language='en'; recording=[ordered]@{ outputDirectory=$output } } | ConvertTo-Json -Depth 3
+    [IO.File]::WriteAllText($settingsFile, $valid, [Text.UTF8Encoding]::new($false))
+    [void](Assert-FixtureRecordingDirectory $fixture)
+    $invalid = [ordered]@{
+        omitted = '{"language":"en"}'
+        empty = '{"language":"en","recording":{"outputDirectory":""}}'
+        relative = '{"language":"en","recording":{"outputDirectory":"recording-output"}}'
+        outside = ([ordered]@{ language='en'; recording=@{ outputDirectory=(Join-Path $root 'outside-recording-output') } } | ConvertTo-Json -Depth 3)
+        miscased_recording = ([ordered]@{ language='en'; Recording=@{ outputDirectory=$output } } | ConvertTo-Json -Depth 3)
+        miscased_output = ([ordered]@{ language='en'; recording=@{ OutputDirectory=$output } } | ConvertTo-Json -Depth 3)
+        wrong_type = '{"language":"en","recording":{"outputDirectory":42}}'
+        malformed = '{"language":"en",'
+        single_quotes = $valid.Replace('"', "'")
+        utf16 = $valid
+    }
+    foreach ($entry in $invalid.GetEnumerator()) {
+        $encoding = if ($entry.Key -eq 'utf16') { [Text.Encoding]::Unicode } else { [Text.UTF8Encoding]::new($false) }
+        [IO.File]::WriteAllText($settingsFile, $entry.Value, $encoding)
+        $rejected = $false
+        try { [void](Assert-FixtureRecordingDirectory $fixture) }
+        catch {
+            if (-not $_.Exception.Message.StartsWith('Unsafe recording fixture:')) { throw }
+            $rejected = $true
+            $audit.Add("PASS: pre-launch guard rejected $($entry.Key); no process launched")
+        }
+        if (-not $rejected) { throw "Unsafe recording settings were accepted: $($entry.Key)" }
+    }
+}
+
+function New-RecordingCleanupSentinels([string]$Fixture) {
+    $directory = Assert-FixtureRecordingDirectory $Fixture
+    $id = [Guid]::NewGuid().ToString('N')
+    $targets = @('video.mkv','audio.mka') | ForEach-Object { Join-Path $directory ".airplay-recording-$id.$_.part" }
+    $siblingDirectory = Join-Path $Fixture 'recording-sibling'
+    New-Item -ItemType Directory -Path $siblingDirectory | Out-Null
+    $sibling = Join-Path $siblingDirectory ".airplay-recording-$id.mp4.part"
+    foreach ($path in @($targets) + @($sibling)) { [IO.File]::WriteAllText($path, "Owned startup-cleanup sentinel $id", [Text.UTF8Encoding]::new($false)) }
+    $audit.Add("Owned cleanup sentinels created: targets=$($targets.Count) directory=$directory; sibling=$sibling")
+    return [pscustomobject]@{ Directory=$directory; Targets=@($targets); Sibling=$sibling; SiblingHash=(Get-Sha256 $sibling) }
+}
+
+function Assert-RecordingCleanupSentinels($Sentinels, $Observation) {
+    $cleanup = @($Observation.Diagnostics -split '\r?\n' | Where-Object { $_ -match '\bstartup recording_startup_cleanup\b' })
+    $targets = @($Sentinels.Targets | ForEach-Object { [ordered]@{ path=$_; presentBefore=$true; presentAfter=[IO.File]::Exists($_) } })
+    $siblingExists = [IO.File]::Exists($Sentinels.Sibling)
+    $siblingHash = if ($siblingExists) { Get-Sha256 $Sentinels.Sibling } else { '' }
+    $evidence = [ordered]@{ outputDirectory=$Sentinels.Directory; staleFiles=$targets; sibling=[ordered]@{ path=$Sentinels.Sibling; presentBefore=$true; presentAfter=$siblingExists; hashBefore=$Sentinels.SiblingHash; hashAfter=$siblingHash }; cleanupDiagnostics=$cleanup }
+    [IO.File]::WriteAllText((Join-Path $ReportDirectory 'DetectionBypass-recording-cleanup.json'), ($evidence | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    if ($cleanup.Count -ne 1 -or $cleanup[0] -notmatch '\bstartup recording_startup_cleanup count=2 result=completed$' -or
+        $Observation.Diagnostics -notmatch '\bstartup settings_loaded\b' -or
+        @($targets | Where-Object { $_.presentAfter }).Count -ne 0 -or -not $siblingExists -or $siblingHash -cne $Sentinels.SiblingHash) {
+        throw 'Real bypass startup did not clean exactly the owned target sentinels while preserving the sibling sentinel'
+    }
+    $audit.Add('PASS: real settings_loaded and recording_startup_cleanup count=2; owned target sentinels deleted; sibling sentinel hash unchanged')
 }
 
 try {
@@ -161,9 +261,10 @@ try {
     # scans afresh in each process rather than inheriting a source/host registry.
     [IO.File]::WriteAllBytes((Join-Path $template 'gstreamer-1.0/registry.x86_64.bin'), [byte[]]@())
     "[Paths]`nPlugins=." | Set-Content (Join-Path $template 'qt.conf')
-    '{"language":"en"}' | Set-Content (Join-Path $template 'airplay-settings.json')
+    # Settings are written per case after copying, with its own absolute output directory.
 
     if ($Mode -eq 'Acceptance') {
+        Test-RecordingDirectoryGuard
         $healthy = New-Fixture 'healthy'
         $positive = Invoke-Probe $healthy 'core'
         $p = $positive.Result
@@ -194,11 +295,13 @@ try {
             if ($Mode -eq 'DetectionBypass') { $mutation = 'detection-bypass' }
             if ($Mode -eq 'DuplicateDialog') { $mutation = 'duplicate-dialog' }
         }
+        $sentinels = if ($Mode -eq 'DetectionBypass') { New-RecordingCleanupSentinels $fixture } else { $null }
         $observation = Invoke-Probe $fixture $probeMode $mutation
         # Controls count as RED only after their intended real behavior happened.
         # Setup/loader failures cannot accidentally qualify as oracle rejection.
         switch ($Mode) {
             'DetectionBypass' {
+                Assert-RecordingCleanupSentinels $sentinels $observation
                 if ($observation.ExitCode -ne 0 -or -not $observation.Result.receiverStartCalled -or
                     -not $observation.Result.mainWindowSeen -or
                     $observation.Diagnostics -notmatch 'startup receiver_start_requested' -or
