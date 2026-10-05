@@ -2051,15 +2051,6 @@ private slots:
     }
 #endif
 
-    void dnssdDoesNotRequireExternalRuntimeOnWindows() {
-#ifdef _WIN32
-        // In-process mDNS is used on Windows, no external runtime needed
-        QVERIFY(true);
-#else
-        QSKIP("Non-Windows platform");
-#endif
-    }
-
 #if AIRPLAY_WITH_UXPLAY && defined(_WIN32)
     void dnssdProducesValidTxtRecordsOnWindows() {
         const char hw_addr[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};

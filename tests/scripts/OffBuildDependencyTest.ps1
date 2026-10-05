@@ -11,12 +11,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $audit = [System.Collections.Generic.List[string]]::new()
 
-function Require-File([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Required file is missing: $Path"
-    }
-    return (Get-Item -LiteralPath $Path).FullName
-}
+. (Join-Path $PSScriptRoot 'PeDependencyIsolation.ps1')
 
 try {
     $ReportDirectory = [IO.Path]::GetFullPath($ReportDirectory)
@@ -28,46 +23,13 @@ try {
     $systemDirectory = [Environment]::SystemDirectory
     $windowsDirectory = Split-Path -Parent $systemDirectory
     $searchDirectories = @($buildRoot, (Split-Path -Parent $SmokeTestExecutable), $DependencyBinDirectory)
-    $resolved = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $queue = [System.Collections.Generic.Queue[string]]::new()
-    foreach ($root in @($Executable, $SmokeTestExecutable, $plugin)) { $queue.Enqueue($root) }
-
     # Inspect real PE imports before metadata: an ON binary must fail on its GST import.
-    while ($queue.Count -gt 0) {
-        $file = Require-File $queue.Dequeue()
-        if ($resolved.ContainsKey($file)) { continue }
-        $resolved.Add($file, $file)
-        $output = @(& $Objdump -p $file 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "objdump failed for $file`: $($output -join ' ')" }
-        $imports = @($output | ForEach-Object {
-            if ($_ -match '^\s*DLL Name:\s*(\S+)\s*$') { $Matches[1] }
-        })
-        if ($imports.Count -eq 0) { throw "No PE imports parsed from $file" }
-        foreach ($name in $imports) {
-            if ($name -match '^(lib)?(?:gst|gstreamer).*\.dll$') {
-                throw "GStreamer import rejected: $name (imported by $file)"
-            }
-            if ($name -match '^(?:api|ext)-ms-.*\.dll$') {
-                $audit.Add("$file -> $name [Windows API-set]")
-                continue
-            }
-            # Follow application-local dependencies before the Windows system and PATH directories.
-            $candidate = $null
-            foreach ($directory in @((Split-Path -Parent $file), $buildRoot, $systemDirectory, $windowsDirectory) + $searchDirectories) {
-                $path = Join-Path $directory $name
-                if (Test-Path -LiteralPath $path -PathType Leaf) {
-                    $candidate = (Get-Item -LiteralPath $path).FullName
-                    break
-                }
-            }
-            if (-not $candidate) { throw "Unresolved import: $name (imported by $file)" }
-            $isSystem = $candidate.StartsWith($systemDirectory + '\', [StringComparison]::OrdinalIgnoreCase) -or
-                        (Split-Path -Parent $candidate) -eq $windowsDirectory
-            $audit.Add("$file -> $candidate [system=$isSystem]")
-            if (-not $isSystem) { $queue.Enqueue($candidate) }
+    $resolved = Get-PeDependencies -Objdump $Objdump -Roots @($Executable, $SmokeTestExecutable, $plugin) -SearchDirectories $searchDirectories -Audit $audit -RejectImport {
+        param($name, $file)
+        if ($name -match '^(lib)?(?:gst|gstreamer).*\.dll$') {
+            throw "GStreamer import rejected: $name (imported by $file)"
         }
     }
-
     $compileCommands = Require-File (Join-Path $buildRoot 'compile_commands.json')
     $ninjaFile = Require-File (Join-Path $buildRoot 'build.ninja')
     $dependencyPattern = '(?i)gstreamer|(?:^|[\\/\s])(?:lib)?gst[^\\/\s;"'']*\.(?:a|lib|dll)|(?:^|\s)-l(?:gst|gstreamer)\S*'
@@ -92,16 +54,7 @@ try {
     $isolatedPlugins = Join-Path $isolatedDirectory 'plugins'
     $isolatedPlatforms = Join-Path $isolatedPlugins 'platforms'
     New-Item -ItemType Directory -Path $isolatedPlatforms -Force | Out-Null
-    $copiedNames = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($file in $resolved.Values) {
-        if ([IO.Path]::GetExtension($file) -ine '.dll' -or $file -eq $plugin) { continue }
-        $name = Split-Path -Leaf $file
-        if ($copiedNames.ContainsKey($name) -and $copiedNames[$name] -ne $file) {
-            throw "Conflicting isolated DLL paths for $name"
-        }
-        $copiedNames[$name] = $file
-        Copy-Item -LiteralPath $file -Destination (Join-Path $isolatedDirectory $name)
-    }
+    Copy-PeDependencies $resolved $isolatedDirectory @($plugin)
     Copy-Item -LiteralPath $plugin -Destination $isolatedPlatforms
     # Override Qt's compiled-in plugin prefix as well as the process environment.
     "[Paths]`nPlugins=plugins" | Set-Content -LiteralPath (Join-Path $isolatedDirectory 'qt.conf')
