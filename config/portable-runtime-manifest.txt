@@ -28,3 +28,7 @@ gstreamer-1.0/registry.x86_64.bin
 libexec/gstreamer-1.0/gst-plugin-scanner.exe
 libqmdnsengine.dll
 libopenh264-7.dll
+
+gst-inspect-1.0.exe
+libjson-glib-1.0-0.dll
+gstreamer-plugins/libgstcodec2json.dll

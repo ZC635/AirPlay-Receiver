@@ -96,6 +96,8 @@ if ($missing.Count -ne 0 -or $forbidden.Count -ne 0) {
 }
 
 if (-not $SkipRuntimeProbe) {
+    & (Join-Path $PSScriptRoot 'verify-gstreamer-plugins.ps1') -PackageDir $PackageDir
+
     $trackedEnvironment = @(
         'PATH',
         'GST_PLUGIN_PATH', 'GST_PLUGIN_PATH_1_0',

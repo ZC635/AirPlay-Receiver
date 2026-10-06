@@ -110,6 +110,10 @@ try {
     New-CompletePortablePackageFixture $runtimeProbePackage
     Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32\where.exe") `
         -Destination (Join-Path $runtimeProbePackage "airplay_receiver.exe") -Force
+    # This structural fixture models a successful inspector so the existing
+    # recording-capability probe must still run. Real DLL loads are tested ON.
+    Remove-Item -LiteralPath (Join-Path $runtimeProbePackage 'gst-inspect-1.0.exe') -Force
+    Add-Type -TypeDefinition 'public class PortableInspectorFixture { public static int Main(string[] args) { System.Console.WriteLine("Filename " + args[0]); return 0; } }' -OutputAssembly (Join-Path $runtimeProbePackage 'gst-inspect-1.0.exe') -OutputType ConsoleApplication
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $runtimeProbeOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File $verifyScript -PackageDir $runtimeProbePackage 2>&1
@@ -118,7 +122,7 @@ try {
     if ($runtimeProbeExitCode -eq 0) {
         throw "Expected production verifier mode to execute the runtime probe."
     }
-    if (($runtimeProbeOutput -join "`n") -notmatch "runtime probe|airplay_receiver") {
+    if (($runtimeProbeOutput -join "`n") -notmatch "Portable recording runtime probe failed") {
         throw "Expected verifier output to report runtime probe failure. Output: $($runtimeProbeOutput -join ' ')"
     }
 
@@ -156,6 +160,21 @@ try {
         throw "Expected verifier output to mention config\portable-runtime-manifest.txt. Output: $($missingManifestOutput -join ' ')"
     }
 
+    # Literal dependency contract: do not derive these expectations from the manifest.
+    foreach ($dependencyPath in @('libjson-glib-1.0-0.dll', 'gstreamer-plugins\libgstcodec2json.dll', 'gst-inspect-1.0.exe')) {
+        $fixture = Join-Path $tempRoot ('missing-plugin-dependency-' + [IO.Path]::GetFileNameWithoutExtension($dependencyPath))
+        New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+        New-CompletePortablePackageFixture $fixture
+        Remove-Item -LiteralPath (Join-Path $fixture $dependencyPath) -Force -ErrorAction SilentlyContinue
+        $ErrorActionPreference = 'Continue'
+        $dependencyOutput = & $powershell -NoProfile -ExecutionPolicy Bypass -File $verifyScript -PackageDir $fixture -SkipRuntimeProbe 2>&1
+        $dependencyExit = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($dependencyExit -eq 0) { throw "Expected portable verifier to reject package missing $dependencyPath." }
+        if (($dependencyOutput -join "`n") -notmatch [regex]::Escape([IO.Path]::GetFileName($dependencyPath))) {
+            throw "Missing dependency failure must identify $dependencyPath. Output: $($dependencyOutput -join ' ')"
+        }
+    }
     $recordingFailureFixtures = @(
         "gstreamer-plugins\libgstmediafoundation.dll",
         "gstreamer-plugins\libgstopenh264.dll",

@@ -392,6 +392,20 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
             -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/process-containment")
     set_tests_properties(GStreamerStartupProcessContainmentTest PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
     get_filename_component(_gst_prefix "${AIRPLAY_GSTREAMER_BIN_DIR}" DIRECTORY)
+    add_test(NAME GStreamerPackagePluginsProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerPackagePluginsProcessTest.ps1"
+            -ProjectRoot "${PROJECT_SOURCE_DIR}"
+            -Inspector "${AIRPLAY_GSTREAMER_BIN_DIR}/gst-inspect-1.0.exe"
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/package-plugins"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}")
+    set_tests_properties(GStreamerPackagePluginsProcessTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+        TIMEOUT 240 RUN_SERIAL TRUE)
     foreach(_mode Acceptance DetectionBypass DuplicateDialog HealthyAsNegative WrongReason)
         if(_mode STREQUAL "Acceptance")
             set(_test_name GStreamerPluginReadinessProcessTest)

@@ -83,6 +83,7 @@ $RequiredPackageSuffixes = @(
     "gst-plugins-base",
     "gst-plugins-good",
     "gst-plugins-bad",
+    "json-glib",
     "gst-libav",
     "openh264",
     "qmdnsengine"
@@ -176,6 +177,9 @@ function Get-MSys2MissingRequirements {
         @{ Name = "pkg-config"; Path = (Join-Path $BinPath "pkg-config.exe") },
         @{ Name = "Qt6 runtime"; Path = (Join-Path $BinPath "Qt6Core.dll") },
         @{ Name = "GStreamer runtime"; Path = (Join-Path $BinPath "libgstreamer-1.0-0.dll") },
+        @{ Name = "GStreamer inspector"; Path = (Join-Path $BinPath "gst-inspect-1.0.exe") },
+        @{ Name = "JSON-GLib runtime"; Path = (Join-Path $BinPath "libjson-glib-1.0-0.dll") },
+        @{ Name = "GStreamer codec2json plugin"; Path = (Join-Path $PluginPath "libgstcodec2json.dll") },
         @{ Name = "GStreamer plugins directory"; Path = $PluginPath },
         @{ Name = "GStreamer app plugin"; Path = (Join-Path $PluginPath "libgstapp.dll") },
         @{ Name = "GStreamer core elements plugin"; Path = (Join-Path $PluginPath "libgstcoreelements.dll") },
@@ -463,6 +467,9 @@ function Invoke-Build {
         $PluginOutDir = Join-Path $VariantBuildDir "gstreamer-plugins"
         if (-not (Test-Path $PluginOutDir)) { New-Item -ItemType Directory -Path $PluginOutDir -Force | Out-Null }
         Get-ChildItem $PluginDir -Filter "*.dll" | Copy-Item -Destination $PluginOutDir -Force
+
+        Write-Host "  Bundling GStreamer inspector..." -ForegroundColor Gray
+        Copy-Item -LiteralPath (Join-Path $MSys2Bin "gst-inspect-1.0.exe") -Destination $VariantBuildDir -Force
 
         Write-Host "  Bundling GStreamer plugin scanner..." -ForegroundColor Gray
         $pluginScannerSource = Join-Path $MSys2Root "libexec\gstreamer-1.0\gst-plugin-scanner.exe"
