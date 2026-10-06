@@ -19,6 +19,7 @@ class LanguageManager;
 class ToolbarWidget;
 class ToolbarVisibilityController;
 class QLabel;
+class QPushButton;
 class QImage;
 class QEvent;
 class QCloseEvent;
@@ -50,6 +51,7 @@ struct MainWindowRuntimeServices {
     DiagnosticRestartCoordinator *diagnosticRestartCoordinator = nullptr;
     DiagnosticUiPrompts *diagnosticPrompts = nullptr;
     LanguageManager *languageManager = nullptr;
+    QString rtssCompatibilityExecutableName;
     bool diagnosticLoggingActive = false;
     std::function<void()> quitApplication;
     DiagnosticLogSink *diagnosticSink = nullptr;
@@ -101,6 +103,7 @@ private:
     void handleShortcut(ShortcutAction action);
     void changeEvent(QEvent *event) override;
     void retranslateUi();
+    void retranslateRtssCompatibilityNotice();
     void updateWindowTitle();
     void setStatus(StatusKind kind, QString detail = {});
     void refreshStatus();
@@ -163,6 +166,10 @@ private:
     QString statusDetail_;
     QVector<HotkeyRegistrationFailure> startupHotkeyFailures_;
     QString settingsPath_;
+    QString rtssCompatibilityExecutableName_;
+    QWidget *rtssCompatibilityNotice_ = nullptr;
+    QLabel *rtssCompatibilityText_ = nullptr;
+    QPushButton *rtssCompatibilityDismiss_ = nullptr;
     QString windowStatePath_;
     bool receiverConnected_ = false;
     bool receiverSessionActive_ = false;

@@ -89,6 +89,22 @@
 <context>
     <name>MainWindow</name>
     <message>
+        <source>RTSS is running and a runtime DLL path is long. This may trigger a third-party compatibility issue and cause the application to exit unexpectedly.
+
+Consider moving the entire application folder to a shorter path, such as C:\AirPlay; or add an application profile in RTSS for %1, set Application detection level to None for this application only, keep the Global settings unchanged, and restart AirPlay.
+
+These steps may reduce the risk, but do not guarantee a successful startup or prevent every crash.</source>
+        <translation>检测到 RTSS 正在运行，当前运行库 DLL 路径较长，可能触发第三方兼容性问题，导致程序异常退出。
+
+建议将整个应用文件夹移至较短路径，例如 C:\AirPlay；或在 RTSS 中为 %1 添加独立应用配置，仅将本应用的 Application detection level 设置为 None，保留 Global 设置，然后重新启动 AirPlay。
+
+这些操作可能降低风险，但不能保证启动成功或消除所有崩溃。</translation>
+    </message>
+    <message>
+        <source>Dismiss</source>
+        <translation>关闭提示</translation>
+    </message>
+    <message>
         <location filename="../src/app/MainWindow.cpp" line="81"/>
         <location filename="../src/app/MainWindow.cpp" line="88"/>
         <location filename="../src/app/MainWindow.cpp" line="95"/>

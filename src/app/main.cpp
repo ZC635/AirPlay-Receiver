@@ -27,6 +27,7 @@
 #include "diagnostics/DiagnosticLogSink.h"
 #include "platform/DependencyDiagnostics.h"
 #include "platform/WindowsHotkeyService.h"
+#include "platform/RtssCompatibilityDiagnostics.h"
 
 struct StandaloneRuntimeDecision {
     bool emitManifestEntries = false;
@@ -289,6 +290,8 @@ void recordStartupSettings(DiagnosticLogSink *sink, const StartupSettings &setti
 } // namespace
 
 int main(int argc, char *argv[]) {
+    // Capture before QApplication/Qt/GIO can create early windows. This does not prevent a pre-UI crash.
+    const RtssCompatibilitySnapshot rtssCompatibility = RtssCompatibilityDiagnostics::inspectCurrentProcess();
     bool verifyRecordingRuntime = false;
     for (int index = 1; index < argc; ++index) {
         if (QString::fromLocal8Bit(argv[index]) == "--verify-recording-runtime") {
@@ -378,6 +381,15 @@ int main(int argc, char *argv[]) {
     }
     DiagnosticLogSink *sink = diagnostics.sink();
     languageManager.setDiagnosticSink(sink);
+    recordStartup(sink,QStringLiteral("rtss_compatibility"),
+        {{QStringLiteral("rtss_process_state"),rtssCompatibility.rtssPresence == RtssPresence::Running ? QStringLiteral("running")
+            : rtssCompatibility.rtssPresence == RtssPresence::NotRunning ? QStringLiteral("not_running") : QStringLiteral("unknown")},
+         {QStringLiteral("runtime_risk"),rtssCompatibility.dllPathRisk == RtssDllPathRisk::KnownLengthRisk ? QStringLiteral("known_length_risk")
+            : rtssCompatibility.dllPathRisk == RtssDllPathRisk::NotObserved ? QStringLiteral("not_observed") : QStringLiteral("unknown")},
+         {QStringLiteral("runtime_source"),rtssCompatibility.dllPathSource.isEmpty() ? QStringLiteral("unresolved") : rtssCompatibility.dllPathSource},
+         {QStringLiteral("runtime_ansi_bytes"),QString::number(rtssCompatibility.ansiPathBytes)},
+         {QStringLiteral("detection_error_count"),QString::number(rtssCompatibility.detectionErrors.size())},
+         {QStringLiteral("notice_planned"),rtssCompatibility.shouldWarn() ? QStringLiteral("yes") : QStringLiteral("no")}},true);
     recordStartup(sink, QStringLiteral("session_activation"),
                   {{QStringLiteral("activation_source"), activation.sourceName()}}, true);
     recordStartup(sink, QStringLiteral("application_identity"),
@@ -508,6 +520,8 @@ int main(int argc, char *argv[]) {
     });
     MainWindowRuntimeServices runtimeServices;
     runtimeServices.diagnosticSink = sink;
+    if (rtssCompatibility.shouldWarn())
+        runtimeServices.rtssCompatibilityExecutableName = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
     runtimeServices.languageManager = &languageManager;
     runtimeServices.diagnosticLoggingActive = diagnostics.loggingActive();
     runtimeServices.quitApplication = [&app] { app.quit(); };
@@ -529,6 +543,8 @@ int main(int argc, char *argv[]) {
 #else
     MainWindowRuntimeServices runtimeServices;
     runtimeServices.diagnosticSink = sink;
+    if (rtssCompatibility.shouldWarn())
+        runtimeServices.rtssCompatibilityExecutableName = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
     runtimeServices.languageManager = &languageManager;
     runtimeServices.diagnosticLoggingActive = diagnostics.loggingActive();
     runtimeServices.quitApplication = [&app] { app.quit(); };

@@ -8,6 +8,7 @@ param(
     [Parameter(Mandatory=$true)][string]$GStreamerPluginDirectory,
     [Parameter(Mandatory=$true)][string]$ScannerExecutable,
     [Parameter(Mandatory=$true)][string]$ReportDirectory,
+    [string]$RuntimeDirectory = '',
     [ValidateSet('Acceptance','DetectionBypass','DuplicateDialog','HealthyAsNegative','WrongReason')]
     [string]$Mode = 'Acceptance',
     [switch]$ExpectRejection
@@ -32,6 +33,148 @@ function Get-Sha256([string]$Path) {
     finally { $stream.Dispose(); $hash.Dispose() }
 }
 $root = $null
+$runtimeParent = $null
+$runtimeCreated = $false
+$reportCreated = $false
+$runId = [Guid]::NewGuid().ToString('N')
+$pathEvidence = [ordered]@{
+    mode = $Mode; runtimeParent = $null; runtimeRoot = $null; reportDirectory = $null
+    maxPathLength = 240; longestPlannedLength = 0; longestPlannedPath = $null
+    longestObservedLength = 0; longestObservedPath = $null
+    # Observed fixed text (38) + vkDestroyDevice (15) + NUL in a 256-byte
+    # buffer leaves 202 DLL-path bytes. Bounds known create/destroy diagnostics only.
+    maxDiagnosticModulePathBytes = 202; diagnosticMessageCapacityBytes = 256
+    diagnosticHookFunction = 'vkDestroyDevice'
+    longestPlannedModulePathLength = 0; longestPlannedModulePath = $null
+    longestObservedModulePathLength = 0; longestObservedModulePath = $null
+    runtimeCreated = $false; runtimeRemoved = $false
+}
+
+function Assert-NoReparseAncestor([string]$Path) {
+    $cursor = [IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Unsafe runtime path: reparse point in $cursor"
+            }
+        }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+}
+
+function Assert-RuntimePath([string]$Path, [switch]$Observe) {
+    $full = [IO.Path]::GetFullPath($Path)
+    if ($full -ine $root -and -not $full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe runtime path: outside this run: $full"
+    }
+    if ($full -match '[^\x00-\x7f]') { throw "Unsafe runtime path: must be ASCII: $full" }
+    if ($full.Length -gt 240) { throw "Unsafe runtime path: exceeds 240 characters ($($full.Length)): $full" }
+    $isModule = [IO.Path]::GetExtension($full) -ieq '.dll'
+    if ($isModule -and $full.Length -gt $pathEvidence.maxDiagnosticModulePathBytes) {
+        throw "Unsafe runtime path: RTSS diagnostic module path exceeds $($pathEvidence.maxDiagnosticModulePathBytes) ASCII bytes ($($full.Length)): $full"
+    }
+    if ($Observe -and $full.Length -gt $pathEvidence.longestObservedLength) {
+        $pathEvidence.longestObservedLength = $full.Length
+        $pathEvidence.longestObservedPath = $full
+    }
+    if ($Observe -and $isModule -and $full.Length -gt $pathEvidence.longestObservedModulePathLength) {
+        $pathEvidence.longestObservedModulePathLength = $full.Length
+        $pathEvidence.longestObservedModulePath = $full
+    }
+}
+
+function Assert-RuntimeLayout([string[]]$RelativeFiles) {
+    # Reserve generated filenames before creating or copying fixtures.
+    $generated = @(
+        'airplay-settings.json', 'airplay_receiver.exe', (Split-Path -Leaf $ProbeExecutable),
+        'config/portable-runtime-manifest.txt', 'qt.conf', '.airplay-test-owner',
+        'platforms/qwindows.dll', 'platforms/qoffscreen.dll',
+        'gstreamer-1.0/registry.x86_64.bin', 'libexec/gstreamer-1.0/gst-plugin-scanner.exe',
+        'logs/AirPlay-Diagnostic-2000-01-01-000000-2147483647.log',
+        'recording-output/.airplay-recording-00000000000000000000000000000000.video.mkv.part',
+        'recording-output/.airplay-recording-00000000000000000000000000000000.audio.mka.part',
+        'recording-output/.airplay-recording-00000000000000000000000000000000.lock',
+        'recording-sibling/.airplay-recording-00000000000000000000000000000000.mp4.part'
+    ) + $RelativeFiles
+    $cases = @('template','recording-settings-guard','healthy',
+               'DetectionBypass','DuplicateDialog','HealthyAsNegative','WrongReason') +
+             @($required | ForEach-Object { "missing-$_" })
+    $paths = @($root) + @(
+        foreach ($case in $cases) {
+            foreach ($relative in $generated) { [IO.Path]::GetFullPath((Join-Path (Join-Path $root $case) $relative)) }
+        }
+    )
+    $longest = $paths | Sort-Object -Property Length -Descending | Select-Object -First 1
+    $pathEvidence.longestPlannedPath = $longest
+    $pathEvidence.longestPlannedLength = $longest.Length
+    $longestModule = $paths | Where-Object { [IO.Path]::GetExtension($_) -ieq '.dll' } |
+        Sort-Object -Property Length -Descending | Select-Object -First 1
+    $pathEvidence.longestPlannedModulePath = $longestModule
+    $pathEvidence.longestPlannedModulePathLength = $longestModule.Length
+    foreach ($path in $paths) { Assert-RuntimePath $path }
+}
+
+function Assert-RuntimeTree {
+    Assert-NoReparseAncestor $root
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($root)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        Assert-RuntimePath $directory -Observe
+        foreach ($item in Get-ChildItem -LiteralPath $directory -Force) {
+            Assert-RuntimePath $item.FullName -Observe
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Unsafe runtime path: reparse point in $($item.FullName)"
+            }
+            if ($item.PSIsContainer) { $pending.Push($item.FullName) }
+        }
+    }
+}
+
+function Assert-OwnedRuntime {
+    $expected = [IO.Path]::GetFullPath((Join-Path $runtimeParent ('runtime-' + $runId)))
+    if (-not $runtimeCreated -or $root -ine $expected) { throw 'Unsafe cleanup target: not created by this run' }
+    Assert-RuntimeTree
+    $marker = Join-Path $root '.airplay-test-owner'
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
+        [IO.File]::ReadAllText($marker) -cne $runId) { throw 'Unsafe cleanup target: ownership marker mismatch' }
+}
+
+function Test-RuntimePathGuard {
+    # Validate the exact known diagnostic boundary without creating these files.
+    $moduleAtLimit = Join-Path $root (('d' * (202 - $root.Length - 5)) + '.dll')
+    Assert-RuntimePath $moduleAtLimit
+    $invalid = @(
+        (Join-Path $runtimeParent 'neighbor.txt'),
+        ($root + '-neighbor\sentinel'),
+        (Join-Path $root ('x' * 241)),
+        (Join-Path $root (('d' * (203 - $root.Length - 5)) + '.dll')),
+        (Join-Path $root ([string][char]0x4e2d))
+    )
+    foreach ($path in $invalid) {
+        $rejected = $false
+        try { Assert-RuntimePath $path }
+        catch {
+            if (-not $_.Exception.Message.StartsWith('Unsafe runtime path:')) { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw "Unsafe runtime path accepted: $path" }
+    }
+    # The exact UUID path is insufficient proof without its ownership marker.
+    $marker = Join-Path $root '.airplay-test-owner'
+    [IO.File]::WriteAllText($marker, 'foreign owner')
+    try {
+        $rejected = $false
+        try { Assert-OwnedRuntime }
+        catch {
+            if ($_.Exception.Message -ne 'Unsafe cleanup target: ownership marker mismatch') { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw 'Foreign runtime ownership was accepted for cleanup' }
+    } finally { [IO.File]::WriteAllText($marker, $runId) }
+    $audit.Add('PASS: runtime guard rejected outside/sibling-prefix/overlength/non-ASCII paths and foreign ownership')
+    $audit.Add('PASS: RTSS diagnostic DLL path accepted at 202 ASCII bytes and rejected at 203 before launch')
+}
 
 function Assert-FixtureRecordingDirectory([string]$Fixture) {
     try {
@@ -63,6 +206,7 @@ function Assert-FixtureRecordingDirectory([string]$Fixture) {
 }
 
 function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = '') {
+    Assert-RuntimeTree
     $recordingDirectory = Assert-FixtureRecordingDirectory $Fixture
     $caseName = Split-Path -Leaf $Fixture
     Copy-Item -LiteralPath (Join-Path $Fixture 'airplay-settings.json') -Destination (Join-Path $ReportDirectory "$caseName-settings.json")
@@ -108,6 +252,7 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         [void][AirPlayStartupTestJob]::CloseHandle($job)
         $job = [IntPtr]::Zero
         $captured = [AirPlayStartupTestJob]::ReadFinalOutput($stdoutFile, $stderrFile, 5000)
+        Assert-RuntimeTree
         $out = $captured.Stdout
         $err = $captured.Stderr
         $logs = @(Get-ChildItem -LiteralPath (Join-Path $Fixture 'logs') -Filter '*.log' -ErrorAction SilentlyContinue)
@@ -229,11 +374,32 @@ function Assert-RecordingCleanupSentinels($Sentinels, $Observation) {
 }
 
 try {
-    New-Item -ItemType Directory -Path $ReportDirectory -Force | Out-Null
-    $ReportDirectory = [IO.Path]::GetFullPath($ReportDirectory)
-    $root = Join-Path $ReportDirectory ('runtime-' + [Guid]::NewGuid().ToString('N'))
-    if ($root -match '[^\x00-\x7f]') { throw 'Acceptance fixture path must be ASCII' }
+    $reportBase = [IO.Path]::GetFullPath($ReportDirectory)
+    New-Item -ItemType Directory -Path $reportBase -Force | Out-Null
+    $ReportDirectory = Join-Path $reportBase ('run-' + $runId)
+    New-Item -ItemType Directory -Path $ReportDirectory | Out-Null
+    $reportCreated = $true
+    $pathEvidence.reportDirectory = $ReportDirectory
+    Write-Output "Report directory: $ReportDirectory"
+    if (-not $RuntimeDirectory) { $RuntimeDirectory = Join-Path (Split-Path -Parent $Executable) 'tr' }
+    if ($RuntimeDirectory -notmatch '^[A-Za-z]:[\\/]') { throw 'Unsafe runtime path: parent must be an absolute Windows directory' }
+    $runtimeParent = [IO.Path]::GetFullPath($RuntimeDirectory).TrimEnd('\','/')
+    if ($runtimeParent.Length -le 3) { throw 'Unsafe runtime path: parent must not be a drive root' }
+    $root = Join-Path $runtimeParent ('runtime-' + $runId)
+    $pathEvidence.runtimeParent = $runtimeParent
+    $pathEvidence.runtimeRoot = $root
+    if ($root.StartsWith($reportBase + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        $ReportDirectory.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Unsafe runtime path: report and runtime directories must be separate'
+    }
+    Assert-NoReparseAncestor $root
+    Assert-RuntimeLayout @()
+    New-Item -ItemType Directory -Path $runtimeParent -Force | Out-Null
     New-Item -ItemType Directory -Path $root | Out-Null
+    $runtimeCreated = $true
+    $pathEvidence.runtimeCreated = $true
+    [IO.File]::WriteAllText((Join-Path $root '.airplay-test-owner'), $runId)
+    $audit.Add("Runtime directory: $root; report directory: $ReportDirectory; file path limit=240; RTSS diagnostic module path limit=$($pathEvidence.maxDiagnosticModulePathBytes) ASCII bytes")
     $template = Join-Path $root 'template'
     foreach ($directory in @('','config','platforms','gstreamer-plugins','gstreamer-1.0','libexec/gstreamer-1.0')) {
         New-Item -ItemType Directory -Path (Join-Path $template $directory) -Force | Out-Null
@@ -250,6 +416,9 @@ try {
     $search = @((Split-Path -Parent $Executable),(Split-Path -Parent $ProbeExecutable),$DependencyBinDirectory)
     $deps = Get-PeDependencies -Roots $roots -SearchDirectories $search -Objdump $Objdump -RejectImport { param($name,$file) } -Audit $audit
     foreach ($source in $deps.Values) { $sourceHashes[$source] = (Get-Sha256 $source) }
+    $relativeFiles = @($deps.Values | ForEach-Object { Split-Path -Leaf $_ }) +
+        @($plugins | ForEach-Object { 'gstreamer-plugins/' + (Split-Path -Leaf $_) })
+    Assert-RuntimeLayout $relativeFiles
     Copy-PeDependencies -Resolved $deps -Directory $template -ExcludedFiles ($plugins + $platforms + @($NonPluginDll))
     Copy-Item -LiteralPath $Executable -Destination (Join-Path $template 'airplay_receiver.exe')
     Copy-Item -LiteralPath $ProbeExecutable -Destination (Join-Path $template (Split-Path -Leaf $ProbeExecutable))
@@ -264,6 +433,7 @@ try {
     # Settings are written per case after copying, with its own absolute output directory.
 
     if ($Mode -eq 'Acceptance') {
+        Test-RuntimePathGuard
         Test-RecordingDirectoryGuard
         $healthy = New-Fixture 'healthy'
         $positive = Invoke-Probe $healthy 'core'
@@ -365,13 +535,22 @@ try {
         }
     }
     if ($sourceHashes.Count -gt 0) { $audit.Add("Source SHA256 verified: $($sourceHashes.Count) files") }
-    if ($root -and (Test-Path -LiteralPath $root)) {
-        $resolved = [IO.Path]::GetFullPath($root)
-        if (-not $resolved.StartsWith($ReportDirectory + '\', [StringComparison]::OrdinalIgnoreCase) -or
-            (Split-Path -Leaf $resolved) -notmatch '^runtime-[0-9a-f]{32}$') { throw "Unsafe cleanup target: $resolved" }
-        Remove-Item -LiteralPath $resolved -Recurse -Force
+    if ($runtimeCreated -and (Test-Path -LiteralPath $root)) {
+        try {
+            Assert-OwnedRuntime
+            Remove-Item -LiteralPath $root -Recurse -Force
+            $pathEvidence.runtimeRemoved = $true
+            $audit.Add('PASS: removed only this run owned runtime directory')
+        } catch {
+            $audit.Add("FAIL: cleanup refused/failed: $($_.Exception.Message)")
+            Write-Error -Message $_.Exception.Message -ErrorAction Continue
+        }
     }
-    $audit | Set-Content (Join-Path $ReportDirectory 'audit.txt')
+    if ($reportCreated) {
+        [IO.File]::WriteAllText((Join-Path $ReportDirectory 'runtime-paths.json'),
+            ($pathEvidence | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
+        $audit | Set-Content (Join-Path $ReportDirectory 'audit.txt')
+    }
 }
 if (@($audit | Where-Object { $_.StartsWith('FAIL:') }).Count -gt 0) { exit 1 }
 Write-Output $audit[-2]

@@ -6,6 +6,10 @@ add_executable(DiagnosticRestartCoordinatorTest app/DiagnosticRestartCoordinator
 target_link_libraries(DiagnosticRestartCoordinatorTest PRIVATE airplay_test_support Qt6::Test Qt6::Network)
 add_test(NAME DiagnosticRestartCoordinatorTest COMMAND DiagnosticRestartCoordinatorTest)
 
+add_executable(RtssCompatibilityDiagnosticsTest platform/RtssCompatibilityDiagnosticsTest.cpp)
+target_link_libraries(RtssCompatibilityDiagnosticsTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME RtssCompatibilityDiagnosticsTest COMMAND RtssCompatibilityDiagnosticsTest)
+
 add_executable(DiagnosticLogFolderActionsTest platform/DiagnosticLogFolderActionsTest.cpp)
 target_link_libraries(DiagnosticLogFolderActionsTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME DiagnosticLogFolderActionsTest COMMAND DiagnosticLogFolderActionsTest)
@@ -378,6 +382,9 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     set(AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY
         "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/gstreamer-startup-acceptance"
         CACHE PATH "Ignored report directory for real GStreamer startup acceptance")
+    set(AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY
+        "${PROJECT_BINARY_DIR}/tr"
+        CACHE PATH "Short ASCII runtime parent for real GStreamer startup fixtures")
     add_test(NAME GStreamerStartupProcessContainmentTest
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/StartupProcessContainmentTest.ps1"
@@ -405,6 +412,7 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
                 -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
                 -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
                 -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/${_mode}"
+                -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}"
                 -Mode ${_mode} ${_control_argument})
         set_tests_properties(${_test_name} PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
@@ -413,6 +421,7 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
 endif()
 
 set(AIRPLAY_QT_TESTS
+    RtssCompatibilityDiagnosticsTest
     DiagnosticRestartCoordinatorTest
     DiagnosticLogFolderActionsTest
     DiagnosticLogSinkTest

@@ -29,6 +29,8 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QGridLayout>
+#include <QHBoxLayout>
+#include <QTimer>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QKeySequence>
@@ -151,7 +153,8 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
       receiver_(receiver),
       languageManager_(runtimeServices.languageManager),
       diagnosticSink_(runtimeServices.diagnosticSink ? runtimeServices.diagnosticSink : &nullDiagnosticLogSink()),
-      settingsPath_(std::move(settingsPath)) {
+      settingsPath_(std::move(settingsPath)),
+      rtssCompatibilityExecutableName_(std::move(runtimeServices.rtssCompatibilityExecutableName)) {
     if (!settingsPath_.isEmpty()) {
         settingsStore_ = std::make_unique<AppSettingsStore>(settingsPath_);
     }
@@ -214,6 +217,32 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     layout->addWidget(statusLabel_, 0, 0, Qt::AlignCenter);
     layout->addWidget(toolbar_, 0, 0, Qt::AlignTop | Qt::AlignRight);
 
+    // A separate layout row keeps the notice outside the native video child window.
+    if (!rtssCompatibilityExecutableName_.isEmpty()) {
+        rtssCompatibilityNotice_ = new QWidget(central);
+        rtssCompatibilityNotice_->setObjectName("rtssCompatibilityNotice");
+        rtssCompatibilityNotice_->setStyleSheet("background: #fff2cc; color: #3b2f00;");
+        auto *noticeLayout = new QHBoxLayout(rtssCompatibilityNotice_);
+        noticeLayout->setContentsMargins(12,8,12,8);
+        rtssCompatibilityText_ = new QLabel(rtssCompatibilityNotice_);
+        rtssCompatibilityText_->setObjectName("rtssCompatibilityText");
+        rtssCompatibilityText_->setTextFormat(Qt::PlainText);
+        rtssCompatibilityText_->setWordWrap(true);
+        rtssCompatibilityDismiss_ = new QPushButton(rtssCompatibilityNotice_);
+        rtssCompatibilityDismiss_->setObjectName("rtssCompatibilityDismiss");
+        noticeLayout->addWidget(rtssCompatibilityText_,1);
+        noticeLayout->addWidget(rtssCompatibilityDismiss_,0,Qt::AlignTop);
+        layout->addWidget(rtssCompatibilityNotice_,1,0);
+        connect(rtssCompatibilityDismiss_,&QPushButton::clicked,rtssCompatibilityNotice_,&QWidget::hide);
+        retranslateRtssCompatibilityNotice();
+        QTimer::singleShot(0,rtssCompatibilityNotice_,[this] {
+            if (rtssCompatibilityNotice_->isVisible()) {
+                diagnosticSink_->record(makeDiagnosticEvent(DiagnosticSeverity::Warning,
+                    QStringLiteral("startup"),QStringLiteral("rtss_compatibility_notice_shown"),
+                    {{QStringLiteral("mode"),QStringLiteral("non_modal")}},true));
+            }
+        });
+    }
     setCentralWidget(central);
     toolbarVisibility_ = new ToolbarVisibilityController(central, toolbar_, this);
     toolbarVisibility_->setDiagnosticSink(diagnosticSink_);
@@ -369,7 +398,18 @@ void MainWindow::changeEvent(QEvent *event) {
     QMainWindow::changeEvent(event);
 }
 
+void MainWindow::retranslateRtssCompatibilityNotice() {
+    if (!rtssCompatibilityText_) return;
+    rtssCompatibilityText_->setText(tr(
+        "RTSS is running and a runtime DLL path is long. This may trigger a third-party compatibility issue and cause the application to exit unexpectedly.\n\n"
+        "Consider moving the entire application folder to a shorter path, such as C:\\AirPlay; or add an application profile in RTSS for %1, set Application detection level to None for this application only, keep the Global settings unchanged, and restart AirPlay.\n\n"
+        "These steps may reduce the risk, but do not guarantee a successful startup or prevent every crash.")
+        .arg(rtssCompatibilityExecutableName_));
+    rtssCompatibilityDismiss_->setText(tr("Dismiss"));
+}
+
 void MainWindow::retranslateUi() {
+    retranslateRtssCompatibilityNotice();
     setDiagnosticLoggingActive(diagnosticLoggingActive_);
     refreshStatus();
     applyShortcutTooltips();

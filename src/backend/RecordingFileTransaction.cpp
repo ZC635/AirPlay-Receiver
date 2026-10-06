@@ -1,4 +1,5 @@
 #include "backend/RecordingFileTransaction.h"
+#include "platform/FileSystemPath.h"
 
 #include <QDir>
 #include <QHash>
@@ -39,7 +40,7 @@ QSet<QString> &claimedAudioRegistry() {
 }
 
 QString normalizedLockKey(const QString &path) {
-    QString key = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    QString key = FileSystemPath::absolute(path);
 #ifdef Q_OS_WIN
     key = key.toLower();
 #endif
@@ -57,7 +58,7 @@ void configureLock(QLockFile *lock) {
 }
 
 void warnIfLockFileRemains(const QString &path) {
-    if (QFileInfo::exists(path)) {
+    if (QFileInfo::exists(FileSystemPath::forIo(path))) {
         qWarning().noquote() << QStringLiteral("Could not remove recording lock file: %1").arg(path);
     }
 }
@@ -69,7 +70,7 @@ bool acquireReservationLock(const QString &path, QString *error) {
         *error = QStringLiteral("Recording transaction is already active: \"%1\"").arg(path);
         return false;
     }
-    auto lock = QSharedPointer<QLockFile>::create(path);
+    auto lock = QSharedPointer<QLockFile>::create(FileSystemPath::forIo(path));
     configureLock(lock.data());
     if (!lock->tryLock(0)) {
         *error = QStringLiteral("Could not acquire recording transaction lock \"%1\" (error %2)")
@@ -86,7 +87,7 @@ QString releaseReservationLockLocked(const QString &path) {
     const auto lock = lockRegistry().take(normalizedLockKey(path));
     if (!lock) return {};
     lock->unlock();
-    if (QFileInfo::exists(path)) {
+    if (QFileInfo::exists(FileSystemPath::forIo(path))) {
         return QStringLiteral("recording lock cleanup failed; lock file remains: %1").arg(path);
     }
     return {};
@@ -127,7 +128,7 @@ QString reservationLockPath(const RecordingFileReservation &reservation) {
 
 QString hideReservationLock(const QString &path) {
 #ifdef Q_OS_WIN
-    const std::wstring nativePath = QDir::toNativeSeparators(path).toStdWString();
+    const std::wstring nativePath = FileSystemPath::forIo(path).toStdWString();
     const DWORD attributes = GetFileAttributesW(nativePath.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES ||
         !SetFileAttributesW(nativePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)) {
@@ -148,7 +149,7 @@ struct TemporaryFileCreationResult {
 };
 
 TemporaryFileCreationResult createTemporaryFile(const QString &path) {
-    QFile file(path);
+    QFile file(FileSystemPath::forIo(path));
     if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
         return {false, false,
                 QStringLiteral("Could not exclusively create temporary recording file \"%1\": %2")
@@ -157,12 +158,12 @@ TemporaryFileCreationResult createTemporaryFile(const QString &path) {
     file.close();
 
 #ifdef Q_OS_WIN
-    const std::wstring nativePath = QDir::toNativeSeparators(path).toStdWString();
+    const std::wstring nativePath = FileSystemPath::forIo(path).toStdWString();
     const DWORD attributes = GetFileAttributesW(nativePath.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES ||
         !SetFileAttributesW(nativePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)) {
         const DWORD error = GetLastError();
-        const bool removed = QFile::remove(path);
+        const bool removed = QFile::remove(FileSystemPath::forIo(path));
         return {!removed, true,
                 QStringLiteral("Could not hide temporary recording file \"%1\" (Windows error %2)")
                     .arg(path)
@@ -173,15 +174,15 @@ TemporaryFileCreationResult createTemporaryFile(const QString &path) {
 }
 
 void removeExistingFile(const QString &path) {
-    const QFileInfo info(path);
-    if (info.exists() || info.isSymLink()) QFile::remove(path);
+    const QFileInfo info(FileSystemPath::forIo(path));
+    if (info.exists() || info.isSymLink()) QFile::remove(FileSystemPath::forIo(path));
 }
 
 QString finalRecordingPath(const QDir &directory, const QDateTime &localNow) {
     const QString stem = QStringLiteral("AirPlay Recording %1")
                              .arg(localNow.toString(QStringLiteral("yyyy-MM-dd HH-mm-ss")));
     QString candidate = directory.filePath(stem + QStringLiteral(".mp4"));
-    for (int suffix = 2; QFileInfo::exists(candidate); ++suffix) {
+    for (int suffix = 2; QFileInfo::exists(FileSystemPath::forIo(candidate)); ++suffix) {
         candidate = directory.filePath(
             QStringLiteral("%1-%2.mp4").arg(stem).arg(suffix));
     }
@@ -195,8 +196,11 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
     if (directory.trimmed().isEmpty()) {
         return {{}, QStringLiteral("Recording output directory is empty")};
     }
-    const QString outputPath = QDir(directory).absolutePath();
-    if (!QDir().mkpath(outputPath) || !QFileInfo(outputPath).isDir()) {
+    const QString outputPath = FileSystemPath::absolute(directory);
+    if (outputPath.isEmpty()) {
+        return {{}, QStringLiteral("Unsupported recording output directory: \"%1\"").arg(directory)};
+    }
+    if (!QDir().mkpath(FileSystemPath::forIo(outputPath)) || !QFileInfo(FileSystemPath::forIo(outputPath)).isDir()) {
         return {{}, QStringLiteral("Could not create recording output directory \"%1\"")
                         .arg(outputPath)};
     }
@@ -216,7 +220,7 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
         finalRecordingPath(outputDirectory, localNow),
     };
 
-    const QFileInfo optionalAudioInfo(reservation.audioSpoolPath);
+    const QFileInfo optionalAudioInfo(FileSystemPath::forIo(reservation.audioSpoolPath));
     if (optionalAudioInfo.exists() || optionalAudioInfo.isSymLink()) {
         QString error = QStringLiteral("Optional audio spool path is already occupied: \"%1\"")
                             .arg(reservation.audioSpoolPath);
@@ -232,8 +236,8 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
             if (creation.ownedFileRemains) created.append(path);
             QStringList cleanupFailures;
             for (const QString &createdPath : created) {
-                const QFileInfo info(createdPath);
-                if ((info.exists() || info.isSymLink()) && !QFile::remove(createdPath)) {
+                const QFileInfo info(FileSystemPath::forIo(createdPath));
+                if ((info.exists() || info.isSymLink()) && !QFile::remove(FileSystemPath::forIo(createdPath))) {
                     cleanupFailures.append(createdPath);
                 }
             }
@@ -254,7 +258,7 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
     if (!lockHideError.isEmpty()) {
         QStringList cleanupFailures;
         for (const QString &createdPath : created) {
-            if (QFileInfo::exists(createdPath) && !QFile::remove(createdPath)) {
+            if (QFileInfo::exists(FileSystemPath::forIo(createdPath)) && !QFile::remove(FileSystemPath::forIo(createdPath))) {
                 cleanupFailures.append(createdPath);
             }
         }
@@ -273,33 +277,37 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
 }
 
 QString RecordingFileTransaction::claimOptionalAudioSpool(const QString &audioSpoolPath) {
-    const QFileInfo audioInfo(audioSpoolPath);
+    const QString logicalAudioPath = FileSystemPath::absolute(audioSpoolPath);
+    if (logicalAudioPath.isEmpty()) {
+        return QStringLiteral("Optional audio spool path is not a supported file-system path");
+    }
+    const QFileInfo audioInfo(FileSystemPath::forIo(logicalAudioPath));
     const QRegularExpressionMatch match =
         optionalAudioFilePattern().match(audioInfo.fileName());
     if (!match.hasMatch()) {
         return QStringLiteral("Optional audio spool path is not an exact recording audio path: \"%1\"")
-            .arg(audioSpoolPath);
+            .arg(logicalAudioPath);
     }
 
-    const QString audioKey = normalizedLockKey(audioSpoolPath);
+    const QString audioKey = normalizedLockKey(logicalAudioPath);
     const QString transactionLockPath = lockPath(audioInfo.absolutePath(), match.captured(1));
     QMutexLocker guard(&lockRegistryMutex());
     if (!lockRegistry().contains(normalizedLockKey(transactionLockPath))) {
         return QStringLiteral("Optional audio spool requires a matching active reservation lock: \"%1\"")
-            .arg(audioSpoolPath);
+            .arg(logicalAudioPath);
     }
     if (claimedAudioRegistry().contains(audioKey)) {
         return QStringLiteral("Optional audio spool is already claimed: \"%1\"")
-            .arg(audioSpoolPath);
+            .arg(logicalAudioPath);
     }
 
-    const TemporaryFileCreationResult creation = createTemporaryFile(audioSpoolPath);
+    const TemporaryFileCreationResult creation = createTemporaryFile(logicalAudioPath);
     if (!creation.error.isEmpty()) {
         QString error = creation.error;
         if (creation.ownedFileRemains) {
             claimedAudioRegistry().insert(audioKey);
             error += QStringLiteral("; owned audio spool remains claimed for cleanup: %1")
-                         .arg(audioSpoolPath);
+                         .arg(logicalAudioPath);
         } else if (creation.hideFailed) {
             error += QStringLiteral("; temporary file cleanup succeeded");
         }
@@ -311,7 +319,7 @@ QString RecordingFileTransaction::claimOptionalAudioSpool(const QString &audioSp
 }
 
 QString RecordingFileTransaction::commit(const RecordingFileReservation &reservation) {
-    const QFileInfo mp4Info(reservation.temporaryMp4Path);
+    const QFileInfo mp4Info(FileSystemPath::forIo(reservation.temporaryMp4Path));
     if (mp4Info.isSymLink() || (mp4Info.exists() && !mp4Info.isFile())) {
         return QStringLiteral("Temporary MP4 result is not a regular file: \"%1\"")
             .arg(reservation.temporaryMp4Path);
@@ -324,14 +332,14 @@ QString RecordingFileTransaction::commit(const RecordingFileReservation &reserva
         return QStringLiteral("Temporary MP4 result is empty: \"%1\"")
             .arg(reservation.temporaryMp4Path);
     }
-    if (QFileInfo::exists(reservation.finalPath)) {
+    if (QFileInfo::exists(FileSystemPath::forIo(reservation.finalPath))) {
         return QStringLiteral("Final recording path already exists: \"%1\"")
             .arg(reservation.finalPath);
     }
 
-    const QFileInfo videoInfo(reservation.videoSpoolPath);
+    const QFileInfo videoInfo(FileSystemPath::forIo(reservation.videoSpoolPath));
     if ((videoInfo.exists() || videoInfo.isSymLink()) &&
-        !QFile::remove(reservation.videoSpoolPath)) {
+        !QFile::remove(FileSystemPath::forIo(reservation.videoSpoolPath))) {
         return QStringLiteral("Temporary spool cleanup failed before commit: %1")
             .arg(reservation.videoSpoolPath);
     }
@@ -339,9 +347,9 @@ QString RecordingFileTransaction::commit(const RecordingFileReservation &reserva
     QMutexLocker registryGuard(&lockRegistryMutex());
     const QString audioKey = normalizedLockKey(reservation.audioSpoolPath);
     if (claimedAudioRegistry().contains(audioKey)) {
-        const QFileInfo audioInfo(reservation.audioSpoolPath);
+        const QFileInfo audioInfo(FileSystemPath::forIo(reservation.audioSpoolPath));
         if ((audioInfo.exists() || audioInfo.isSymLink()) &&
-            !QFile::remove(reservation.audioSpoolPath)) {
+            !QFile::remove(FileSystemPath::forIo(reservation.audioSpoolPath))) {
             return QStringLiteral("Temporary spool cleanup failed before commit: %1")
                 .arg(reservation.audioSpoolPath);
         }
@@ -350,7 +358,7 @@ QString RecordingFileTransaction::commit(const RecordingFileReservation &reserva
 
 #ifdef Q_OS_WIN
     const std::wstring nativeTemporaryPath =
-        QDir::toNativeSeparators(reservation.temporaryMp4Path).toStdWString();
+        FileSystemPath::forIo(reservation.temporaryMp4Path).toStdWString();
     const DWORD originalAttributes = GetFileAttributesW(nativeTemporaryPath.c_str());
     if (originalAttributes == INVALID_FILE_ATTRIBUTES) {
         return QStringLiteral("Could not read temporary MP4 attributes before commit: \"%1\" (Windows error %2)")
@@ -369,8 +377,8 @@ QString RecordingFileTransaction::commit(const RecordingFileReservation &reserva
     }
 #endif
 
-    QFile mp4(reservation.temporaryMp4Path);
-    if (!mp4.rename(reservation.finalPath)) {
+    QFile mp4(FileSystemPath::forIo(reservation.temporaryMp4Path));
+    if (!mp4.rename(FileSystemPath::forIo(reservation.finalPath))) {
         QString error = QStringLiteral("Could not commit recording to \"%1\": %2")
                             .arg(reservation.finalPath, mp4.errorString());
 #ifdef Q_OS_WIN
@@ -399,9 +407,9 @@ void RecordingFileTransaction::discard(const RecordingFileReservation &reservati
     QMutexLocker registryGuard(&lockRegistryMutex());
     const QString audioKey = normalizedLockKey(reservation.audioSpoolPath);
     if (claimedAudioRegistry().contains(audioKey)) {
-        const QFileInfo audioInfo(reservation.audioSpoolPath);
+        const QFileInfo audioInfo(FileSystemPath::forIo(reservation.audioSpoolPath));
         if ((audioInfo.exists() || audioInfo.isSymLink()) &&
-            !QFile::remove(reservation.audioSpoolPath)) {
+            !QFile::remove(FileSystemPath::forIo(reservation.audioSpoolPath))) {
             qWarning().noquote()
                 << QStringLiteral("Could not discard claimed optional audio spool: %1")
                        .arg(reservation.audioSpoolPath);
@@ -415,14 +423,16 @@ void RecordingFileTransaction::discard(const RecordingFileReservation &reservati
 
 QStringList RecordingFileTransaction::cleanupStaleTemporaryFiles(const QString &directory) {
     if (directory.trimmed().isEmpty()) return {};
-    const QDir outputDirectory(directory);
+    const QString outputPath = FileSystemPath::absolute(directory);
+    if (outputPath.isEmpty()) return {};
+    const QDir outputDirectory(FileSystemPath::forIo(outputPath));
     QMap<QString, QStringList> pathsById;
     const QFileInfoList entries = outputDirectory.entryInfoList(
         QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
     for (const QFileInfo &entry : entries) {
         const QRegularExpressionMatch match = temporaryFilePattern().match(entry.fileName());
         if (!entry.isSymLink() && entry.isFile() && match.hasMatch()) {
-            pathsById[match.captured(1)].append(QDir::cleanPath(entry.absoluteFilePath()));
+            pathsById[match.captured(1)].append(FileSystemPath::absolute(entry.absoluteFilePath()));
             continue;
         }
         const QRegularExpressionMatch lockMatch = lockFilePattern().match(entry.fileName());
@@ -433,8 +443,8 @@ QStringList RecordingFileTransaction::cleanupStaleTemporaryFiles(const QString &
 
     QStringList deleted;
     for (auto group = pathsById.cbegin(); group != pathsById.cend(); ++group) {
-        const QString transactionLockPath = lockPath(outputDirectory.absolutePath(), group.key());
-        QLockFile lock(transactionLockPath);
+        const QString transactionLockPath = lockPath(outputPath, group.key());
+        QLockFile lock(FileSystemPath::forIo(transactionLockPath));
         configureLock(&lock);
         if (!lock.tryLock(0)) {
             if (lock.error() != QLockFile::LockFailedError) {
@@ -448,7 +458,7 @@ QStringList RecordingFileTransaction::cleanupStaleTemporaryFiles(const QString &
         const QString lockHideError = hideReservationLock(transactionLockPath);
         if (!lockHideError.isEmpty()) qWarning().noquote() << lockHideError;
         for (const QString &path : group.value()) {
-            if (QFile::remove(path)) {
+            if (QFile::remove(FileSystemPath::forIo(path))) {
                 deleted.append(path);
             } else {
                 qWarning().noquote()
