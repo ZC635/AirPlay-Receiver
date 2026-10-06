@@ -323,6 +323,74 @@ private slots:
         QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
     }
 
+    // A modal warning or receiver restart/stop caused by the notice must fail this test.
+    void rtssRiskNoticeIsNonModalAndDoesNotControlReception() {
+        FakeAirPlayReceiver receiver;
+        MainWindowRuntimeServices services;
+        services.rtssCompatibilityExecutableName = "renamed_receiver.exe";
+        MainWindow window(AppSettings::defaults(),nullptr,&receiver,{},nullptr,nullptr,services);
+        window.show();
+        auto *notice = window.findChild<QWidget *>("rtssCompatibilityNotice");
+        auto *body = window.findChild<QLabel *>("rtssCompatibilityText");
+        auto *dismiss = window.findChild<QPushButton *>("rtssCompatibilityDismiss");
+        QVERIFY(notice != nullptr); QVERIFY(body != nullptr); QVERIFY(dismiss != nullptr);
+        QVERIFY(!notice->isWindow());
+        auto *surface = window.findChild<VideoSurfaceWidget *>();
+        QVERIFY(surface != nullptr);
+        const QRect noticeBounds(notice->mapTo(&window,QPoint()),notice->size());
+        const QRect videoBounds(surface->mapTo(&window,QPoint()),surface->size());
+        QVERIFY(!noticeBounds.intersects(videoBounds));
+        QVERIFY(notice->isVisible());
+        QCoreApplication::processEvents();
+        const QRect visibleNoticeBounds(notice->mapTo(&window,QPoint()),notice->size());
+        qInfo() << "RTSS layout" << window.size() << visibleNoticeBounds << body->geometry()
+                << "heightForWidth" << body->heightForWidth(body->width())
+                << "visibleRegion" << body->visibleRegion();
+        QVERIFY(window.rect().contains(visibleNoticeBounds));
+        QVERIFY(!body->visibleRegion().isEmpty());
+        QVERIFY(body->height() >= body->heightForWidth(body->width()));
+        if (!qEnvironmentVariable("AIRPLAY_NOTICE_SNAPSHOT").isEmpty())
+            QVERIFY(window.grab().save(qEnvironmentVariable("AIRPLAY_NOTICE_SNAPSHOT")));
+        QCOMPARE(QApplication::activeModalWidget(),nullptr);
+        QVERIFY(body->text().contains("renamed_receiver.exe"));
+        QVERIFY(body->text().contains("Global"));
+        QVERIFY(body->text().contains("None"));
+        QCOMPARE(receiver.startCount,0); QCOMPARE(receiver.stopCount,0);
+        receiver.start();
+        receiver.forceState(ReceiverState::Connected);
+        dismiss->click();
+        QVERIFY(notice->isHidden());
+        receiver.stop(); receiver.start(); receiver.forceState(ReceiverState::Connected);
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&window,&languageChange);
+        QVERIFY(notice->isHidden());
+        QCOMPARE(window.findChildren<QWidget *>("rtssCompatibilityNotice").size(),1);
+        QCOMPARE(receiver.startCount,2); QCOMPARE(receiver.stopCount,1);
+        QCOMPARE(receiver.state(),ReceiverState::Connected);
+    }
+    void rtssRiskNoticeUsesRealTranslationCatalogue() {
+        LanguageManager language(QCoreApplication::instance());
+        QVERIFY(language.apply("en"));
+        MainWindowRuntimeServices services;
+        services.rtssCompatibilityExecutableName = "actual_name.exe";
+        services.languageManager = &language;
+        MainWindow window(AppSettings::defaults(),nullptr,nullptr,{},nullptr,nullptr,services);
+        auto *body = window.findChild<QLabel *>("rtssCompatibilityText");
+        QVERIFY(body != nullptr);
+        QVERIFY(body->text().contains("RTSS is running"));
+        QVERIFY(language.apply("zh-CN"));
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&window,&languageChange);
+        QVERIFY(body->text().contains(QString::fromUtf8("检测到 RTSS 正在运行")));
+        QVERIFY(body->text().contains("actual_name.exe"));
+        QVERIFY(body->text().contains(QString::fromUtf8("保留 Global 设置")));
+        QVERIFY(language.apply("en"));
+    }
+    void noRtssRiskNoticeWithoutStartupRisk() {
+        MainWindow window;
+        QVERIFY(window.findChild<QWidget *>("rtssCompatibilityNotice") == nullptr);
+    }
+
     void diagnosticLoggingTitleAndFailureAreIdempotent() {
         MainWindow window;
         QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));

@@ -122,6 +122,10 @@ add_library(airplay_app_lib
     src/backend/VideoFrameBridge.cpp
     src/backend/VideoFrameBridge.h
     src/backend/VideoQualitySettings.h
+    src/platform/FileSystemPath.cpp
+    src/platform/FileSystemPath.h
+    src/platform/RtssCompatibilityDiagnostics.cpp
+    src/platform/RtssCompatibilityDiagnostics.h
     src/platform/DependencyDiagnostics.cpp
     src/platform/DependencyDiagnostics.h
     src/platform/DiagnosticLogFolderActions.cpp

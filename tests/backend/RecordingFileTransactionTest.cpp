@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 
 #include "backend/RecordingFileTransaction.h"
+#include "platform/FileSystemPath.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -148,6 +149,242 @@ class RecordingFileTransactionTest : public QObject {
     Q_OBJECT
 
 private slots:
+#ifdef Q_OS_WIN
+    void rejectedNamespacesCannotCleanupCurrentDirectory_data() {
+        QTest::addColumn<QString>("directory");
+        QTest::newRow("device") << QStringLiteral("\\\\.\\pipe\\airplay");
+        QTest::newRow("extended-device") << QStringLiteral("\\\\?\\GLOBALROOT\\Device\\test");
+    }
+
+    void rejectedNamespacesCannotCleanupCurrentDirectory() {
+        QFETCH(QString, directory);
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const QStringList ownedNames = temporaryPaths(root.path(), kId);
+        for (const QString &path : ownedNames) writeBytes(path, "CURRENT-DIRECTORY-MUST-STAY");
+        const QString previous = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(root.path()));
+        const auto deleted = RecordingFileTransaction::cleanupStaleTemporaryFiles(directory);
+        bool preserved = true;
+        for (const QString &path : ownedNames) preserved &= readBytes(path) == "CURRENT-DIRECTORY-MUST-STAY";
+        const bool noLocks = QDir(root.path()).entryList({QStringLiteral("*.lock"), QStringLiteral("*.rmlock")},
+                                                       QDir::Files | QDir::Hidden).isEmpty();
+        const bool restored = QDir::setCurrent(previous);
+        QVERIFY(restored);
+        QVERIFY(deleted.isEmpty());
+        QVERIFY(preserved && noLocks);
+    }
+
+    void extendedAudioErrorsUseLogicalPath() {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const auto reservation = reserveOrFail(root.path());
+        QVERIFY(!reservation.audioSpoolPath.isEmpty());
+        const QString claimed = RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath);
+        const QString extended = QStringLiteral("\\\\?\\") + QDir::toNativeSeparators(reservation.audioSpoolPath);
+        const QString repeated = RecordingFileTransaction::claimOptionalAudioSpool(extended);
+        RecordingFileTransaction::discard(reservation);
+        QVERIFY2(claimed.isEmpty(), qPrintable(claimed));
+        QVERIFY(repeated.contains(QStringLiteral("already claimed")));
+        QVERIFY(repeated.contains(reservation.audioSpoolPath));
+        QVERIFY(!repeated.contains(QStringLiteral("\\\\?\\")));
+        QVERIFY(!repeated.contains(QStringLiteral("//?/")));
+    }
+
+    void windowsFileSystemPathForms_data() {
+        QTest::addColumn<QString>("input");
+        QTest::addColumn<QString>("logical");
+        QTest::addColumn<QString>("io");
+        QTest::newRow("drive-dot-unicode") << QStringLiteral("C:/AirPlay/dir/../视频.mp4")
+            << QStringLiteral("C:/AirPlay/视频.mp4") << QStringLiteral("\\\\?\\C:\\AirPlay\\视频.mp4");
+        QTest::newRow("unc-dot-unicode") << QStringLiteral("//server/share/dir/../视频.mp4")
+            << QStringLiteral("//server/share/视频.mp4") << QStringLiteral("\\\\?\\UNC\\server\\share\\视频.mp4");
+        QTest::newRow("extended-drive") << QStringLiteral("\\\\?\\C:\\AirPlay\\视频.mp4")
+            << QStringLiteral("C:/AirPlay/视频.mp4") << QStringLiteral("\\\\?\\C:\\AirPlay\\视频.mp4");
+        QTest::newRow("extended-unc") << QStringLiteral("\\\\?\\UNC\\server\\share\\视频.mp4")
+            << QStringLiteral("//server/share/视频.mp4") << QStringLiteral("\\\\?\\UNC\\server\\share\\视频.mp4");
+        QTest::newRow("empty") << QString() << QString() << QString();
+        QTest::newRow("device") << QStringLiteral("\\\\.\\pipe\\airplay") << QString() << QString();
+        QTest::newRow("extended-device") << QStringLiteral("\\\\?\\GLOBALROOT\\Device\\test") << QString() << QString();
+    }
+
+    void windowsFileSystemPathForms() {
+        QFETCH(QString, input);
+        QFETCH(QString, logical);
+        QFETCH(QString, io);
+        QCOMPARE(FileSystemPath::absolute(input), logical);
+        QCOMPARE(FileSystemPath::forIo(input), io);
+    }
+
+    void extendedInputKeepsLogicalReservationAndLockIdentity() {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const QString directory = root.filePath(QStringLiteral("目录"));
+        const QString extendedDirectory = QStringLiteral("\\\\?\\") + QDir::toNativeSeparators(directory);
+        const auto result = RecordingFileTransaction::reserve(extendedDirectory, kLocalNow, kUuid);
+        QVERIFY2(result.reservation.has_value(), qPrintable(result.error));
+        const auto reservation = *result.reservation;
+        const auto duplicate = RecordingFileTransaction::reserve(directory, kLocalNow, kUuid);
+        const QString extendedAudio = QStringLiteral("\\\\?\\") + QDir::toNativeSeparators(reservation.audioSpoolPath);
+        const QString audioError = RecordingFileTransaction::claimOptionalAudioSpool(extendedAudio);
+        const QString repeatedAudioError = RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath);
+        RecordingFileTransaction::discard(reservation);
+        QVERIFY(!duplicate.reservation.has_value());
+        QVERIFY(duplicate.error.contains(QStringLiteral("already active")));
+        QCOMPARE(QFileInfo(reservation.finalPath).absolutePath(), directory);
+        QVERIFY2(audioError.isEmpty(), qPrintable(audioError));
+        QVERIFY(repeatedAudioError.contains(QStringLiteral("already claimed")));
+        QVERIFY(QDir(directory).entryList(QDir::Files | QDir::Hidden).isEmpty());
+    }
+
+    void extendedLengthTransactions_data() {
+        QTest::addColumn<int>("lockLength");
+        QTest::addColumn<bool>("unicode");
+        QTest::addColumn<bool>("commitResult");
+        for (int length : {213, 259, 260, 275}) {
+            for (bool unicode : {false, true}) {
+                for (bool commit : {false, true}) {
+                    const QByteArray row = QByteArray::number(length) + (unicode ? "-unicode" : "-ascii")
+                        + (commit ? "-commit" : "-discard");
+                    QTest::newRow(row.constData()) << length << unicode << commit;
+                }
+            }
+        }
+    }
+
+    void extendedLengthTransactions() {
+        QFETCH(int, lockLength);
+        QFETCH(bool, unicode);
+        QFETCH(bool, commitResult);
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const int padding = lockLength - root.path().size() - 2
+            - QStringLiteral(".airplay-recording-0123456789abcdef0123456789abcdef.lock").size();
+        QVERIFY(padding > 2 && padding < 255);
+        const QString segment = QString(padding - (unicode ? 2 : 0), QChar('x'))
+            + (unicode ? QStringLiteral("目录") : QString());
+        const QString directory = root.filePath(segment);
+        QCOMPARE(lockPath(directory).size(), lockLength);
+        QVERIFY(QDir().mkpath(directory));
+        const QString userFile = QDir(directory).filePath(QStringLiteral("user.mp4"));
+        const QString neighbor = root.filePath(QStringLiteral("neighbor.keep"));
+        writeBytes(userFile, "USER-MUST-STAY");
+        writeBytes(neighbor, "NEIGHBOR-MUST-STAY");
+
+        const auto result = RecordingFileTransaction::reserve(directory, kLocalNow, kUuid);
+        QVERIFY2(result.reservation.has_value(), qPrintable(result.error));
+        const auto reservation = *result.reservation;
+        QVERIFY(!reservation.finalPath.startsWith(QStringLiteral("//?/")));
+        const auto hidden = [](const QString &path) {
+            const std::wstring extended = (QStringLiteral("\\\\?\\")
+                + QDir::toNativeSeparators(path)).toStdWString();
+            const DWORD attributes = GetFileAttributesW(extended.c_str());
+            return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_HIDDEN);
+        };
+        const bool lockHidden = hidden(lockPath(directory));
+        const bool videoHidden = hidden(reservation.videoSpoolPath);
+        const bool mp4Hidden = hidden(reservation.temporaryMp4Path);
+        const QString audioError = RecordingFileTransaction::claimOptionalAudioSpool(reservation.audioSpoolPath);
+        const bool audioHidden = audioError.isEmpty() && hidden(reservation.audioSpoolPath);
+        QString commitError;
+        if (commitResult) {
+            writeBytes(reservation.temporaryMp4Path, "DIAGNOSTIC-NOT-MEDIA");
+            commitError = RecordingFileTransaction::commit(reservation);
+        }
+        RecordingFileTransaction::discard(reservation);
+
+        QVERIFY(lockHidden && videoHidden && mp4Hidden && audioHidden);
+        QVERIFY2(audioError.isEmpty(), qPrintable(audioError));
+        QVERIFY2(commitError.isEmpty(), qPrintable(commitError));
+        for (const QString &path : {lockPath(directory), reservation.videoSpoolPath,
+                                   reservation.audioSpoolPath, reservation.temporaryMp4Path}) {
+            QVERIFY2(!QFileInfo::exists(path), qPrintable(path));
+        }
+        if (commitResult) {
+            QCOMPARE(readBytes(reservation.finalPath), QByteArray("DIAGNOSTIC-NOT-MEDIA"));
+            QVERIFY(!hidden(reservation.finalPath));
+        } else {
+            QVERIFY(!QFileInfo::exists(reservation.finalPath));
+        }
+        QVERIFY(QDir(directory).entryList({QStringLiteral("*.rmlock")},
+                    QDir::Files | QDir::Hidden).isEmpty());
+        QCOMPARE(readBytes(userFile), QByteArray("USER-MUST-STAY"));
+        QCOMPARE(readBytes(neighbor), QByteArray("NEIGHBOR-MUST-STAY"));
+        const auto next = RecordingFileTransaction::reserve(directory, kLocalNow, kUuid);
+        const bool nextAcquired = next.reservation.has_value();
+        if (next.reservation) RecordingFileTransaction::discard(*next.reservation);
+        QVERIFY2(nextAcquired, qPrintable(next.error));
+    }
+
+    void extendedLengthLiveLockAndCrashRecovery_data() {
+        QTest::addColumn<int>("lockLength");
+        QTest::addColumn<bool>("unicode");
+        for (int length : {213, 259, 260, 275}) {
+            for (bool unicode : {false, true}) {
+                const QByteArray row = QByteArray::number(length) + (unicode ? "-unicode" : "-ascii");
+                QTest::newRow(row.constData()) << length << unicode;
+            }
+        }
+    }
+
+    void extendedLengthLiveLockAndCrashRecovery() {
+        QFETCH(int, lockLength);
+        QFETCH(bool, unicode);
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const int padding = lockLength - root.path().size() - 2
+            - QStringLiteral(".airplay-recording-dddddddddddddddddddddddddddddddd.lock").size();
+        QVERIFY(padding > 2 && padding < 255);
+        const QString directory = root.filePath(QString(padding - (unicode ? 2 : 0), QChar('x'))
+            + (unicode ? QStringLiteral("目录") : QString()));
+        QVERIFY(QDir().mkpath(directory));
+        const QString childId = QStringLiteral("dddddddddddddddddddddddddddddddd");
+        const QString childUuid = QStringLiteral("dddddddd-dddd-dddd-dddd-dddddddddddd");
+        const QString exactLock = lockPath(directory, childId);
+        QCOMPARE(exactLock.size(), lockLength);
+        const QString userFile = QDir(directory).filePath(QStringLiteral("user.mp4"));
+        const QString nearLock = exactLock + QStringLiteral(".bak");
+        const QString neighbor = root.filePath(QStringLiteral("neighbor.keep"));
+        writeBytes(userFile, "USER-MUST-STAY");
+        writeBytes(nearLock, "NEAR-LOCK-MUST-STAY");
+        writeBytes(neighbor, "NEIGHBOR-MUST-STAY");
+        QProcess child;
+        child.setProcessChannelMode(QProcess::MergedChannels);
+        child.start(QCoreApplication::applicationFilePath(),
+            {QStringLiteral("--recording-lock-helper"), directory, childUuid});
+        const bool started = child.waitForStarted(5000);
+        const bool ready = started && child.waitForReadyRead(5000);
+        const QByteArray childOutput = child.readAll();
+        if (!ready || !childOutput.contains("READY")) {
+            child.kill();
+            child.waitForFinished(5000);
+            QFAIL(childOutput.constData());
+        }
+        const QByteArray lockContents = readBytes(exactLock);
+        const QStringList liveDeleted = RecordingFileTransaction::cleanupStaleTemporaryFiles(directory);
+        const auto competitor = RecordingFileTransaction::reserve(directory, kLocalNow, QUuid(childUuid));
+        const bool lockPreserved = readBytes(exactLock) == lockContents;
+        bool partsPreserved = true;
+        for (const QString &path : temporaryPaths(directory, childId)) partsPreserved &= QFileInfo::exists(path);
+        child.kill();
+        const bool childExited = child.waitForFinished(5000);
+        QVERIFY(childExited);
+        QVERIFY(liveDeleted.isEmpty());
+        QVERIFY(!competitor.reservation.has_value());
+        QVERIFY(lockPreserved && partsPreserved);
+        QStringList expectedDeleted = temporaryPaths(directory, childId);
+        expectedDeleted.sort();
+        QCOMPARE(RecordingFileTransaction::cleanupStaleTemporaryFiles(directory), expectedDeleted);
+        QVERIFY(!QFileInfo::exists(exactLock));
+        QVERIFY(!QFileInfo::exists(exactLock + QStringLiteral(".rmlock")));
+        QVERIFY(RecordingFileTransaction::cleanupStaleTemporaryFiles(directory).isEmpty());
+        QCOMPARE(readBytes(userFile), QByteArray("USER-MUST-STAY"));
+        QCOMPARE(readBytes(nearLock), QByteArray("NEAR-LOCK-MUST-STAY"));
+        QCOMPARE(readBytes(neighbor), QByteArray("NEIGHBOR-MUST-STAY"));
+    }
+#endif
+
+
     void reserveUsesBaseNameInEmptyDirectory() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
