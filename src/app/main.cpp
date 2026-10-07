@@ -1,3 +1,9 @@
+#if AIRPLAY_WITH_UXPLAY
+#include "platform/GStreamerCacheWorker.h"
+#include "app/GStreamerStartupPresentation.h"
+#include <QElapsedTimer>
+#include <QDir>
+#endif
 #include <QApplication>
 #include <QCoreApplication>
 #include <QFile>
@@ -138,6 +144,19 @@ bool runPortableGStreamerStartupSequence(
     }
     configureGStreamerEnvironment();
     return probeCorePlugins();
+}
+
+bool portableManifestAllowsPreparation(const StandaloneRuntimeSnapshot &snapshot) {
+    QStringList missing = snapshot.missingRelativePaths;
+    missing.removeAll(QStringLiteral("gstreamer-1.0/registry.x86_64.bin"));
+    return missing.isEmpty();
+}
+bool runPortableGStreamerStartupSequence(bool portable,
+    const std::function<bool()> &manifest, const std::function<bool()> &prepare,
+    const std::function<void()> &configure, const std::function<bool()> &core) {
+    if(portable && (!manifest() || !prepare())) return false;
+    configure();
+    return core();
 }
 
 RuntimePathStartupDecision runtimePathStartupDecision(
@@ -290,6 +309,9 @@ void recordStartupSettings(DiagnosticLogSink *sink, const StartupSettings &setti
 } // namespace
 
 int main(int argc, char *argv[]) {
+#if AIRPLAY_WITH_UXPLAY
+    if (const auto worker=dispatchGStreamerCacheWorker(argc,argv)) return *worker;
+#endif
     // Capture before QApplication/Qt/GIO can create early windows. This does not prevent a pre-UI crash.
     const RtssCompatibilitySnapshot rtssCompatibility = RtssCompatibilityDiagnostics::inspectCurrentProcess();
     bool verifyRecordingRuntime = false;
@@ -423,6 +445,29 @@ int main(int argc, char *argv[]) {
                       {{QStringLiteral("result"), runtimeDecision.result}}, true);
     }
 
+    GStreamerStartupCache startupCache;
+    GStreamerStartupPresentation cachePresentation;
+    GStreamerCacheResult cacheResult;
+    // Declared before every Gst consumer; explicit final close precedes diagnostics shutdown.
+    auto closeRuntime = [&] {
+        if(!cacheResult.runtime) return;
+        const auto cleanup = cacheResult.runtime->close();
+        recordStartup(sink, QStringLiteral("gstreamer_runtime_cleanup"),
+            {{"result",cleanup.complete ? "complete" : "incomplete"},
+             {"residual_count",QString::number(cleanup.residualPaths.size())},
+             {"residuals",cleanup.residualPaths.join(QLatin1Char(';'))}, {"reason",cleanup.reason.left(2048)}}, true);
+        cacheResult.runtime.reset();
+    };
+    auto acceptCore = [&](const GStreamerPluginReadiness &readiness) {
+        const auto decision = gstreamerPluginStartupDecision(readiness,runtimePathCompatibility.hasNonAscii);
+        recordStartup(sink,"gstreamer_plugin_readiness",
+            gstreamerPluginReadinessFields(readiness,runtimePathCompatibility.hasNonAscii,decision.reason),true);
+        if(decision.continueApplication) return true;
+        closeRuntime();
+        showStartupFailure(diagnostics,decision.abortReason,decision.title,decision.message);
+        return false;
+    };
+    bool privateConfigured = false;
     const bool gstreamerStartupReady = runPortableGStreamerStartupSequence(
         runtimeDecision.emitManifestEntries,
         [&] {
@@ -435,7 +480,7 @@ int main(int argc, char *argv[]) {
                               {{QStringLiteral("relative_name"), relativeName},
                                {QStringLiteral("result"), present ? QStringLiteral("present") : QStringLiteral("missing")}});
             }
-            if (runtimeSnapshot.complete) {
+            if (portableManifestAllowsPreparation(runtimeSnapshot)) {
                 return true;
             }
             showStartupFailure(
@@ -448,29 +493,50 @@ int main(int argc, char *argv[]) {
             return false;
         },
         [&] {
-            const bool gstreamerEnvironmentConfigured =
-                DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
-                    QCoreApplication::applicationDirPath());
-            recordStartup(sink, QStringLiteral("gstreamer_package_environment"),
-                          {{QStringLiteral("result"), gstreamerEnvironmentConfigured ? QStringLiteral("yes") : QStringLiteral("no")}},
-                          true);
+            QElapsedTimer elapsed; elapsed.start();
+            const GStreamerCacheRequest request{QCoreApplication::applicationDirPath(),
+                QCoreApplication::applicationFilePath(),QDir::tempPath()};
+            const auto stageConnection=QObject::connect(&startupCache,&GStreamerStartupCache::stageChanged,&startupCache,[sink](CacheWorkerStage stage) {
+                recordStartup(sink,"gstreamer_cache_stage",{{"stage",QString::number(int(stage))}},true);
+            });
+            cacheResult = cachePresentation.prepare(startupCache,request);
+            QObject::disconnect(stageConnection);
+            recordStartup(sink,"gstreamer_cache_preparation",
+                {{"cache_state",QString::number(int(cacheResult.cacheState))},
+                 {"record_state",QString::number(int(cacheResult.recordState))},
+                 {"readiness_state",QString::number(int(cacheResult.readinessState))},
+                 {"failure_reason",QString::number(int(cacheResult.failureReason))},
+                 {"reason",cacheResult.reason.left(2048)},
+                 {"cleanup_reason",cacheResult.cleanup.reason.left(2048)},
+                 {"elapsed_ms",QString::number(elapsed.elapsed())},
+                 {"cancelled",cacheResult.cancelled ? "yes" : "no"},
+                 {"cleanup_complete",cacheResult.cleanup.complete ? "yes" : "no"},
+                 {"residual_count",QString::number(cacheResult.cleanup.residualPaths.size())},
+                 {"residuals",cacheResult.cleanup.residualPaths.join(QLatin1Char(';'))}},true);
+            if(cacheResult.cancelled) {
+                closeRuntime();
+                diagnostics.abortStartup(QStringLiteral("gstreamer_preparation_cancelled"));
+                return false;
+            }
+            if(cacheResult.readinessState == ReadinessState::Ready && cacheResult.runtime) return true;
+            auto readiness=cacheResult.readiness;
+            readiness.ready=false;
+            return acceptCore(readiness);
         },
         [&] {
-            const GStreamerPluginReadiness pluginReadiness =
-                DependencyDiagnostics::checkGStreamerPluginReadiness();
-            const GStreamerPluginStartupDecision pluginDecision =
-                gstreamerPluginStartupDecision(pluginReadiness,
-                                                runtimePathCompatibility.hasNonAscii);
-            recordStartup(sink, "gstreamer_plugin_readiness",
-                          gstreamerPluginReadinessFields(pluginReadiness,
-                                                          runtimePathCompatibility.hasNonAscii,
-                                                          pluginDecision.reason), true);
-            if (pluginDecision.continueApplication) {
-                return true;
-            }
-            showStartupFailure(diagnostics, pluginDecision.abortReason,
-                               pluginDecision.title, pluginDecision.message);
-            return false;
+            privateConfigured = runtimeDecision.emitManifestEntries
+                ? DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+                    QCoreApplication::applicationDirPath(),cacheResult.runtime->registryPath())
+                : DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(QCoreApplication::applicationDirPath());
+            recordStartup(sink,"gstreamer_package_environment",{{"result",privateConfigured ? "yes" : "no"}},true);
+        },
+        [&] {
+            GStreamerPluginReadiness readiness;
+            if(!runtimeDecision.emitManifestEntries)
+                readiness=DependencyDiagnostics::checkGStreamerPluginReadiness();
+            else if(privateConfigured)
+                readiness=DependencyDiagnostics::checkPackageGStreamerPluginReadiness(QCoreApplication::applicationDirPath());
+            return acceptCore(readiness);
         });
     if (!gstreamerStartupReady) {
         return 1;
@@ -505,7 +571,8 @@ int main(int argc, char *argv[]) {
     config.videoSink = "appsink";
     config.audioSink = "wasapisink";
     config.diagnosticSink = sink;
-    UxPlayReceiver receiver(config);
+    auto receiverOwner = std::make_unique<UxPlayReceiver>(config);
+    auto &receiver = *receiverOwner;
     bool startupCompletedRecorded = false;
     QObject::connect(&receiver, &AirPlayReceiver::stateChanged, &app,
                      [&sink, &startupCompletedRecorded](ReceiverState state) {
@@ -525,8 +592,8 @@ int main(int argc, char *argv[]) {
     runtimeServices.languageManager = &languageManager;
     runtimeServices.diagnosticLoggingActive = diagnostics.loggingActive();
     runtimeServices.quitApplication = [&app] { app.quit(); };
-    MainWindow window(settings, &hotkeys, &receiver, settingsPath, nullptr, nullptr,
-                      runtimeServices);
+    auto windowOwner = std::make_unique<MainWindow>(settings, &hotkeys, &receiver, settingsPath, nullptr, nullptr, runtimeServices);
+    auto &window = *windowOwner;
     recordStartup(sink, QStringLiteral("window_constructed"), {}, true);
     QObject::connect(&window, &MainWindow::diagnosticLoggingStopped, &app,
                      [](const QString &error) {
@@ -537,8 +604,16 @@ int main(int argc, char *argv[]) {
     receiver.start();
     window.show();
     diagnostics.enableFailureReporting();
+    cachePresentation.showCacheNoticeOnce(&window,cacheResult);
     const int exitCode = app.exec();
-    finishDiagnosticSessionForExit(diagnostics, [&receiver] { receiver.stop(); });
+    finishDiagnosticSessionForExit(diagnostics, [&] {
+        receiver.stop();
+        diagnosticWindow = nullptr;
+        windowOwner.reset();
+        receiverOwner.reset();
+        recordStartup(sink,QStringLiteral("gstreamer_consumers_destroyed"),{},true);
+        closeRuntime();
+    });
     return exitCode;
 #else
     MainWindowRuntimeServices runtimeServices;

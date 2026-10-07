@@ -299,6 +299,10 @@ private slots:
         const auto missing = DependencyDiagnostics::checkStandaloneRuntime(dir.path());
 
         QCOMPARE(missing, QStringList({"gstreamer-1.0/registry.x86_64.bin"}));
+        const auto snapshot=DependencyDiagnostics::standaloneRuntimeSnapshot(dir.path());
+        QVERIFY(!snapshot.complete);
+        QCOMPARE(snapshot.relativePaths,playbackStandaloneRuntimePaths());
+        QCOMPARE(snapshot.missingRelativePaths,missing);
     }
 
     void skipsStandaloneRuntimeCheckInMsys2PathMode() {

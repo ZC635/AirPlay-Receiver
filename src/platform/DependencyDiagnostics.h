@@ -54,6 +54,9 @@ public:
     static QStringList checkStandaloneRuntime(const QString &directory);
     static bool configurePackageLocalGStreamerEnvironment(
         const QString &applicationDirectory);
+    static bool configurePackageLocalGStreamerEnvironment(
+        const QString &packageDirectory, const QString &privateRegistry);
+    static GStreamerPluginReadiness checkPackageGStreamerPluginReadiness(const QString &packageDirectory);
     static GStreamerPluginReadiness checkGStreamerPluginReadiness();
     static GStreamerPluginReadiness checkGStreamerPluginReadiness(
         const std::function<bool(const QString &)> &pluginAvailable);
