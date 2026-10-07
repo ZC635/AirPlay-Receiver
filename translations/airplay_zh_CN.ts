@@ -796,6 +796,9 @@ These steps may reduce the risk, but do not guarantee a successful startup or pr
 </context>
 <context>
     <name>Startup</name>
+    <message><source>GStreamer runtime cache unavailable</source><translation>GStreamer 运行缓存不可用</translation></message>
+    <message><source>Could not create a safe private GStreamer runtime cache: %1</source><translation>无法创建安全的独占 GStreamer 运行缓存：%1</translation></message>
+    <message><source>Could not configure the private GStreamer runtime cache.</source><translation>无法配置独占 GStreamer 运行缓存。</translation></message>
     <message>
         <location filename="../src/app/GStreamerStartupPresentation.cpp" line="37"/>
         <source>Checking playback components…</source>

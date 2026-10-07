@@ -63,6 +63,9 @@ class DiagnosticActivationTest final : public QObject {
 private slots:
     void registryOnlyMissingReachesPreparationButDllMissingDoesNot();
     void receiverStartWaitsForActualCoreCheck();
+    void ordinaryStartupSkipsPreflight();
+    void ordinaryStartupRejectsIsolationFailure();
+    void ordinaryPrivateCacheIsOwnedAndReadinessUnknown();
     void normalLaunchIsDisabled();
     void commandArgumentWinsOverEnvironmentCompatibilityFlag();
     void nonEmptyEnvironmentActivatesUnifiedMode();
@@ -117,6 +120,65 @@ void DiagnosticActivationTest::receiverStartWaitsForActualCoreCheck() {
     QVERIFY(!runPortableGStreamerStartupSequence(true,[]{return true;},[]{return false;},
         [&]{calls<<"configure_private";},[&]{calls<<"actual_core";return true;}));
     QVERIFY(calls.isEmpty());
+}
+
+void DiagnosticActivationTest::ordinaryStartupSkipsPreflight() {
+    for (bool portable : {false, true}) {
+        QStringList calls;
+        QVERIFY(runPortableGStreamerStartupSequence(portable,
+            [&]{ calls << "manifest"; return true; },
+            [&]{ calls << "prepare"; return false; },
+            [&]{ calls << "configure"; },
+            [&]{ calls << "core"; return false; }, false,
+            [&]{ calls << "isolate"; return true; }));
+        QCOMPARE(calls, portable ? QStringList({"manifest", "isolate", "configure"})
+                                 : QStringList({"configure"}));
+    }
+}
+void DiagnosticActivationTest::ordinaryStartupRejectsIsolationFailure() {
+    bool configured = false;
+    QVERIFY(!runPortableGStreamerStartupSequence(true, []{return true;}, []{return true;},
+        [&]{configured = true;}, []{return true;}, false, []{return false;}));
+    QVERIFY(!configured);
+}
+
+void DiagnosticActivationTest::ordinaryPrivateCacheIsOwnedAndReadinessUnknown() {
+#if AIRPLAY_WITH_UXPLAY
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString package = directory.filePath("package");
+    QVERIFY(QDir().mkpath(package + "/gstreamer-1.0"));
+    const QString source = package + "/gstreamer-1.0/registry.x86_64.bin";
+    const QString neighbor = directory.filePath("neighbor.bin");
+    for (const QString &path : {source, neighbor}) {
+        QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("sentinel"), qint64(8));
+    }
+    for (bool missing : {false, true}) {
+        if (missing) QVERIFY(QFile::remove(source));
+        auto result = seedOrdinaryRuntime(package, directory.filePath("temp"));
+        QVERIFY2(result.runtime != nullptr, qPrintable(result.reason));
+        QCOMPARE(result.readinessState, ReadinessState::Unknown);
+        QVERIFY(!result.readiness.ready);
+        const QString ownedRoot = QFileInfo(result.runtime->registryPath()).absolutePath();
+        QFile seeded(result.runtime->registryPath()); QVERIFY(seeded.open(QIODevice::ReadOnly));
+        QCOMPARE(seeded.readAll(), missing ? QByteArray() : QByteArray("sentinel"));
+        seeded.close();
+        QVERIFY(result.runtime->close().complete);
+        QVERIFY(!QFileInfo::exists(ownedRoot));
+        QFile preserved(neighbor); QVERIFY(preserved.open(QIODevice::ReadOnly));
+        QCOMPARE(preserved.readAll(), QByteArray("sentinel"));
+        if (!missing) {
+            QFile shared(source); QVERIFY(shared.open(QIODevice::ReadOnly));
+            QCOMPARE(shared.readAll(), QByteArray("sentinel"));
+        }
+    }
+    QVERIFY(QDir().mkdir(source));
+    auto rejected = seedOrdinaryRuntime(package, directory.filePath("temp"));
+    QVERIFY(!rejected.runtime);
+    QVERIFY(!rejected.reason.isEmpty());
+    QVERIFY(QFileInfo(source).isDir());
+#endif
 }
 
 void DiagnosticActivationTest::normalLaunchIsDisabled() {
