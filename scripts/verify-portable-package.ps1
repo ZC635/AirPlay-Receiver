@@ -138,26 +138,8 @@ if (-not $SkipRuntimeProbe) {
         $probeStartInfo.RedirectStandardError = $true
         $probeStartInfo.CreateNoWindow = $true
 
-        $probeProcess = [System.Diagnostics.Process]::new()
-        $probeProcess.StartInfo = $probeStartInfo
-        try {
-            if (-not $probeProcess.Start()) {
-                throw "Portable recording runtime probe could not be started: $probeExecutable"
-            }
-            $probeStdoutTask = $probeProcess.StandardOutput.ReadToEndAsync()
-            $probeStderrTask = $probeProcess.StandardError.ReadToEndAsync()
-            $probeProcess.WaitForExit()
-            $probeExitCode = $probeProcess.ExitCode
-            $probeOutput = @(
-                $probeStdoutTask.Result -split '\r?\n' | Where-Object { $_ }
-                $probeStderrTask.Result -split '\r?\n' | Where-Object { $_ }
-            )
-        } finally {
-            $probeProcess.Dispose()
-        }
-        if ($probeExitCode -ne 0) {
-            throw "Portable recording runtime probe failed with exit code ${probeExitCode}: $($probeOutput -join ' ')"
-        }
+        . (Join-Path $PSScriptRoot 'portable-recording-probe.ps1')
+        $probeOutput = @(Invoke-PortableRecordingProbe -StartInfo $probeStartInfo)
         foreach ($line in $probeOutput) {
             $line
         }
