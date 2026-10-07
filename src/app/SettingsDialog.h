@@ -32,6 +32,7 @@ public:
     AppSettings settings() const;
     AppSettings draftSettings() const;
     const AppSettings &committedBaseline() const;
+    void presentSubmitError(UiMessage error);
     void presentApplyOutcome(const SettingsApplyOutcome &outcome);
     bool hasUnappliedChanges() const;
     void presentDiagnosticActionError(UiMessage error);

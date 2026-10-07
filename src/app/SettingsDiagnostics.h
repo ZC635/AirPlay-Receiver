@@ -6,6 +6,8 @@
 class DiagnosticLogSink;
 
 namespace SettingsDiagnostics {
+void recordSubmitResult(DiagnosticLogSink *sink, const SettingsSubmitResult &result);
+void recordDeferredResult(DiagnosticLogSink *sink, const SettingsDeferredResult &result);
 AppSettingsSaveResult save(SettingsPersistence *persistence, const AppSettings &settings,
                            DiagnosticLogSink *sink, const char *origin);
 void recordApplyOutcome(DiagnosticLogSink *sink, const SettingsApplyOutcome &outcome,

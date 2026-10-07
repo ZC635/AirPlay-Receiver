@@ -339,6 +339,55 @@ These steps may reduce the risk, but do not guarantee a successful startup or pr
 <context>
     <name>SettingsApplyCoordinator</name>
     <message>
+        <source>Settings application was interrupted. Settings were saved, but their final saved state could not be confirmed. Saving failed for %1: %2. Apply again.</source>
+        <translation>设置应用已中断。设置已保存，但无法确认最终保存状态。保存到 %1 失败：%2。请重新应用。</translation>
+    </message>
+    <message>
+        <source>Settings application was interrupted before saving. Settings could not be saved to %1: %2. Apply again.</source>
+        <translation>设置应用在保存前已中断。无法保存设置到 %1：%2。请重新应用。</translation>
+    </message>
+    <message>
+        <source>Settings application was interrupted. Settings were saved, but their final saved state could not be confirmed. Apply again.</source>
+        <translation>设置应用已中断。设置已保存，但无法确认最终保存状态。请重新应用。</translation>
+    </message>
+    <message><source>Settings were saved, but their final saved state could not be confirmed. Apply again.</source><translation>设置已保存，但无法确认最终保存状态。请重新应用。</translation></message>
+    <message>
+        <source>Settings are being applied. Try again after the current operation finishes.</source>
+        <translation>正在应用设置。请在当前操作结束后重试。</translation>
+    </message>
+    <message>
+        <source>Settings application was interrupted. Saved changes are kept.</source>
+        <translation>设置应用已中断。已保存的改动保留。</translation>
+    </message>
+    <message>
+        <source>Settings application was interrupted before saving.</source>
+        <translation>设置应用在保存前中断。</translation>
+    </message>
+    <message>
+        <source>Receiver state changed. Apply again to choose when to apply receiver settings.</source>
+        <translation>接收器状态已变化。请重新点击应用，选择接收器设置的应用时机。</translation>
+    </message>
+    <message>
+        <source>Receiver settings have not been applied. The saved configuration is kept for the next receiver start.</source>
+        <translation>接收器设置尚未应用。已保存配置保留至下次启动接收服务。</translation>
+    </message>
+    <message>
+        <source>Receiver settings are saved for the next receiver start.</source>
+        <translation>接收器设置已保存，留待下次启动接收服务。</translation>
+    </message>
+    <message>
+        <source>The receiver is unavailable.</source>
+        <translation>接收器不可用。</translation>
+    </message>
+    <message>
+        <source>Receiver preparation requires an idle receiver.</source>
+        <translation>准备接收器配置需要接收器处于空闲状态。</translation>
+    </message>
+    <message>
+        <source>Receiver preparation did not complete.</source>
+        <translation>接收器配置准备未完成。</translation>
+    </message>
+    <message>
         <location filename="../src/app/SettingsApplyCoordinator.cpp" line="92"/>
         <source>Shortcut registration failed: %1</source>
         <translation>快捷键注册失败：%1</translation>
@@ -460,6 +509,8 @@ These steps may reduce the risk, but do not guarantee a successful startup or pr
 </context>
 <context>
     <name>SettingsDialog</name>
+    <message><source>Could not confirm saved settings for %1: %2</source><translation>无法确认 %1 的保存状态：%2</translation></message>
+    <message><source>The final saved settings could not be confirmed. Apply again.</source><translation>无法确认最终保存的设置。请重新应用。</translation></message>
     <message>
         <location filename="../src/app/SettingsDialog.cpp" line="322"/>
         <source>Settings</source>

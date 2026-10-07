@@ -61,6 +61,10 @@ add_executable(SettingsApplyTypesTest app/SettingsApplyTypesTest.cpp)
 target_link_libraries(SettingsApplyTypesTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsApplyTypesTest COMMAND SettingsApplyTypesTest)
 
+add_executable(DeferredSettingsLifecycleTest app/DeferredSettingsLifecycleTest.cpp)
+target_link_libraries(DeferredSettingsLifecycleTest PRIVATE airplay_app_lib Qt6::Test)
+add_test(NAME DeferredSettingsLifecycleTest COMMAND DeferredSettingsLifecycleTest)
+
 add_executable(SettingsApplyCoordinatorTest app/SettingsApplyCoordinatorTest.cpp)
 target_link_libraries(SettingsApplyCoordinatorTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME SettingsApplyCoordinatorTest COMMAND SettingsApplyCoordinatorTest)
@@ -589,6 +593,7 @@ set(AIRPLAY_QT_TESTS
     SettingsChangeDeferrerTest
     SettingsApplyTypesTest
     SettingsApplyCoordinatorTest
+    DeferredSettingsLifecycleTest
     UiMessageTest
     MainWindowSmokeTest
     UiDiagnosticLoggingTest

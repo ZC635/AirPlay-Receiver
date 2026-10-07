@@ -601,12 +601,14 @@ int main(int argc, char *argv[]) {
     });
     diagnosticWindow = &window;
     recordStartup(sink, QStringLiteral("receiver_start_requested"), {}, true);
+    window.prepareReceiverStart();
     receiver.start();
     window.show();
     diagnostics.enableFailureReporting();
     cachePresentation.showCacheNoticeOnce(&window,cacheResult);
     const int exitCode = app.exec();
     finishDiagnosticSessionForExit(diagnostics, [&] {
+        window.endReceiverLifecycle();
         receiver.stop();
         diagnosticWindow = nullptr;
         windowOwner.reset();

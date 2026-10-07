@@ -50,3 +50,22 @@ void recordApplyOutcome(DiagnosticLogSink *sink, const SettingsApplyOutcome &out
          {QStringLiteral("persistence_failed"), outcome.globalResult ? QStringLiteral("yes") : QStringLiteral("no")}}, failed));
 }
 }
+
+void SettingsDiagnostics::recordDeferredResult(DiagnosticLogSink *sink, const SettingsDeferredResult &result) {
+    if (const auto *outcome = std::get_if<SettingsApplyOutcome>(&result)) {
+        recordApplyOutcome(sink, *outcome, "deferred_completion", std::nullopt);
+    } else if (sink && sink->isActive()) {
+        sink->record(makeDiagnosticEvent(DiagnosticSeverity::Warning, QStringLiteral("settings"),
+            QStringLiteral("settings_receiver_not_applied"), {{QStringLiteral("reason"), QStringLiteral("receiver_error")},
+             {QStringLiteral("target_saved"), QStringLiteral("yes")},
+             {QStringLiteral("backend_invoked"), QStringLiteral("no")}}, true));
+    }
+}
+
+void SettingsDiagnostics::recordSubmitResult(DiagnosticLogSink *sink, const SettingsSubmitResult &result) {
+    if (!sink || !sink->isActive() || result.status != SettingsSubmitStatus::Interrupted) return;
+    sink->record(makeDiagnosticEvent(DiagnosticSeverity::Warning, QStringLiteral("settings"),
+        QStringLiteral("settings_apply_interrupted"),
+        {{QStringLiteral("target_saved"), result.settingsSaved ? QStringLiteral("yes") : QStringLiteral("no")},
+         {QStringLiteral("backend_invoked"), result.backendInvoked ? QStringLiteral("yes") : QStringLiteral("no")}}, true));
+}
