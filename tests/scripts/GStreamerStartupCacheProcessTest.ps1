@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$ProbeExecutable,
     [Parameter(Mandatory=$true)][string]$NonPluginDll,
@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory=$true)][string]$ScannerExecutable,
     [Parameter(Mandatory=$true)][string]$ReportDirectory,
     [string]$RuntimeDirectory = '',
-    [string]$CacheCase = ''
+    [string]$CacheCase = '',
+    [string]$PhaseLogPath = '' # PHASE-TRACE-PARAM
 )
 & (Join-Path $PSScriptRoot 'GStreamerPluginReadinessProcessTest.ps1') @PSBoundParameters -Mode CacheAcceptance
 exit $LASTEXITCODE

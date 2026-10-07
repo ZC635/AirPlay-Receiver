@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$ProbeExecutable,
     [Parameter(Mandatory=$true)][string]$NonPluginDll,
@@ -12,14 +12,113 @@ param(
     [ValidateSet('Acceptance','DetectionBypass','DuplicateDialog','HealthyAsNegative','WrongReason','CacheAcceptance')]
     [string]$Mode = 'Acceptance',
     [string]$CacheCase = '',
-    [switch]$ExpectRejection
+    [switch]$ExpectRejection,
+    [string]$PhaseLogPath = '' # PHASE-TRACE-PARAM
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# PHASE-TRACE-HELPER-BEGIN
+# Optional boundary-only evidence; never writes to the success pipeline.
+$script:cachePhaseWriter = $null
+$script:cachePhaseClock = $null
+$script:cachePhaseSequence = 0
+$script:cachePhaseNextId = 0
+$script:cachePhaseChildPid = $null
+$script:cachePhaseNativeExit = $null
+$script:cachePhaseChildCase = ''
+$script:cachePhaseCorrelation = [Guid]::NewGuid().ToString('N')
+$script:cachePhaseStack = [Collections.Generic.List[object]]::new()
+if ($PhaseLogPath) {
+    if ($PhaseLogPath -notmatch '^[A-Za-z]:[\\/]') { throw 'PhaseLogPath must be an absolute Windows path' }
+    $cachePhaseFullPath = [IO.Path]::GetFullPath($PhaseLogPath)
+    $cachePhaseParent = [IO.Path]::GetDirectoryName($cachePhaseFullPath)
+    if (-not [IO.Directory]::Exists($cachePhaseParent) -or
+        $cachePhaseParent.TrimEnd('\','/') -ine [IO.Path]::GetFullPath($ReportDirectory).TrimEnd('\','/')) {
+        throw 'PhaseLogPath must be in the existing owned report base directory'
+    }
+    $cachePhaseAncestor = $cachePhaseParent
+    while ($cachePhaseAncestor) {
+        if ([IO.File]::GetAttributes($cachePhaseAncestor) -band [IO.FileAttributes]::ReparsePoint) { throw 'PhaseLogPath ancestor must not be a reparse point' }
+        $cachePhaseAncestor = [IO.Path]::GetDirectoryName($cachePhaseAncestor)
+    }
+    $cachePhaseStream = [IO.FileStream]::new($cachePhaseFullPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    $cachePhaseStream.Dispose()
+    $script:cachePhaseWriter = $cachePhaseFullPath
+    $script:cachePhaseClock = [Diagnostics.Stopwatch]::StartNew()
+}
+function Write-CachePhaseRecord([string]$Event, $Frame, [string]$Detail = '') {
+    if (-not $script:cachePhaseWriter) { return }
+    ++$script:cachePhaseSequence
+    $cachePhaseRecord = [ordered]@{
+        sequence=$script:cachePhaseSequence; utc=[DateTime]::UtcNow.ToString('o')
+        elapsedMs=$script:cachePhaseClock.Elapsed.TotalMilliseconds
+        correlation=$script:cachePhaseCorrelation; phaseId=$Frame.Id; parentPhaseId=$Frame.ParentId
+        event=$Event; stage=$Frame.Stage; case=$Frame.Case; parentPid=$PID
+        childPid=$Frame.ChildPid; nativeExit=$Frame.NativeExit; detail=$Detail
+    }
+    # Close each boundary write so ordinary external readers need no special sharing.
+    $cachePhaseBoundaryWriter = $null
+    try {
+        $cachePhaseBoundaryStream = [IO.FileStream]::new($script:cachePhaseWriter, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+        $cachePhaseBoundaryWriter = [IO.StreamWriter]::new($cachePhaseBoundaryStream, [Text.UTF8Encoding]::new($false))
+        $cachePhaseBoundaryWriter.WriteLine(($cachePhaseRecord | ConvertTo-Json -Compress -Depth 3))
+        $cachePhaseBoundaryWriter.Flush()
+    }
+    catch {
+        # A diagnostic I/O failure must not replace an original harness exception.
+        $script:cachePhaseWriter = $null
+        Write-Warning ('Phase journal disabled after write failure: ' + $_.Exception.Message)
+    }
+    finally {
+        if ($cachePhaseBoundaryWriter) {
+            try { $cachePhaseBoundaryWriter.Dispose() }
+            catch { $script:cachePhaseWriter=$null; Write-Warning ('Phase journal disabled after close failure: ' + $_.Exception.Message) }
+        }
+    }
+}
+function Start-CachePhase([string]$Stage, [string]$Case = '') {
+    if (-not $script:cachePhaseWriter) { return }
+    $cachePhaseParentId = $null
+    if ($script:cachePhaseStack.Count) { $cachePhaseParentId = $script:cachePhaseStack[$script:cachePhaseStack.Count-1].Id }
+    ++$script:cachePhaseNextId
+    if ($Stage -eq 'probe') { $script:cachePhaseChildPid=$null; $script:cachePhaseNativeExit=$null; $script:cachePhaseChildCase=$Case }
+    $cachePhaseKnownChild=$null; $cachePhaseKnownExit=$null
+    if ($Case -and $Case -ceq $script:cachePhaseChildCase) { $cachePhaseKnownChild=$script:cachePhaseChildPid; $cachePhaseKnownExit=$script:cachePhaseNativeExit }
+    $cachePhaseFrame = [pscustomobject]@{Id=$script:cachePhaseNextId;ParentId=$cachePhaseParentId;Stage=$Stage;Case=$Case;ChildPid=$cachePhaseKnownChild;NativeExit=$cachePhaseKnownExit}
+    $script:cachePhaseStack.Add($cachePhaseFrame)
+    Write-CachePhaseRecord 'begin' $cachePhaseFrame
+}
+function Stop-CachePhase([string]$Event = 'end', [string]$Detail = '') {
+    if (-not $script:cachePhaseStack.Count) { return }
+    $cachePhaseFrame = $script:cachePhaseStack[$script:cachePhaseStack.Count-1]
+    # Always advance unwinding, even when this write disables the journal.
+    $script:cachePhaseStack.RemoveAt($script:cachePhaseStack.Count-1)
+    Write-CachePhaseRecord $Event $cachePhaseFrame $Detail
+}
+function Set-CachePhaseChild([int]$ChildPid, $NativeExit = $null) {
+    if (-not $script:cachePhaseWriter) { return }
+    $script:cachePhaseChildPid=$ChildPid; $script:cachePhaseNativeExit=$NativeExit
+    foreach ($cachePhaseFrame in $script:cachePhaseStack) {
+        if ($cachePhaseFrame.Case -and $cachePhaseFrame.Case -ceq $script:cachePhaseChildCase) { $cachePhaseFrame.ChildPid=$ChildPid; $cachePhaseFrame.NativeExit=$NativeExit }
+    }
+}
+function Write-CachePhaseError([string]$Stage, [string]$Detail) {
+    if (-not $script:cachePhaseWriter) { return }
+    Start-CachePhase $Stage
+    Stop-CachePhase 'error' $Detail
+}
+function Abort-CachePhases([string]$Detail) {
+    while ($script:cachePhaseStack.Count) { Stop-CachePhase 'error' $Detail }
+}
+# PHASE-TRACE-HELPER-END
+Start-CachePhase 'helper-imports' # PHASE-TRACE
+try { # PHASE-TRACE
 . (Join-Path $PSScriptRoot 'PeDependencyIsolation.ps1')
 
 . (Join-Path $PSScriptRoot 'StartupProcessContainment.ps1')
 . (Join-Path $PSScriptRoot '../../scripts/GStreamerRegistryLock.ps1')
+Stop-CachePhase # PHASE-TRACE
+} catch { Abort-CachePhases $_.Exception.Message; throw } # PHASE-TRACE
 
 # These are literal contract values, deliberately independent of production's
 # list and decisions. The positive control needs playback/core plugins only.
@@ -164,7 +263,7 @@ function Test-CacheCleanupGuard {
         $path=Join-Path $directory $name
         [IO.File]::WriteAllText($path,'foreign object')
         $refused=$false
-        try {Assert-OwnedRuntime} catch {$refused=$true}
+        try {Assert-OwnedRuntime} catch {$refused=$true; Write-CachePhaseError 'guard-expected-owned-runtime-rejection' $_.Exception.Message} # PHASE-TRACE-GUARD
         if(-not $refused){throw "Cache cleanup guard accepted foreign object: $name"}
         Remove-Item -LiteralPath $path
     }
@@ -237,8 +336,12 @@ function Assert-FixtureRecordingDirectory([string]$Fixture) {
 }
 
 function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = '') {
+    Start-CachePhase 'probe' (Split-Path -Leaf $Fixture) # PHASE-TRACE
+    Start-CachePhase 'probe-pre-runtime-tree' (Split-Path -Leaf $Fixture) # PHASE-TRACE
     Assert-RuntimeTree
     $recordingDirectory = Assert-FixtureRecordingDirectory $Fixture
+    Stop-CachePhase # PHASE-TRACE
+    Start-CachePhase 'probe-preparation' (Split-Path -Leaf $Fixture) # PHASE-TRACE
     $caseName = Split-Path -Leaf $Fixture
     Copy-Item -LiteralPath (Join-Path $Fixture 'airplay-settings.json') -Destination (Join-Path $ReportDirectory "$caseName-settings.json")
     $audit.Add("$caseName pre-launch recording.outputDirectory=$recordingDirectory")
@@ -278,22 +381,43 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
     $stderrFile = Join-Path $ReportDirectory "$name-stderr.txt"
     $process = $null
     $native = $null
+    Stop-CachePhase # PHASE-TRACE
+    Start-CachePhase 'probe-native-create' $caseName # PHASE-TRACE
     $job = [AirPlayStartupTestJob]::Create()
     try {
         $native = [AirPlayStartupTestJob]::StartSuspended($start, $stdoutFile, $stderrFile)
         $process = $native
+        Set-CachePhaseChild $native.Id # PHASE-TRACE
+        Stop-CachePhase # PHASE-TRACE
+        Start-CachePhase 'probe-native-enrollment' $caseName # PHASE-TRACE
         $native.EnrollAndResume($job)
+        Stop-CachePhase # PHASE-TRACE
+        Start-CachePhase 'probe-wait-for-exit-45000' $caseName # PHASE-TRACE
+        Set-CachePhaseChild $native.Id # PHASE-TRACE
         if (-not $process.WaitForExit(45000)) { throw 'Startup probe timed out after 45 seconds' }
+        Set-CachePhaseChild $native.Id $process.ExitCode # PHASE-TRACE
+        Stop-CachePhase # PHASE-TRACE
+        Start-CachePhase 'probe-close-job-read-final-output-5000' $caseName # PHASE-TRACE
+        Set-CachePhaseChild $native.Id $process.ExitCode # PHASE-TRACE
         # Initiate descendant cleanup, then boundedly await closed output writers.
         # Kill-on-close termination can complete after CloseHandle returns.
         [void][AirPlayStartupTestJob]::CloseHandle($job)
         $job = [IntPtr]::Zero
         $captured = [AirPlayStartupTestJob]::ReadFinalOutput($stdoutFile, $stderrFile, 5000)
+        Stop-CachePhase # PHASE-TRACE
+        Start-CachePhase 'probe-post-runtime-tree' $caseName # PHASE-TRACE
+        Set-CachePhaseChild $native.Id $process.ExitCode # PHASE-TRACE
         Assert-RuntimeTree
+        Stop-CachePhase # PHASE-TRACE
+        Start-CachePhase 'probe-protected-sentinels' $caseName # PHASE-TRACE
+        Set-CachePhaseChild $native.Id $process.ExitCode # PHASE-TRACE
         foreach($path in $protectedFixtureFiles.Keys) {
             if(-not [IO.File]::Exists($path) -or (Get-Sha256 $path) -cne $protectedFixtureFiles[$path]) {throw "Protected neighbor/default/other-owner sentinel changed: $path"}
         }
         $audit.Add("PASS: $caseName protected default registry, cache neighbor, and foreign runtime sentinels unchanged")
+        Stop-CachePhase # PHASE-TRACE
+        Start-CachePhase 'probe-diagnostic-json-read' $caseName # PHASE-TRACE
+        Set-CachePhaseChild $native.Id $process.ExitCode # PHASE-TRACE
         $out = $captured.Stdout
         $err = $captured.Stderr
         $logs = @(Get-ChildItem -LiteralPath (Join-Path $Fixture 'logs') -Filter '*.log' -ErrorAction SilentlyContinue)
@@ -303,9 +427,14 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         if ($json.Count -ne 1) { throw "Expected one probe result, got $($json.Count); exit $($process.ExitCode), stderr $err" }
         $audit.Add("$name child exit=$($process.ExitCode) PATH=$($start.EnvironmentVariables['PATH'])")
         return [pscustomobject]@{ ExitCode=$process.ExitCode; Result=($json[0] | ConvertFrom-Json); Diagnostics=$diagnostics; Fixture=$Fixture }
+    } catch { Abort-CachePhases $_.Exception.Message; throw # PHASE-TRACE
     } finally {
+        Stop-CachePhase # PHASE-TRACE
+        Start-CachePhase 'probe-native-cleanup' (Split-Path -Leaf $Fixture) # PHASE-TRACE
         if ($job -ne [IntPtr]::Zero) { [void][AirPlayStartupTestJob]::CloseHandle($job) }
         if ($native) { $native.Dispose() }
+        Stop-CachePhase # PHASE-TRACE
+        Stop-CachePhase # PHASE-TRACE
     }
 }
 
@@ -390,6 +519,7 @@ function Assert-StartupFailure($Observation, [string]$Missing, [switch]$AllowMis
 }
 
 function New-Fixture([string]$Name) {
+    Start-CachePhase 'fixture-copy-settings-guard' $Name # PHASE-TRACE
     $fixture = Join-Path $root $Name
     New-Item -ItemType Directory -Path $fixture | Out-Null
     # Copies, never hardlinks: substitutions cannot affect template or sources.
@@ -399,6 +529,7 @@ function New-Fixture([string]$Name) {
     $settings = [ordered]@{ language='en'; recording=[ordered]@{ outputDirectory=$recordingDirectory } }
     [IO.File]::WriteAllText((Join-Path $fixture 'airplay-settings.json'), ($settings | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
     [void](Assert-FixtureRecordingDirectory $fixture)
+    Stop-CachePhase # PHASE-TRACE
     return $fixture
 }
 
@@ -464,6 +595,7 @@ function Assert-RecordingCleanupSentinels($Sentinels, $Observation) {
     $audit.Add('PASS: real settings_loaded and recording_startup_cleanup count=2; owned target sentinels deleted; sibling sentinel hash unchanged')
 }
 
+Start-CachePhase 'report-runtime-initialization' # PHASE-TRACE
 try {
     $reportBase = [IO.Path]::GetFullPath($ReportDirectory)
     New-Item -ItemType Directory -Path $reportBase -Force | Out-Null
@@ -501,6 +633,8 @@ try {
     foreach ($directory in @('','config','platforms','gstreamer-plugins','gstreamer-1.0','libexec/gstreamer-1.0')) {
         New-Item -ItemType Directory -Path (Join-Path $template $directory) -Force | Out-Null
     }
+    Stop-CachePhase # PHASE-TRACE
+    Start-CachePhase 'source-root-resolution-hashing' # PHASE-TRACE
     $Executable = Require-File $Executable
     $ProbeExecutable = Require-File $ProbeExecutable
     $NonPluginDll = Require-File $NonPluginDll
@@ -510,9 +644,15 @@ try {
     $platforms = @('qwindows.dll','qoffscreen.dll') | ForEach-Object { Require-File (Join-Path $QtPluginDirectory "platforms/$_") }
     $roots = @($Executable,$ProbeExecutable,$ScannerExecutable,$NonPluginDll) + $plugins + $platforms
     foreach ($source in $roots) { $sourceHashes[$source] = (Get-Sha256 $source) }
+    Stop-CachePhase # PHASE-TRACE
+    Start-CachePhase 'pe-dependency-resolution' # PHASE-TRACE
     $search = @((Split-Path -Parent $Executable),(Split-Path -Parent $ProbeExecutable),$DependencyBinDirectory)
     $deps = Get-PeDependencies -Roots $roots -SearchDirectories $search -Objdump $Objdump -RejectImport { param($name,$file) } -Audit $audit
+    Stop-CachePhase # PHASE-TRACE
+    Start-CachePhase 'dependency-hashing' # PHASE-TRACE
     foreach ($source in $deps.Values) { $sourceHashes[$source] = (Get-Sha256 $source) }
+    Stop-CachePhase # PHASE-TRACE
+    Start-CachePhase 'template-copy-preparation-guards' # PHASE-TRACE
     $relativeFiles = @($deps.Values | ForEach-Object { Split-Path -Leaf $_ }) +
         @($plugins | ForEach-Object { 'gstreamer-plugins/' + (Split-Path -Leaf $_) })
     Assert-RuntimeLayout $relativeFiles
@@ -533,6 +673,8 @@ try {
     "[Paths]`nPlugins=." | Set-Content (Join-Path $template 'qt.conf')
     # Settings are written per case after copying, with its own absolute output directory.
 
+    Stop-CachePhase # PHASE-TRACE
+    Start-CachePhase 'case-dispatch-loop' $Mode # PHASE-TRACE
     if ($Mode -eq 'CacheAcceptance' -and $CacheCase -eq 'cancel') {
         $fixture=New-Fixture 'cancel'
         $observation=Invoke-Probe $fixture 'cache' 'cancel-startup'
@@ -575,14 +717,18 @@ try {
         $cacheCasesExecuted=1
         $audit.Add('PASS: genuine coordinator seed Updated/Saved; PowerShell-held healthy reuse Reused/Matched, actual private core Ready, Assess only/no recovery/no notice; registry/record unchanged')
     } elseif ($Mode -eq 'CacheAcceptance') {
+        Start-CachePhase 'cache-cleanup-guard' # PHASE-TRACE
         Test-CacheCleanupGuard
+        Stop-CachePhase # PHASE-TRACE
         $conditions=if($CacheCase -like 'input-denied-*'){@('input-denied')}elseif($CacheCase -like 'unreadable-*'){@('unreadable')}else{@('corrupt','missing','readonly','busy')}
         foreach ($condition in $conditions) {
             foreach ($ready in @($true,$false)) {
                 $name=$condition+$(if($ready){'-ready'}else{'-missing-app'})
                 if($CacheCase -and $CacheCase -cne $name){continue}
+                Start-CachePhase 'cache-case' $name # PHASE-TRACE
                 ++$cacheCasesExecuted
                 $fixture=New-Fixture $name
+                Start-CachePhase 'case-cache-preparation' $name # PHASE-TRACE
                 $shared=Join-Path $fixture 'gstreamer-1.0/registry.x86_64.bin'
                 [IO.File]::WriteAllText($shared,'owned corrupt cache')
                 if($condition -eq 'missing') {Remove-Item -LiteralPath $shared}
@@ -608,7 +754,13 @@ try {
                     if(-not $denied){throw 'Shared registry fixture must actually deny read access'}
                     $audit.Add('Shared registry held through real exclusive Win32 file sharing; independent read denied')
                 }
-                try {$observation=Invoke-Probe $fixture 'cache'} finally {if($held){if($condition -eq 'busy'){Exit-AirPlayRegistryWriteLock $held}else{$held.Dispose()}};if(Test-Path $shared){[IO.File]::SetAttributes($shared,[IO.FileAttributes]::Normal)}}
+                Stop-CachePhase # PHASE-TRACE
+                try {$observation=Invoke-Probe $fixture 'cache'} finally { # PHASE-TRACE-SPLIT
+                    Start-CachePhase 'case-holder-cleanup' $name # PHASE-TRACE
+                    if($held){if($condition -eq 'busy'){Exit-AirPlayRegistryWriteLock $held}else{$held.Dispose()}};if(Test-Path $shared){[IO.File]::SetAttributes($shared,[IO.FileAttributes]::Normal)} # PHASE-TRACE-SPLIT
+                    Stop-CachePhase # PHASE-TRACE
+                } # PHASE-TRACE-SPLIT
+                Start-CachePhase 'case-oracle' $name # PHASE-TRACE
                 $r=$observation.Result
                 if($condition -eq 'busy' -and $r.preparation.cacheState -ne 3) {throw 'PowerShell-held lease must produce actual RecoverySkipped startup'}
                 if($ready) {
@@ -664,11 +816,15 @@ try {
                 if($condition -in @('busy','unreadable') -and $observation.Diagnostics -notmatch 'startup gstreamer_cache_stage .*stage=0'){throw 'Missing preparation stage diagnostic'}
                 if($condition -in @('busy','unreadable') -and $observation.Diagnostics -notmatch 'startup gstreamer_cache_preparation .*reason=[^ ]+'){throw 'Missing explanatory preparation diagnostic'}
                 $audit.Add("PASS: cache startup $name; prep=$($r.preparation.readinessState); dialogs=$(@($r.dialogs).Count); receiver=$($r.receiverStartCalled)")
+                Stop-CachePhase # PHASE-TRACE
+                Stop-CachePhase # PHASE-TRACE
             }
         }
     } elseif ($Mode -eq 'Acceptance') {
         Test-RuntimePathGuard
+        Start-CachePhase 'cache-cleanup-guard' # PHASE-TRACE
         Test-CacheCleanupGuard
+        Stop-CachePhase # PHASE-TRACE
         Test-RecordingDirectoryGuard
         $healthy = New-Fixture 'healthy'
         $positive = Invoke-Probe $healthy 'core'
@@ -764,6 +920,7 @@ try {
         if (-not $ExpectRejection) { throw $rejection }
         $audit.Add("PASS: $Mode real acceptance oracle rejected the behavioral control")
     }
+    Stop-CachePhase # PHASE-TRACE
     if($Mode -eq 'CacheAcceptance') {
         $expectedCases=if($CacheCase){1}else{8}
         if($cacheCasesExecuted -ne $expectedCases){throw 'Cache matrix did not execute its required cases'}
@@ -772,32 +929,47 @@ try {
     $audit.Add("PASS: $Mode")
 } catch {
     $audit.Add("FAIL: $($_.Exception.Message)")
+    Abort-CachePhases $_.Exception.Message # PHASE-TRACE
     Write-Error -Message $_.Exception.Message -ErrorAction Continue
 } finally {
+    try { # PHASE-TRACE
+    Start-CachePhase 'finally-source-rehash' # PHASE-TRACE
     foreach ($source in $sourceHashes.Keys) {
         if ((Get-Sha256 $source) -ne $sourceHashes[$source]) {
             $audit.Add("FAIL: source was modified: $source")
+            Write-CachePhaseError 'finally-source-mismatch' $source # PHASE-TRACE
         }
     }
     if ($sourceHashes.Count -gt 0) { $audit.Add("Source SHA256 verified: $($sourceHashes.Count) files") }
+    Stop-CachePhase # PHASE-TRACE
     if ($runtimeCreated -and (Test-Path -LiteralPath $root)) {
         try {
+            Start-CachePhase 'finally-owned-runtime-verification' # PHASE-TRACE
             Assert-OwnedRuntime
+            Stop-CachePhase # PHASE-TRACE
+            Start-CachePhase 'finally-runtime-removal' # PHASE-TRACE
             Remove-Item -LiteralPath $root -Recurse -Force
+            Stop-CachePhase # PHASE-TRACE
             $pathEvidence.runtimeRemoved = $true
             $audit.Add('PASS: removed only this run owned runtime directory')
         } catch {
             $audit.Add("FAIL: cleanup refused/failed: $($_.Exception.Message)")
+            Abort-CachePhases $_.Exception.Message # PHASE-TRACE
             Write-Error -Message $_.Exception.Message -ErrorAction Continue
         }
     }
     if ($reportCreated) {
+        Start-CachePhase 'finally-report-writes' # PHASE-TRACE
         [IO.File]::WriteAllText((Join-Path $ReportDirectory 'runtime-paths.json'),
             ($pathEvidence | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
         @($protectedFixtureFiles.GetEnumerator() | ForEach-Object {[pscustomobject]@{path=$_.Key;sha256=$_.Value}}) | ConvertTo-Json | Set-Content (Join-Path $ReportDirectory 'protected-sentinels.json')
         $audit | Set-Content (Join-Path $ReportDirectory 'audit.txt')
+        Stop-CachePhase # PHASE-TRACE
     }
+    } catch { Abort-CachePhases $_.Exception.Message; throw } # PHASE-TRACE
 }
+Start-CachePhase 'script-native-exit-decision' # PHASE-TRACE
+Stop-CachePhase 'end' ('plannedExit=' + [int](@($audit | Where-Object { $_.StartsWith('FAIL:') }).Count -gt 0)) # PHASE-TRACE
 if (@($audit | Where-Object { $_.StartsWith('FAIL:') }).Count -gt 0) { exit 1 }
 Write-Output $audit[-2]
 exit 0
