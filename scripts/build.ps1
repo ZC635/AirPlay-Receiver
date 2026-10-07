@@ -479,39 +479,8 @@ function Invoke-Build {
         }
         Copy-Item -LiteralPath $pluginScannerSource -Destination $pluginScannerOutputDir -Force
 
-        Write-Host "  Generating GStreamer registry cache..." -ForegroundColor Gray
-        $registryDir = Join-Path $VariantBuildDir "gstreamer-1.0"
-        if (-not (Test-Path $registryDir)) { New-Item -ItemType Directory -Path $registryDir -Force | Out-Null }
-        $portableRegistry = Join-Path $registryDir "registry.x86_64.bin"
-        $hadGstRegistryForScan = Test-Path Env:GST_REGISTRY
-        $previousGstRegistryForScan = $env:GST_REGISTRY
-        $env:GST_REGISTRY = $portableRegistry
-        $hadGstPluginPathForScan = Test-Path Env:GST_PLUGIN_PATH
-        $previousGstPluginPathForScan = $env:GST_PLUGIN_PATH
-        $env:GST_PLUGIN_PATH = $PluginOutDir
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        $gstInspectOutput = & "$MSys2Bin\gst-inspect-1.0.exe" --gst-disable-registry-fork 2>&1
-        $gstInspectExit = $LASTEXITCODE
-        $ErrorActionPreference = $prevEAP
-        if ($gstInspectExit -ne 0) {
-            Write-Warning "gst-inspect-1.0.exe exited with code $gstInspectExit. GStreamer registry may be incomplete. $($gstInspectOutput -join ' ')"
-        }
-        if ($hadGstPluginPathForScan) {
-            $env:GST_PLUGIN_PATH = $previousGstPluginPathForScan
-        } else {
-            Remove-Item Env:GST_PLUGIN_PATH -ErrorAction SilentlyContinue
-        }
-        if ($hadGstRegistryForScan) {
-            $env:GST_REGISTRY = $previousGstRegistryForScan
-        } else {
-            Remove-Item Env:GST_REGISTRY -ErrorAction SilentlyContinue
-        }
-        if (Test-Path $portableRegistry) {
-            Write-Host "    Registry generated at gstreamer-1.0\registry.x86_64.bin" -ForegroundColor Gray
-        } else {
-            Write-Warning "GStreamer registry was not generated. Plugin discovery may be slow."
-        }
+        Write-Host "  Generating verified GStreamer registry cache..." -ForegroundColor Gray
+        & (Join-Path $PSScriptRoot 'update-gstreamer-registry.ps1') -PackageDir $VariantBuildDir
 
         $manifestSource = Join-Path $ProjectRoot "config\portable-runtime-manifest.txt"
         $manifestOutDir = Join-Path $VariantBuildDir "config"

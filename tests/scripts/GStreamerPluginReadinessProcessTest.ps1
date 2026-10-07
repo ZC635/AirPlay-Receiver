@@ -9,8 +9,9 @@ param(
     [Parameter(Mandatory=$true)][string]$ScannerExecutable,
     [Parameter(Mandatory=$true)][string]$ReportDirectory,
     [string]$RuntimeDirectory = '',
-    [ValidateSet('Acceptance','DetectionBypass','DuplicateDialog','HealthyAsNegative','WrongReason')]
+    [ValidateSet('Acceptance','DetectionBypass','DuplicateDialog','HealthyAsNegative','WrongReason','CacheAcceptance')]
     [string]$Mode = 'Acceptance',
+    [string]$CacheCase = '',
     [switch]$ExpectRejection
 )
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'PeDependencyIsolation.ps1')
 
 . (Join-Path $PSScriptRoot 'StartupProcessContainment.ps1')
+. (Join-Path $PSScriptRoot '../../scripts/GStreamerRegistryLock.ps1')
 
 # These are literal contract values, deliberately independent of production's
 # list and decisions. The positive control needs playback/core plugins only.
@@ -26,6 +28,8 @@ $runtimePlugins = @('app','coreelements','playback','autodetect','videoconvertsc
     'audioconvert','audioresample','videoparsersbad','libav','d3d11','wasapi')
 $audit = [Collections.Generic.List[string]]::new()
 $sourceHashes = @{}
+$protectedFixtureFiles = @{}
+$cacheCasesExecuted = 0
 function Get-Sha256([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
     $hash = [Security.Cryptography.SHA256]::Create()
@@ -87,7 +91,7 @@ function Assert-RuntimeLayout([string[]]$RelativeFiles) {
     # Reserve generated filenames before creating or copying fixtures.
     $generated = @(
         'airplay-settings.json', 'airplay_receiver.exe', (Split-Path -Leaf $ProbeExecutable),
-        'config/portable-runtime-manifest.txt', 'qt.conf', '.airplay-test-owner',
+        'config/portable-runtime-manifest.txt', 'qt.conf', '.airplay-test-owner', 'optional-input.dll',
         'platforms/qwindows.dll', 'platforms/qoffscreen.dll',
         'gstreamer-1.0/registry.x86_64.bin', 'libexec/gstreamer-1.0/gst-plugin-scanner.exe',
         'logs/AirPlay-Diagnostic-2000-01-01-000000-2147483647.log',
@@ -97,7 +101,7 @@ function Assert-RuntimeLayout([string[]]$RelativeFiles) {
         'recording-sibling/.airplay-recording-00000000000000000000000000000000.mp4.part'
     ) + $RelativeFiles
     $cases = @('template','recording-settings-guard','healthy',
-               'DetectionBypass','DuplicateDialog','HealthyAsNegative','WrongReason') +
+               'DetectionBypass','DuplicateDialog','HealthyAsNegative','WrongReason','input-denied-ready','input-denied-missing-app') +
              @($required | ForEach-Object { "missing-$_" })
     $paths = @($root) + @(
         foreach ($case in $cases) {
@@ -135,9 +139,36 @@ function Assert-OwnedRuntime {
     $expected = [IO.Path]::GetFullPath((Join-Path $runtimeParent ('runtime-' + $runId)))
     if (-not $runtimeCreated -or $root -ine $expected) { throw 'Unsafe cleanup target: not created by this run' }
     Assert-RuntimeTree
+    foreach ($caseDirectory in Get-ChildItem -LiteralPath $root -Directory) {
+        $cacheDirectory = Join-Path $caseDirectory.FullName 'gstreamer-1.0'
+        if (-not (Test-Path -LiteralPath $cacheDirectory)) { continue }
+        foreach ($cacheFile in Get-ChildItem -LiteralPath $cacheDirectory -Force) {
+            if ($cacheFile.PSIsContainer -or $cacheFile.Name -cnotin @('registry.x86_64.bin','registry.x86_64.validation.json','.registry-startup.lock')) { throw 'Unsafe cleanup target: unknown cache object' }
+            if ($cacheFile.Name -ceq '.registry-startup.lock' -and [IO.File]::ReadAllText($cacheFile.FullName) -cne "AIRPLAY-GSTREAMER-REGISTRY-LOCK/1`n") { throw 'Unsafe cleanup target: foreign cache lock' }
+            if ($cacheFile.Name -ceq 'registry.x86_64.validation.json') {
+                $record=[IO.File]::ReadAllText($cacheFile.FullName)|ConvertFrom-Json
+                if ($record.schemaVersion -ne 1 -or -not $record.validated -or $record.inputSha256 -notmatch '^[a-f0-9]{64}$' -or $record.registrySha256 -notmatch '^[a-f0-9]{64}$' -or @($record.plugins).Count -eq 0 -or @($record.blacklist).Count -ne 0) { throw 'Unsafe cleanup target: invalid cache record' }
+                foreach ($plugin in $record.plugins) {if ($plugin.source -notmatch '^gstreamer-plugins/[^/\\]+[.]dll$') {throw 'Unsafe cleanup target: record origin escaped fixture'}}
+            }
+        }
+    }
     $marker = Join-Path $root '.airplay-test-owner'
     if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
         [IO.File]::ReadAllText($marker) -cne $runId) { throw 'Unsafe cleanup target: ownership marker mismatch' }
+}
+
+function Test-CacheCleanupGuard {
+    $directory=Join-Path $root 'guard/gstreamer-1.0'
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    foreach($name in @('unknown.bin','registry.neighbor.bin','other.lock','.registry-startup.lock','registry.x86_64.validation.json')) {
+        $path=Join-Path $directory $name
+        [IO.File]::WriteAllText($path,'foreign object')
+        $refused=$false
+        try {Assert-OwnedRuntime} catch {$refused=$true}
+        if(-not $refused){throw "Cache cleanup guard accepted foreign object: $name"}
+        Remove-Item -LiteralPath $path
+    }
+    $audit.Add('PASS: cache cleanup guard rejects unknown/neighbor/other-lock/foreign-lock/invalid-record objects')
 }
 
 function Test-RuntimePathGuard {
@@ -228,6 +259,9 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
     $start.EnvironmentVariables['QT_PLUGIN_PATH'] = $Fixture
     $start.EnvironmentVariables['QT_QPA_PLATFORM_PLUGIN_PATH'] = Join-Path $Fixture 'platforms'
     $start.EnvironmentVariables['QT_QPA_PLATFORM'] = 'offscreen'
+    $start.EnvironmentVariables['AIRPLAY_STARTUP_TEST_REPORT'] = $ReportDirectory
+    $start.EnvironmentVariables['AIRPLAY_STARTUP_TEST_TEMP'] = Join-Path $root 'tmp'
+    $start.EnvironmentVariables['AIRPLAY_STARTUP_TEST_GOOD_APP'] = Join-Path $template 'gstreamer-plugins/libgstapp.dll'
     $start.EnvironmentVariables['AIRPLAY_STARTUP_TEST_MODE'] = $ProbeMode
     $start.EnvironmentVariables['AIRPLAY_STARTUP_TEST_MUTATION'] = $Mutation
     foreach ($suffix in @('', '_1_0')) {
@@ -235,6 +269,9 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         $start.EnvironmentVariables["GST_PLUGIN_SYSTEM_PATH$suffix"] = Join-Path $Fixture 'gstreamer-plugins'
         $start.EnvironmentVariables["GST_REGISTRY$suffix"] = Join-Path $Fixture 'gstreamer-1.0/registry.x86_64.bin'
         $start.EnvironmentVariables["GST_PLUGIN_SCANNER$suffix"] = Join-Path $Fixture 'libexec/gstreamer-1.0/gst-plugin-scanner.exe'
+    }
+    if($ProbeMode -eq 'cache') {
+        foreach($suffix in @('','_1_0')) {$start.EnvironmentVariables["GST_REGISTRY$suffix"]=Join-Path $root 'protected/default-registry.bin'}
     }
     $name = Split-Path -Leaf $Fixture
     $stdoutFile = Join-Path $ReportDirectory "$name-stdout.txt"
@@ -253,6 +290,10 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         $job = [IntPtr]::Zero
         $captured = [AirPlayStartupTestJob]::ReadFinalOutput($stdoutFile, $stderrFile, 5000)
         Assert-RuntimeTree
+        foreach($path in $protectedFixtureFiles.Keys) {
+            if(-not [IO.File]::Exists($path) -or (Get-Sha256 $path) -cne $protectedFixtureFiles[$path]) {throw "Protected neighbor/default/other-owner sentinel changed: $path"}
+        }
+        $audit.Add("PASS: $caseName protected default registry, cache neighbor, and foreign runtime sentinels unchanged")
         $out = $captured.Stdout
         $err = $captured.Stderr
         $logs = @(Get-ChildItem -LiteralPath (Join-Path $Fixture 'logs') -Filter '*.log' -ErrorAction SilentlyContinue)
@@ -261,14 +302,33 @@ function Invoke-Probe([string]$Fixture, [string]$ProbeMode, [string]$Mutation = 
         $json = @($out -split '\r?\n' | Where-Object { $_.StartsWith('{') })
         if ($json.Count -ne 1) { throw "Expected one probe result, got $($json.Count); exit $($process.ExitCode), stderr $err" }
         $audit.Add("$name child exit=$($process.ExitCode) PATH=$($start.EnvironmentVariables['PATH'])")
-        return [pscustomobject]@{ ExitCode=$process.ExitCode; Result=($json[0] | ConvertFrom-Json); Diagnostics=$diagnostics }
+        return [pscustomobject]@{ ExitCode=$process.ExitCode; Result=($json[0] | ConvertFrom-Json); Diagnostics=$diagnostics; Fixture=$Fixture }
     } finally {
         if ($job -ne [IntPtr]::Zero) { [void][AirPlayStartupTestJob]::CloseHandle($job) }
         if ($native) { $native.Dispose() }
     }
 }
 
-function Assert-StartupFailure($Observation, [string]$Missing) {
+function Assert-WorkerPreparation($Observation,[string]$Missing) {
+    $caseName=Split-Path -Leaf $Observation.Fixture
+    $assess=@(Get-ChildItem -LiteralPath $ReportDirectory -Filter "$caseName-*-request.json" | ForEach-Object {
+        $request=Get-Content -Raw -LiteralPath $_.FullName|ConvertFrom-Json
+        if ($request.stage -eq 'Assess') { [pscustomobject]@{Path=$_.FullName;Request=$request} }
+    })
+    if ($assess.Count -ne 1) {throw 'genuine preparation requires one current Assess request'}
+    $request=$assess[0].Request
+    $resultPath=$assess[0].Path.Replace('-request.json','-result.json')
+    $result=Get-Content -Raw -LiteralPath $resultPath|ConvertFrom-Json
+    $exit=[IO.File]::ReadAllText($assess[0].Path.Replace('-request.json','-exit.txt'))
+    if ($exit -cne '0' -or -not $result.complete -or $result.nonce -cne $request.nonce -or $result.stage -cne 'Assess' -or
+        $result.readiness.initializationError -ne '' -or $result.registrySha256 -notmatch '^[a-f0-9]{64}$' -or
+        $request.packageDirectory.Replace('/','\') -ine $Observation.Fixture -or $request.outputRegistry -notmatch 'runtime[.]bin$' -or
+        $result.readiness.ready -or @($result.readiness.missingPlugins).Count -ne 1 -or $result.readiness.missingPlugins[0] -cne $Missing) {throw 'genuine scoped worker environment/readiness evidence invalid'}
+    # A normal actual check + successful registry hash follows private configure in the real worker.
+    $audit.Add("PASS: accepted real Assess nonce=$($request.nonce); private=$($request.outputRegistry); missing=$Missing")
+}
+
+function Assert-StartupFailure($Observation, [string]$Missing, [switch]$AllowMissingRegistry) {
     $r = $Observation.Result
     $failures = [Collections.Generic.List[string]]::new()
     if ($Observation.ExitCode -ne 1 -or $r.startupExit -ne 1) { $failures.Add('actual startup exit must be 1') }
@@ -289,13 +349,44 @@ function Assert-StartupFailure($Observation, [string]$Missing) {
         $failures.Add('wrong real readiness result/missing list')
     }
     if ($d -notmatch '\bstartup_aborted\b.*reason=gstreamer_plugin_load_failure') { $failures.Add('wrong startup abort reason') }
-    if ($d -notmatch '\bstartup gstreamer_package_environment result=yes') { $failures.Add('package environment was not configured') }
+    if ($AllowMissingRegistry -and ($r.ordinaryStartupParentConfigured -or
+        -not $r.preparation.executed -or $r.preparation.readinessState -ne 1 -or
+        $r.preparation.ready -or $r.preparation.leaseReturned -or $r.ordinaryStartupActualCore.executed)) {
+        $failures.Add('missing-registry preparation did not block parent configuration/core')
+    }
+    if ($r.ordinaryStartupParentConfigured) {
+        if ($d -notmatch '\bstartup gstreamer_package_environment result=yes') { $failures.Add('package environment was not configured') }
+    } else {
+        if (-not $r.preparation.executed -or $r.preparation.ready -or $r.preparation.leaseReturned -or
+            $r.ordinaryStartupActualCore.executed -or $d -match '\bstartup gstreamer_package_environment\b') { $failures.Add('preparation failure did not block parent configuration/core') }
+        try { Assert-WorkerPreparation $Observation $Missing } catch { $failures.Add($_.Exception.Message) }
+    }
     if ($d -notmatch '\bstartup runtime_path_compatibility\b.*has_non_ascii=no result=yes') { $failures.Add('ASCII path did not pass compatibility') }
     $manifest = @($d -split '\r?\n' | Where-Object { $_ -match '\bstartup runtime_manifest_entry\b' })
-    if ($manifest.Count -ne 23 -or @($manifest | Where-Object { $_ -notmatch ' result=present$' }).Count -ne 0) {
+    if ($AllowMissingRegistry) {
+        # Literal original playback snapshot: only this derived registry may be absent.
+        $expectedEntries = @('config/portable-runtime-manifest.txt','airplay_receiver.exe',
+            'Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','platforms/qwindows.dll',
+            'libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll','libgstreamer-1.0-0.dll',
+            'gstreamer-plugins/libgstapp.dll','gstreamer-plugins/libgstcoreelements.dll',
+            'gstreamer-plugins/libgstplayback.dll','gstreamer-plugins/libgstautodetect.dll',
+            'gstreamer-plugins/libgstvideoconvertscale.dll','gstreamer-plugins/libgstaudioconvert.dll',
+            'gstreamer-plugins/libgstaudioresample.dll','gstreamer-plugins/libgstvideoparsersbad.dll',
+            'gstreamer-plugins/libgstlibav.dll','gstreamer-plugins/libgstd3d11.dll',
+            'gstreamer-plugins/libgstwasapi.dll','gstreamer-1.0/registry.x86_64.bin','libqmdnsengine.dll')
+        if ($manifest.Count -ne 23) { $failures.Add('runtime file presence check was incomplete') }
+        foreach ($entry in $expectedEntries) {
+            $presence = if ($entry -ceq 'gstreamer-1.0/registry.x86_64.bin') { 'missing' } else { 'present' }
+            $pattern = ' relative_name=' + [regex]::Escape($entry) + ' result=' + $presence + '$'
+            if (@($manifest | Where-Object { $_ -cmatch $pattern }).Count -ne 1) {
+                $failures.Add('runtime file presence check was incomplete')
+            }
+        }
+    } elseif ($manifest.Count -ne 23 -or @($manifest | Where-Object { $_ -notmatch ' result=present$' }).Count -ne 0) {
         $failures.Add('runtime file presence check was incomplete')
     }
     if ($failures.Count -gt 0) { throw ('Acceptance rejected: ' + ($failures -join '; ')) }
+    if (-not $r.ordinaryStartupParentConfigured) { $audit.Add('PASS: full negative oracle confirmed preparation blocked parent configuration/core') }
 }
 
 function New-Fixture([string]$Name) {
@@ -400,6 +491,12 @@ try {
     $pathEvidence.runtimeCreated = $true
     [IO.File]::WriteAllText((Join-Path $root '.airplay-test-owner'), $runId)
     $audit.Add("Runtime directory: $root; report directory: $ReportDirectory; file path limit=240; RTSS diagnostic module path limit=$($pathEvidence.maxDiagnosticModulePathBytes) ASCII bytes")
+    foreach($relative in @('protected/default-registry.bin','protected/neighbor-cache.bin','tmp/gst/startup-foreign/runtime.bin','tmp/gst/startup-foreign/.owner')) {
+        $path=Join-Path $root $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+        [IO.File]::WriteAllText($path,"Owned test sentinel $runId $relative")
+        $protectedFixtureFiles[$path]=Get-Sha256 $path
+    }
     $template = Join-Path $root 'template'
     foreach ($directory in @('','config','platforms','gstreamer-plugins','gstreamer-1.0','libexec/gstreamer-1.0')) {
         New-Item -ItemType Directory -Path (Join-Path $template $directory) -Force | Out-Null
@@ -425,15 +522,153 @@ try {
     Copy-Item -LiteralPath $ScannerExecutable -Destination (Join-Path $template 'libexec/gstreamer-1.0/gst-plugin-scanner.exe')
     foreach ($plugin in $plugins) { Copy-Item -LiteralPath $plugin -Destination (Join-Path $template 'gstreamer-plugins') }
     foreach ($platform in $platforms) { Copy-Item -LiteralPath $platform -Destination (Join-Path $template 'platforms') }
-    Copy-Item -LiteralPath (Require-File (Join-Path (Split-Path -Parent $Executable) 'config/portable-runtime-manifest.txt')) -Destination (Join-Path $template 'config/portable-runtime-manifest.txt')
+    # Fixture inventory matches its playback subset; all deliberately substituted/missing files remain declared.
+    $fixtureManifest=@(Get-ChildItem -LiteralPath $template -File -Recurse | Where-Object { $_.Extension -in @('.dll','.exe') } | ForEach-Object { $_.FullName.Substring($template.Length+1).Replace('\','/') } | Sort-Object)
+    [IO.File]::WriteAllLines((Join-Path $template 'config/portable-runtime-manifest.txt'),$fixtureManifest,[Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllLines((Join-Path $ReportDirectory 'fixture-manifest.txt'),$fixtureManifest,[Text.UTF8Encoding]::new($false))
+    $audit.Add("Fixture manifest count=$($fixtureManifest.Count); required playback plugin count=$($required.Count); copied plugin count=$($plugins.Count)")
     # Invalid empty registry is intentional: file presence succeeds, GStreamer
     # scans afresh in each process rather than inheriting a source/host registry.
     [IO.File]::WriteAllBytes((Join-Path $template 'gstreamer-1.0/registry.x86_64.bin'), [byte[]]@())
     "[Paths]`nPlugins=." | Set-Content (Join-Path $template 'qt.conf')
     # Settings are written per case after copying, with its own absolute output directory.
 
-    if ($Mode -eq 'Acceptance') {
+    if ($Mode -eq 'CacheAcceptance' -and $CacheCase -eq 'cancel') {
+        $fixture=New-Fixture 'cancel'
+        $observation=Invoke-Probe $fixture 'cache' 'cancel-startup'
+        $r=$observation.Result
+        if($observation.ExitCode -ne 1 -or -not $r.cancellationRequested -or -not $r.preparation.cancelled -or
+            -not $r.preparation.cleanupComplete -or $r.preparation.leaseReturned -or $r.receiverStartCalled -or
+            $r.mainWindowSeen -or $r.ordinaryStartupParentConfigured -or $r.ordinaryStartupActualCore.executed -or @($r.dialogs).Count -ne 0 -or
+            $observation.Diagnostics -notmatch 'reason=gstreamer_preparation_cancelled') {throw 'Cancelled ordinary startup did not drain cleanup and stop before normal window/receiver'}
+        $cacheCasesExecuted=1
+        $audit.Add('PASS: cancelled ordinary startup drained real native cleanup; no main window/receiver/configure/core/dialog')
+    } elseif ($Mode -eq 'CacheAcceptance' -and $CacheCase -eq 'healthy-held') {
+        $fixture=New-Fixture 'healthy-held'
+        $shared=Join-Path $fixture 'gstreamer-1.0/registry.x86_64.bin'
+        $recordPath=Join-Path $fixture 'gstreamer-1.0/registry.x86_64.validation.json'
+        $seed=Invoke-Probe $fixture 'cache'
+        if($seed.ExitCode -ne 0 -or $seed.Result.preparation.cacheState -ne 1 -or $seed.Result.preparation.recordState -ne 1 -or -not $seed.Result.preparation.ready) {throw 'Healthy-held setup must obtain a real coordinator Updated/Saved registry and record'}
+        foreach($suffix in @('stdout.txt','stderr.txt','diagnostics.log')) {Copy-Item -LiteralPath (Join-Path $ReportDirectory "healthy-held-$suffix") -Destination (Join-Path $ReportDirectory "healthy-seed-$suffix")}
+        $before=Get-Sha256 $shared; $recordBefore=Get-Sha256 $recordPath
+        $record=Get-Content -LiteralPath $recordPath -Raw|ConvertFrom-Json
+        if($record.registrySha256 -cne $before.Replace('-','').ToLowerInvariant() -or -not $record.validated -or @($record.blacklist).Count -ne 0) {throw 'Genuine seed record must match the actual shared registry'}
+        $priorRequests=@(Get-ChildItem -LiteralPath $ReportDirectory -Filter 'healthy-held-*-request.json'|ForEach-Object {$_.Name})
+        $held=Enter-AirPlayRegistryWriteLock $fixture
+        try {$observation=Invoke-Probe $fixture 'cache'} finally {Exit-AirPlayRegistryWriteLock $held}
+        $r=$observation.Result
+        if($observation.ExitCode -ne 0 -or $r.preparation.cacheState -ne 0 -or $r.preparation.recordState -ne 0 -or -not $r.preparation.ready -or -not $r.preparation.leaseReturned -or
+            -not $r.receiverStartCalled -or -not $r.mainWindowSeen -or -not $r.ordinaryStartupParentConfigured -or -not $r.ordinaryStartupActualCore.ready -or
+            -not $r.runtimeRemoved -or @($r.dialogs).Count -ne 0 -or @($r.ordinaryStartupActualCore.origins).Count -ne 5 -or $r.privateRegistry -ieq $shared) {throw 'Healthy startup under actual PowerShell lease must reuse with a private Ready runtime and no notice'}
+        foreach($origin in $r.ordinaryStartupActualCore.origins) {if(-not $origin.loaded -or [IO.Path]::GetFullPath($origin.filename) -ine (Join-Path $fixture "gstreamer-plugins/libgst$($origin.name).dll")){throw 'Healthy reused actual core origin escaped fixture'}}
+        $requests=@(Get-ChildItem -LiteralPath $ReportDirectory -Filter 'healthy-held-*-request.json'|Where-Object {$_.Name -cnotin $priorRequests}|ForEach-Object {Get-Content -LiteralPath $_.FullName -Raw|ConvertFrom-Json})
+        if(@($requests|Where-Object {$_.stage -eq 'Assess'}).Count -ne 1 -or @($requests|Where-Object {$_.stage -notin @('Assess','Cleanup')}).Count -ne 0) {throw 'Healthy held-lock reuse must not run recovery phases'}
+        foreach($file in Get-ChildItem -LiteralPath $ReportDirectory -Filter 'healthy-held-*-request.json'|Where-Object {$_.Name -cnotin $priorRequests}) {
+            $request=Get-Content -LiteralPath $file.FullName -Raw|ConvertFrom-Json
+            $result=Get-Content -LiteralPath $file.FullName.Replace('-request.json','-result.json') -Raw|ConvertFrom-Json
+            $exit=[IO.File]::ReadAllText($file.FullName.Replace('-request.json','-exit.txt'))
+            if($exit -cne '0' -or -not $result.complete -or $result.nonce -cne $request.nonce -or $result.stage -cne $request.stage) {throw 'Healthy reuse worker must have this-run complete normal nonce/stage evidence'}
+            if($request.stage -eq 'Assess' -and ($result.fingerprint.sha256 -cne $record.inputSha256 -or $result.baseline.sha256 -cne $record.registrySha256 -or -not $result.snapshotUnchanged)) {throw 'Healthy reuse Assess must match the genuinely published validation tuple'}
+        }
+
+        if((Get-Sha256 $shared) -cne $before -or (Get-Sha256 $recordPath) -cne $recordBefore) {throw 'Healthy reuse must preserve shared registry/record under held lease'}
+        $cacheCasesExecuted=1
+        $audit.Add('PASS: genuine coordinator seed Updated/Saved; PowerShell-held healthy reuse Reused/Matched, actual private core Ready, Assess only/no recovery/no notice; registry/record unchanged')
+    } elseif ($Mode -eq 'CacheAcceptance') {
+        Test-CacheCleanupGuard
+        $conditions=if($CacheCase -like 'input-denied-*'){@('input-denied')}elseif($CacheCase -like 'unreadable-*'){@('unreadable')}else{@('corrupt','missing','readonly','busy')}
+        foreach ($condition in $conditions) {
+            foreach ($ready in @($true,$false)) {
+                $name=$condition+$(if($ready){'-ready'}else{'-missing-app'})
+                if($CacheCase -and $CacheCase -cne $name){continue}
+                ++$cacheCasesExecuted
+                $fixture=New-Fixture $name
+                $shared=Join-Path $fixture 'gstreamer-1.0/registry.x86_64.bin'
+                [IO.File]::WriteAllText($shared,'owned corrupt cache')
+                if($condition -eq 'missing') {Remove-Item -LiteralPath $shared}
+                if(-not $ready) {Copy-Item -LiteralPath $NonPluginDll -Destination (Join-Path $fixture 'gstreamer-plugins/libgstapp.dll') -Force}
+                $before=if(Test-Path $shared){Get-Sha256 $shared}else{'absent'}
+                $held=$null
+                if($condition -eq 'readonly') {[IO.File]::SetAttributes($shared,[IO.FileAttributes]::ReadOnly)}
+                if($condition -eq 'busy') {
+                    $held=Enter-AirPlayRegistryWriteLock $fixture
+                }
+                $optionalInput=Join-Path $fixture 'optional-input.dll'
+                if($condition -eq 'input-denied') {
+                    Copy-Item -LiteralPath $NonPluginDll -Destination $optionalInput
+                    $optionalBefore=Get-Sha256 $optionalInput
+                    $held=[IO.FileStream]::new($optionalInput,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+                    $denied=$false;try {$attempt=[IO.File]::OpenRead($optionalInput);$attempt.Dispose()}catch [IO.IOException] {$denied=$true}
+                    if(-not $denied){throw 'Optional root DLL fixture must actually deny read access'}
+                    $audit.Add('Optional root DLL held through real exclusive Win32 file sharing; independent read denied')
+                }
+                if($condition -eq 'unreadable') {
+                    $held=[IO.FileStream]::new($shared,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+                    $denied=$false; try {$attempt=[IO.File]::OpenRead($shared);$attempt.Dispose()} catch [IO.IOException] {$denied=$true}
+                    if(-not $denied){throw 'Shared registry fixture must actually deny read access'}
+                    $audit.Add('Shared registry held through real exclusive Win32 file sharing; independent read denied')
+                }
+                try {$observation=Invoke-Probe $fixture 'cache'} finally {if($held){if($condition -eq 'busy'){Exit-AirPlayRegistryWriteLock $held}else{$held.Dispose()}};if(Test-Path $shared){[IO.File]::SetAttributes($shared,[IO.FileAttributes]::Normal)}}
+                $r=$observation.Result
+                if($condition -eq 'busy' -and $r.preparation.cacheState -ne 3) {throw 'PowerShell-held lease must produce actual RecoverySkipped startup'}
+                if($ready) {
+                    if($observation.ExitCode -ne 0 -or -not $r.receiverStartCalled -or -not $r.mainWindowSeen -or
+                        -not $r.preparation.executed -or -not $r.preparation.ready -or -not $r.preparation.leaseReturned -or
+                        -not $r.ordinaryStartupParentConfigured -or -not $r.ordinaryStartupActualCore.ready -or -not $r.runtimeRemoved -or
+                        @($r.ordinaryStartupActualCore.origins).Count -ne 5 -or $r.privateRegistry -ieq $shared) {throw "Cache startup did not pass actual private-core boundary: $name"}
+                    foreach($origin in $r.ordinaryStartupActualCore.origins) {if(-not $origin.loaded -or [IO.Path]::GetFullPath($origin.filename) -ine (Join-Path $fixture "gstreamer-plugins/libgst$($origin.name).dll")){throw 'Actual core origin escaped fixture'}}
+                    $expectedCount=if($condition -in @('readonly','busy','unreadable','input-denied')){1}else{0}
+                    if(@($r.dialogs).Count -ne $expectedCount -or @($r.dialogs|Where-Object {$_.modal -or -not $_.receiverStarted -or $_.icon -ne 2}).Count -ne 0) {throw "Cache notice not once/modeless/after receiver: $name"}
+                } else {
+                    Assert-StartupFailure $observation 'app' -AllowMissingRegistry:($condition -eq 'missing')
+                }
+                if($condition -in @('readonly','busy','unreadable','input-denied') -or -not $ready) {
+                    $after=if(Test-Path $shared){Get-Sha256 $shared}else{'absent'}
+                    if($after -cne $before){throw "Old shared cache was changed: $name"}
+                }
+                if($condition -eq 'input-denied') {
+                    if((Get-Sha256 $optionalInput) -cne $optionalBefore -or $r.preparation.cacheState -ne 2 -or -not $r.preparation.cleanupComplete){throw 'Unavailable input fingerprint must preserve optional DLL/shared cache and complete cleanup without publication'}
+                    $requests=@(Get-ChildItem -LiteralPath $ReportDirectory -Filter "$name-*-request.json")
+                    $assessed=0
+                    foreach($file in $requests) {
+                        $request=Get-Content -LiteralPath $file.FullName -Raw|ConvertFrom-Json
+                        if($request.stage -notin @('Assess','Cleanup')){throw 'Unavailable input must not run recovery/publication phases'}
+                        if($request.stage -eq 'Assess') {
+                            ++$assessed
+                            $result=Get-Content -LiteralPath $file.FullName.Replace('-request.json','-result.json') -Raw|ConvertFrom-Json
+                            $exit=[IO.File]::ReadAllText($file.FullName.Replace('-request.json','-exit.txt'))
+                            if($exit -cne '0' -or -not $result.complete -or $result.nonce -cne $request.nonce -or $result.stage -cne 'Assess' -or $result.fingerprint.valid -or -not $result.baselineTrusted -or $result.baselineReadStatus -ne 0 -or $result.readiness.ready -ne $ready){throw 'Unavailable input Assess must retain only actual core readiness with invalid fingerprint and known shared baseline'}
+                        }
+                    }
+                    if($assessed -ne 1 -or (Test-Path (Join-Path $fixture 'gstreamer-1.0/registry.x86_64.validation.json'))){throw 'Unavailable input must assess once without a success record'}
+                    if($observation.Diagnostics.Contains($fixture) -or @($r.dialogs|Where-Object {$_.text.Contains($fixture)}).Count -ne 0){throw 'Unavailable input diagnostics/UI disclosed fixture path'}
+                    $audit.Add('PASS: genuine optional DLL read denial; current normal Assess retains actual core result, invalid fingerprint, no recovery/publication, bytes unchanged')
+                }
+                if($condition -eq 'unreadable') {
+                    if($r.preparation.cacheState -ne 3 -or -not $r.preparation.cleanupComplete){throw 'Unreadable shared baseline must skip publication and complete owned cleanup'}
+                    $frames=@(Get-ChildItem -LiteralPath $ReportDirectory -Filter "$name-*-request.json" | ForEach-Object {
+                        $request=Get-Content -LiteralPath $_.FullName -Raw|ConvertFrom-Json
+                        if($request.stage -eq 'Assess'){
+                            $result=Get-Content -LiteralPath $_.FullName.Replace('-request.json','-result.json') -Raw|ConvertFrom-Json
+                            $exit=[IO.File]::ReadAllText($_.FullName.Replace('-request.json','-exit.txt'))
+                            if($exit -cne '0' -or -not $result.complete -or $result.nonce -cne $request.nonce -or $result.stage -cne 'Assess' -or $result.registrySha256 -notmatch '^[a-f0-9]{64}$'){throw 'Read-denial Assess must produce a current normal private result'}
+                            if(-not $result.PSObject.Properties['baselineTrusted'] -or $result.baselineTrusted){throw 'Unreadable baseline cannot be trusted for publication'}
+                            $result
+                        }
+                    })
+                    if($frames.Count -ne 1){throw 'Read-denial must assess once'}
+                    if($observation.Diagnostics.Contains($fixture) -or @($r.dialogs|Where-Object {$_.text.Contains($fixture)}).Count -ne 0){throw 'Read-denial diagnostics/UI disclosed fixture path'}
+                    if($observation.Diagnostics -notmatch 'startup gstreamer_cache_preparation .*cleanup_reason=' -or $observation.Diagnostics -notmatch 'reason=Read\\sinput:\\s\[path\]'){throw 'Read-denial diagnostic must retain useful sanitized reason and cleanup reason'}
+                    $audit.Add('PASS: shared holder released normally; current normal Assess marks baseline untrusted; shared hash preserved')
+                }
+                if($condition -in @('busy','unreadable') -and $observation.Diagnostics -notmatch 'startup gstreamer_cache_stage .*stage=0'){throw 'Missing preparation stage diagnostic'}
+                if($condition -in @('busy','unreadable') -and $observation.Diagnostics -notmatch 'startup gstreamer_cache_preparation .*reason=[^ ]+'){throw 'Missing explanatory preparation diagnostic'}
+                $audit.Add("PASS: cache startup $name; prep=$($r.preparation.readinessState); dialogs=$(@($r.dialogs).Count); receiver=$($r.receiverStartCalled)")
+            }
+        }
+    } elseif ($Mode -eq 'Acceptance') {
         Test-RuntimePathGuard
+        Test-CacheCleanupGuard
         Test-RecordingDirectoryGuard
         $healthy = New-Fixture 'healthy'
         $positive = Invoke-Probe $healthy 'core'
@@ -472,6 +707,11 @@ try {
         switch ($Mode) {
             'DetectionBypass' {
                 Assert-RecordingCleanupSentinels $sentinels $observation
+                $p=$observation.Result.preparation; $c=$observation.Result.ordinaryStartupActualCore
+                if(-not $p.executed -or -not $p.ready -or -not $p.leaseReturned -or -not $p.preparationBypassNoOp -or
+                    $p.nonpluginHashBefore -cne $p.nonpluginHashAfter -or -not $observation.Result.ordinaryStartupParentConfigured -or
+                    -not $c.executed -or $c.ready -or @($c.missing).Count -ne 1 -or $c.missing[0] -cne 'app' -or
+                    @($c.origins|Where-Object {$_.name -eq 'app' -and -not $_.loaded}).Count -ne 1) {throw 'Bypass phase fixture did not preserve real Ready preparation and actual NotReady app facts'}
                 if ($observation.ExitCode -ne 0 -or -not $observation.Result.receiverStartCalled -or
                     -not $observation.Result.mainWindowSeen -or
                     $observation.Diagnostics -notmatch 'startup receiver_start_requested' -or
@@ -524,6 +764,11 @@ try {
         if (-not $ExpectRejection) { throw $rejection }
         $audit.Add("PASS: $Mode real acceptance oracle rejected the behavioral control")
     }
+    if($Mode -eq 'CacheAcceptance') {
+        $expectedCases=if($CacheCase){1}else{8}
+        if($cacheCasesExecuted -ne $expectedCases){throw 'Cache matrix did not execute its required cases'}
+        $audit.Add("PASS: cache matrix executed $cacheCasesExecuted cases")
+    }
     $audit.Add("PASS: $Mode")
 } catch {
     $audit.Add("FAIL: $($_.Exception.Message)")
@@ -549,6 +794,7 @@ try {
     if ($reportCreated) {
         [IO.File]::WriteAllText((Join-Path $ReportDirectory 'runtime-paths.json'),
             ($pathEvidence | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
+        @($protectedFixtureFiles.GetEnumerator() | ForEach-Object {[pscustomobject]@{path=$_.Key;sha256=$_.Value}}) | ConvertTo-Json | Set-Content (Join-Path $ReportDirectory 'protected-sentinels.json')
         $audit | Set-Content (Join-Path $ReportDirectory 'audit.txt')
     }
 }

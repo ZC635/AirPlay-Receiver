@@ -51,6 +51,17 @@ class LanguageManagerTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void startupCacheMessagesTranslateToSimplifiedChinese() {
+        LanguageManager manager(QCoreApplication::instance());
+        manager.apply("zh-CN");
+        QCOMPARE(QCoreApplication::translate("Startup","Checking playback components…"),QStringLiteral("正在检查播放组件…"));
+        QCOMPARE(QCoreApplication::translate("Startup","Updating playback component cache…"),QStringLiteral("正在更新播放组件缓存…"));
+        const auto notice=QCoreApplication::translate("Startup","Playback component cache was updated, but its validation record could not be saved. The next startup may need to check it again. Reason: %1.").arg(QStringLiteral("原因"));
+        QVERIFY(notice.contains(QStringLiteral("缓存已更新")));
+        QVERIFY(notice.contains(QStringLiteral("原因")));
+        QCOMPARE(QCoreApplication::translate("Startup","Playback component cache could not be updated. Required playback component checks passed, so AirPlay will continue starting. Reason: %1. You can exit this application, redeploy the application folder, and try again.").arg(QStringLiteral("检查超时")),
+            QStringLiteral("播放组件缓存未能更新。当前必需播放组件检查已通过，AirPlay 将继续启动。原因：检查超时。可在退出本应用后重新部署应用文件夹，再重试。"));
+    }
     void resolveEffectiveLanguage_data() {
         QTest::addColumn<QString>("selection");
         QTest::addColumn<QString>("systemLocale");

@@ -61,6 +61,8 @@ class DiagnosticActivationTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void registryOnlyMissingReachesPreparationButDllMissingDoesNot();
+    void receiverStartWaitsForActualCoreCheck();
     void normalLaunchIsDisabled();
     void commandArgumentWinsOverEnvironmentCompatibilityFlag();
     void nonEmptyEnvironmentActivatesUnifiedMode();
@@ -93,6 +95,29 @@ private slots:
     void readyCorePluginsContinueStartup();
     void pluginReadinessFieldsAreBoundedAndPathFree();
 };
+
+void DiagnosticActivationTest::registryOnlyMissingReachesPreparationButDllMissingDoesNot() {
+    StandaloneRuntimeSnapshot snapshot;
+    snapshot.complete=false;
+    snapshot.missingRelativePaths={"gstreamer-1.0/registry.x86_64.bin"};
+    QVERIFY(portableManifestAllowsPreparation(snapshot));
+    snapshot.missingRelativePaths.append("Qt6Core.dll");
+    QVERIFY(!portableManifestAllowsPreparation(snapshot));
+}
+void DiagnosticActivationTest::receiverStartWaitsForActualCoreCheck() {
+    QStringList calls;
+    bool receiverStarted=false;
+    const bool ready=runPortableGStreamerStartupSequence(true,
+        [&]{calls<<"manifest";return true;},[&]{calls<<"prepare";return true;},
+        [&]{calls<<"configure_private";},[&]{calls<<"actual_core";return false;});
+    if(ready)receiverStarted=true;
+    QCOMPARE(calls,QStringList({"manifest","prepare","configure_private","actual_core"}));
+    QVERIFY(!receiverStarted);
+    calls.clear();
+    QVERIFY(!runPortableGStreamerStartupSequence(true,[]{return true;},[]{return false;},
+        [&]{calls<<"configure_private";},[&]{calls<<"actual_core";return true;}));
+    QVERIFY(calls.isEmpty());
+}
 
 void DiagnosticActivationTest::normalLaunchIsDisabled() {
     const auto activation = DiagnosticActivation::parse({"airplay_receiver.exe"}, {});

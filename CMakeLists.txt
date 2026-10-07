@@ -170,6 +170,17 @@ qt_add_translations(airplay_app_lib
 )
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE
+        src/app/GStreamerStartupPresentation.h
+        src/app/GStreamerStartupPresentation.cpp
+        src/platform/GStreamerStartupCache.h
+        src/platform/GStreamerStartupCache.cpp
+        src/platform/GStreamerCacheWorker.h
+        src/platform/GStreamerCacheWorker.cpp
+        src/platform/GStreamerCacheTypes.h
+        src/platform/GStreamerCacheProcess.h
+        src/platform/GStreamerCacheProcess.cpp
+        src/platform/GStreamerCacheStorage.h
+        src/platform/GStreamerCacheStorage.cpp
         src/backend/GstAppSinkFrameSource.cpp
         src/backend/GstAppSinkFrameSource.h
         src/platform/MdnsServerAdapter.cpp

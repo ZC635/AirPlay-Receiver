@@ -241,6 +241,44 @@ bool DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
     return true;
 }
 
+bool DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
+    const QString &packageDirectory, const QString &privateRegistry) {
+    if (privateRegistry.isEmpty() || !QDir::isAbsolutePath(privateRegistry)
+        || !QDir(QDir(packageDirectory).filePath("gstreamer-plugins")).exists()) return false;
+    const QString package=QDir(packageDirectory).absolutePath();
+    const auto setPath=[](const char *name,const QString &path) { qputenv(name,QDir::toNativeSeparators(path).toUtf8()); };
+    // An internal worker must not borrow host Gst DLLs, plugin directories or a default registry.
+    const auto windows=qEnvironmentVariable("SystemRoot");
+    setPath("PATH",package+QDir::listSeparator()+QDir(windows).filePath("System32")+QDir::listSeparator()+windows);
+    for (const char *name:{"GST_PLUGIN_PATH","GST_PLUGIN_PATH_1_0"}) setPath(name,QDir(package).filePath("gstreamer-plugins"));
+    for (const char *name:{"GST_PLUGIN_SYSTEM_PATH","GST_PLUGIN_SYSTEM_PATH_1_0"}) qputenv(name,"");
+    for (const char *name:{"GST_REGISTRY","GST_REGISTRY_1_0"}) setPath(name,privateRegistry);
+    for (const char *name:{"GST_PLUGIN_SCANNER","GST_PLUGIN_SCANNER_1_0"}) setPath(name,QDir(package).filePath("libexec/gstreamer-1.0/gst-plugin-scanner.exe"));
+    return true;
+}
+GStreamerPluginReadiness DependencyDiagnostics::checkPackageGStreamerPluginReadiness(const QString &packageDirectory) {
+#if AIRPLAY_WITH_UXPLAY
+    GError *error=nullptr;
+    if (!gst_init_check(nullptr,nullptr,&error)) {
+        GStreamerPluginReadiness result;
+        result.initializationError=error && error->message?QString::fromUtf8(error->message):QStringLiteral("GStreamer initialization failed");
+        g_clear_error(&error); return result;
+    }
+    const auto directory=QDir(packageDirectory).filePath("gstreamer-plugins");
+    return checkGStreamerPluginReadiness([&](const QString &name) {
+        auto plugin=gst_plugin_load_by_name(name.toUtf8().constData());
+        if (!plugin) return false;
+        const auto source=gst_plugin_get_filename(plugin);
+        const auto actual=source?QFileInfo(QString::fromUtf8(source)).canonicalFilePath():QString{};
+        const bool local=!actual.isEmpty() && QFileInfo(actual).absolutePath().compare(QFileInfo(directory).canonicalFilePath(),Qt::CaseInsensitive)==0;
+        gst_object_unref(plugin); return local;
+    });
+#else
+    Q_UNUSED(packageDirectory)
+    GStreamerPluginReadiness result; result.initializationError=QStringLiteral("GStreamer support is not built"); return result;
+#endif
+}
+
 GStreamerPluginReadiness DependencyDiagnostics::checkGStreamerPluginReadiness(
     const std::function<bool(const QString &)> &pluginAvailable) {
     GStreamerPluginReadiness result;

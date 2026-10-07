@@ -1,3 +1,6 @@
+set(AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY "${PROJECT_BINARY_DIR}/test-reports/startup-gui" CACHE PATH "Startup Qt evidence")
+file(MAKE_DIRECTORY "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}")
+
 add_library(airplay_test_support INTERFACE)
 target_include_directories(airplay_test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(airplay_test_support INTERFACE airplay_app_lib)
@@ -20,7 +23,7 @@ add_test(NAME DiagnosticLogSinkTest COMMAND DiagnosticLogSinkTest)
 
 add_executable(DiagnosticActivationTest app/DiagnosticActivationTest.cpp)
 target_link_libraries(DiagnosticActivationTest PRIVATE airplay_test_support Qt6::Test)
-add_test(NAME DiagnosticActivationTest COMMAND DiagnosticActivationTest)
+add_test(NAME DiagnosticActivationTest COMMAND DiagnosticActivationTest -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/DiagnosticActivationTest.txt,txt")
 
 add_executable(DiagnosticLifecycleTest app/DiagnosticLifecycleTest.cpp)
 target_link_libraries(DiagnosticLifecycleTest PRIVATE airplay_test_support Qt6::Test)
@@ -100,7 +103,7 @@ add_test(NAME AppSettingsStoreTest COMMAND AppSettingsStoreTest)
 
 add_executable(LanguageManagerTest app/LanguageManagerTest.cpp)
 target_link_libraries(LanguageManagerTest PRIVATE airplay_app_lib Qt6::Test)
-add_test(NAME LanguageManagerTest COMMAND LanguageManagerTest)
+add_test(NAME LanguageManagerTest COMMAND LanguageManagerTest -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/LanguageManagerTest.txt,txt")
 
 add_executable(WindowStateStoreTest app/WindowStateStoreTest.cpp)
 target_link_libraries(WindowStateStoreTest PRIVATE airplay_app_lib Qt6::Test)
@@ -288,6 +291,9 @@ add_executable(VideoRenderGeometryTest app/VideoRenderGeometryTest.cpp)
 target_link_libraries(VideoRenderGeometryTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME VideoRenderGeometryTest COMMAND VideoRenderGeometryTest)
 
+set(AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY
+    "${PROJECT_BINARY_DIR}/tr"
+    CACHE PATH "Short ASCII runtime parent for real GStreamer startup fixtures")
 find_program(AIRPLAY_POWERSHELL NAMES powershell pwsh)
 if(AIRPLAY_POWERSHELL)
     add_test(
@@ -301,6 +307,7 @@ if(AIRPLAY_POWERSHELL)
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/RunScriptTest.ps1"
             -ProjectRoot "${PROJECT_SOURCE_DIR}"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}"
     )
 endif()
 
@@ -382,9 +389,6 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     set(AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY
         "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/gstreamer-startup-acceptance"
         CACHE PATH "Ignored report directory for real GStreamer startup acceptance")
-    set(AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY
-        "${PROJECT_BINARY_DIR}/tr"
-        CACHE PATH "Short ASCII runtime parent for real GStreamer startup fixtures")
     add_test(NAME GStreamerStartupProcessContainmentTest
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/StartupProcessContainmentTest.ps1"
@@ -392,6 +396,28 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
             -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/process-containment")
     set_tests_properties(GStreamerStartupProcessContainmentTest PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
     get_filename_component(_gst_prefix "${AIRPLAY_GSTREAMER_BIN_DIR}" DIRECTORY)
+    set(AIRPLAY_CACHE_WORKER_REPORT_DIRECTORY
+        "${PROJECT_BINARY_DIR}/test-reports/cache-worker"
+        CACHE PATH "Cache worker test evidence")
+    add_test(NAME GStreamerStartupCacheWorkerProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheWorkerProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -ProcessFixtureExecutable $<TARGET_FILE:GStreamerCacheProcessFixture>
+            -CoordinatorExecutable $<TARGET_FILE:GStreamerStartupCacheTest>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_CACHE_WORKER_REPORT_DIRECTORY}"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}")
+    add_dependencies(airplay_receiver GStreamerCacheProcessFixture)
+    set_tests_properties(GStreamerStartupCacheWorkerProcessTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+        TIMEOUT 180 RUN_SERIAL TRUE)
     add_test(NAME GStreamerPackagePluginsProcessTest
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerPackagePluginsProcessTest.ps1"
@@ -406,6 +432,120 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     set_tests_properties(GStreamerPackagePluginsProcessTest PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
         TIMEOUT 240 RUN_SERIAL TRUE)
+    add_test(NAME GStreamerRegistryDeploymentProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerRegistryDeploymentProcessTest.ps1"
+            -ProjectRoot "${PROJECT_SOURCE_DIR}"
+            -StorageExecutable $<TARGET_FILE:GStreamerCacheStorageTest>
+            -Inspector "${AIRPLAY_GSTREAMER_BIN_DIR}/gst-inspect-1.0.exe"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/registry-deployment"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}")
+    set_tests_properties(GStreamerRegistryDeploymentProcessTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}"
+        TIMEOUT 240 RUN_SERIAL TRUE)
+
+    add_test(NAME GStreamerStartupCacheProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/cache"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}")
+    set_tests_properties(GStreamerStartupCacheProcessTest PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}" TIMEOUT 240 RUN_SERIAL TRUE)
+    add_test(NAME GStreamerStartupCacheCancelProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/cache-cancel"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}" -CacheCase cancel)
+    set_tests_properties(GStreamerStartupCacheCancelProcessTest PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}" TIMEOUT 120 RUN_SERIAL TRUE)
+    add_test(NAME GStreamerStartupCacheReadDeniedReadyProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/cache-unreadable-ready"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}" -CacheCase unreadable-ready)
+    set_tests_properties(GStreamerStartupCacheReadDeniedReadyProcessTest PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}" TIMEOUT 120 RUN_SERIAL TRUE)
+    add_test(NAME GStreamerStartupCacheReadDeniedNotReadyProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/cache-unreadable-missing-app"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}" -CacheCase unreadable-missing-app)
+    set_tests_properties(GStreamerStartupCacheReadDeniedNotReadyProcessTest PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}" TIMEOUT 120 RUN_SERIAL TRUE)
+    add_test(NAME GStreamerStartupCacheInputReadDeniedReadyProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/cache-input-denied-ready"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}" -CacheCase input-denied-ready)
+    set_tests_properties(GStreamerStartupCacheInputReadDeniedReadyProcessTest PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}" TIMEOUT 120 RUN_SERIAL TRUE)
+    add_test(NAME GStreamerStartupCacheInputReadDeniedNotReadyProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/cache-input-denied-missing-app"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}" -CacheCase input-denied-missing-app)
+    set_tests_properties(GStreamerStartupCacheInputReadDeniedNotReadyProcessTest PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}" TIMEOUT 120 RUN_SERIAL TRUE)
+    add_test(NAME GStreamerStartupCacheHealthyReuseProcessTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/GStreamerStartupCacheProcessTest.ps1"
+            -Executable $<TARGET_FILE:airplay_receiver>
+            -ProbeExecutable $<TARGET_FILE:GStreamerStartupProbe>
+            -NonPluginDll $<TARGET_FILE:GStreamerNonPluginFixture>
+            -Objdump "${AIRPLAY_GSTREAMER_BIN_DIR}/objdump.exe"
+            -DependencyBinDirectory "${AIRPLAY_GSTREAMER_BIN_DIR}"
+            -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
+            -GStreamerPluginDirectory "${_gst_prefix}/lib/gstreamer-1.0"
+            -ScannerExecutable "${_gst_prefix}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+            -ReportDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY}/cache-healthy-reuse"
+            -RuntimeDirectory "${AIRPLAY_STARTUP_ACCEPTANCE_RUNTIME_DIRECTORY}" -CacheCase healthy-held)
+    set_tests_properties(GStreamerStartupCacheHealthyReuseProcessTest PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_GSTREAMER_BIN_DIR}" TIMEOUT 120 RUN_SERIAL TRUE)
     foreach(_mode Acceptance DetectionBypass DuplicateDialog HealthyAsNegative WrongReason)
         if(_mode STREQUAL "Acceptance")
             set(_test_name GStreamerPluginReadinessProcessTest)
@@ -599,4 +739,49 @@ if(WIN32 AND AIRPLAY_WITH_UXPLAY)
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
             TIMEOUT 120 RUN_SERIAL TRUE)
     endforeach()
+endif()
+
+if(AIRPLAY_WITH_UXPLAY)
+    add_executable(GStreamerCacheStorageTest platform/GStreamerCacheStorageTest.cpp)
+    target_link_libraries(GStreamerCacheStorageTest PRIVATE airplay_app_lib Qt6::Test)
+    set(AIRPLAY_CACHE_STORAGE_TEST_REPORT_DIRECTORY "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/cache-storage" CACHE PATH "Storage test evidence directory")
+    file(MAKE_DIRECTORY "${AIRPLAY_CACHE_STORAGE_TEST_REPORT_DIRECTORY}")
+    add_test(NAME GStreamerCacheStorageTest COMMAND GStreamerCacheStorageTest
+        -o "${AIRPLAY_CACHE_STORAGE_TEST_REPORT_DIRECTORY}/storage-results.txt,txt")
+    set_tests_properties(GStreamerCacheStorageTest PROPERTIES
+        ENVIRONMENT "AIRPLAY_CACHE_STORAGE_TEST_RUNTIME=${PROJECT_BINARY_DIR}/tr"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+        TIMEOUT 30 RUN_SERIAL TRUE)
+endif()
+if(WIN32 AND AIRPLAY_WITH_UXPLAY)
+    add_executable(GStreamerCacheProcessFixture support/GStreamerCacheProcessFixture.cpp
+        ../src/platform/GStreamerCacheProcess.cpp ../src/platform/GStreamerCacheProcess.h
+        ../src/platform/FileSystemPath.cpp)
+    target_include_directories(GStreamerCacheProcessFixture PRIVATE ../src)
+    target_link_libraries(GStreamerCacheProcessFixture PRIVATE Qt6::Core)
+    add_executable(GStreamerCacheProcessTest platform/GStreamerCacheProcessTest.cpp)
+    target_link_libraries(GStreamerCacheProcessTest PRIVATE airplay_app_lib Qt6::Test)
+    add_dependencies(GStreamerCacheProcessTest GStreamerCacheProcessFixture)
+    set(AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/cache-process" CACHE PATH "Process test evidence directory")
+    file(MAKE_DIRECTORY "${AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY}")
+    add_test(NAME GStreamerCacheProcessTest COMMAND GStreamerCacheProcessTest
+        -o "${AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY}/task2-process-results.txt,txt")
+    set_tests_properties(GStreamerCacheProcessTest PROPERTIES
+        ENVIRONMENT "AIRPLAY_CACHE_PROCESS_TEST_RUNTIME=${PROJECT_BINARY_DIR}/tr;AIRPLAY_CACHE_PROCESS_TEST_REPORT=${AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
+        TIMEOUT 120 RUN_SERIAL TRUE)
+endif()
+if(AIRPLAY_WITH_UXPLAY)
+    add_executable(GStreamerStartupCacheTest platform/GStreamerStartupCacheTest.cpp)
+    target_link_libraries(GStreamerStartupCacheTest PRIVATE airplay_app_lib Qt6::Test)
+    set(AIRPLAY_CACHE_STARTUP_TEST_REPORT_DIRECTORY "${PROJECT_BINARY_DIR}/test-reports/cache-coordinator" CACHE PATH "Coordinator evidence directory")
+    add_test(NAME GStreamerStartupCacheTest COMMAND GStreamerStartupCacheTest -o "${AIRPLAY_CACHE_STARTUP_TEST_REPORT_DIRECTORY}/task4-coordinator-results.txt,txt")
+    set_tests_properties(GStreamerStartupCacheTest PROPERTIES ENVIRONMENT "AIRPLAY_CACHE_STARTUP_TEST_RUNTIME=${PROJECT_BINARY_DIR}/tr;AIRPLAY_CACHE_STARTUP_TEST_REPORT_DIRECTORY=${AIRPLAY_CACHE_STARTUP_TEST_REPORT_DIRECTORY}" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}" TIMEOUT 120 RUN_SERIAL TRUE)
+endif()
+
+if(AIRPLAY_WITH_UXPLAY)
+    add_executable(GStreamerStartupPresentationTest app/GStreamerStartupPresentationTest.cpp)
+    target_link_libraries(GStreamerStartupPresentationTest PRIVATE airplay_app_lib Qt6::Test)
+    add_test(NAME GStreamerStartupPresentationTest COMMAND GStreamerStartupPresentationTest -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/GStreamerStartupPresentationTest.txt,txt")
+    set_tests_properties(GStreamerStartupPresentationTest PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AIRPLAY_CACHE_STARTUP_TEST_RUNTIME=${PROJECT_BINARY_DIR}/tr" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}" TIMEOUT 60 RUN_SERIAL TRUE)
 endif()
