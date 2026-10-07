@@ -153,11 +153,29 @@ bool portableManifestAllowsPreparation(const StandaloneRuntimeSnapshot &snapshot
 }
 bool runPortableGStreamerStartupSequence(bool portable,
     const std::function<bool()> &manifest, const std::function<bool()> &prepare,
-    const std::function<void()> &configure, const std::function<bool()> &core) {
-    if(portable && (!manifest() || !prepare())) return false;
+    const std::function<void()> &configure, const std::function<bool()> &core,
+    bool diagnostic = true, const std::function<bool()> &isolate = [] { return true; }) {
+    if (portable && !manifest()) return false;
+    if (portable && !(diagnostic ? prepare() : isolate())) return false;
     configure();
-    return core();
+    return !diagnostic || core();
 }
+
+#if AIRPLAY_WITH_UXPLAY
+GStreamerCacheResult seedOrdinaryRuntime(const QString &package, const QString &temporaryParent) {
+    GStreamerCacheResult result;
+    result.runtime = CacheStorage::createRuntime(package, temporaryParent, &result.reason);
+    if (!result.runtime) return result;
+    const auto ownership = CacheStorage::workerOwnershipRequest(result.runtime, &result.reason);
+    if (ownership.isEmpty() || !CacheStorage::copyWorkerRegistry(ownership,
+            QDir(package).filePath("gstreamer-1.0/registry.x86_64.bin"),
+            result.runtime->registryPath(), &result.reason, true)) {
+        result.cleanup = result.runtime->close();
+        result.runtime.reset();
+    }
+    return result;
+}
+#endif
 
 RuntimePathStartupDecision runtimePathStartupDecision(
     const RuntimePathCompatibility &compatibility) {
@@ -526,7 +544,7 @@ int main(int argc, char *argv[]) {
         [&] {
             privateConfigured = runtimeDecision.emitManifestEntries
                 ? DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(
-                    QCoreApplication::applicationDirPath(),cacheResult.runtime->registryPath())
+                    QCoreApplication::applicationDirPath(),cacheResult.runtime ? cacheResult.runtime->registryPath() : QString())
                 : DependencyDiagnostics::configurePackageLocalGStreamerEnvironment(QCoreApplication::applicationDirPath());
             recordStartup(sink,"gstreamer_package_environment",{{"result",privateConfigured ? "yes" : "no"}},true);
         },
@@ -537,7 +555,24 @@ int main(int argc, char *argv[]) {
             else if(privateConfigured)
                 readiness=DependencyDiagnostics::checkPackageGStreamerPluginReadiness(QCoreApplication::applicationDirPath());
             return acceptCore(readiness);
+        }, activation.enabled,
+        [&] {
+            cacheResult = seedOrdinaryRuntime(QCoreApplication::applicationDirPath(), QDir::tempPath());
+            if (cacheResult.runtime) return true;
+            closeRuntime();
+            showStartupFailure(diagnostics, QStringLiteral("gstreamer_runtime_isolation_failed"),
+                startupText(QT_TRANSLATE_NOOP("Startup", "GStreamer runtime cache unavailable")),
+                startupText(QT_TRANSLATE_NOOP("Startup", "Could not create a safe private GStreamer runtime cache: %1"))
+                    .arg(cacheResult.reason));
+            return false;
         });
+    if (gstreamerStartupReady && !activation.enabled && runtimeDecision.emitManifestEntries && !privateConfigured) {
+        closeRuntime();
+        showStartupFailure(diagnostics, QStringLiteral("gstreamer_runtime_isolation_failed"),
+            startupText(QT_TRANSLATE_NOOP("Startup", "GStreamer runtime cache unavailable")),
+            startupText(QT_TRANSLATE_NOOP("Startup", "Could not configure the private GStreamer runtime cache.")));
+        return 1;
+    }
     if (!gstreamerStartupReady) {
         return 1;
     }
