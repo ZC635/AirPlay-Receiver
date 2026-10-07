@@ -41,6 +41,7 @@
 #include <QSignalBlocker>
 #include <QShortcut>
 #include <QScreen>
+#include <QScopeGuard>
 #include <QStringList>
 #include <QWidget>
 #include <cmath>
@@ -158,8 +159,6 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     if (!settingsPath_.isEmpty()) {
         settingsStore_ = std::make_unique<AppSettingsStore>(settingsPath_);
     }
-    settingsApplyCoordinator_ = std::make_unique<SettingsApplyCoordinator>(
-        hotkeys_.data(), settingsStore_.get(), receiver_.data(), &deferrer_, diagnosticSink_);
     if (recordingPathActions == nullptr) {
         ownedRecordingPathActions_ = std::make_unique<WindowsRecordingPathActions>(
             WindowsRecordingPathActions::ProcessLauncher{}, diagnosticSink_);
@@ -312,10 +311,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
                 [this](bool) { updateRecordingUi(); });
         connect(receiver_, &AirPlayReceiver::recordingStateChanged,
                 this, &MainWindow::handleRecordingStateChanged);
-        connect(receiver_, &AirPlayReceiver::recordingFinished,
-                this, &MainWindow::handleRecordingFinished);
-        connect(receiver_, &AirPlayReceiver::recordingFailed,
-                this, &MainWindow::handleRecordingFailed);
+
         connect(receiver_, &QObject::destroyed, this, [this]() {
             updateRecordingUi();
         });
@@ -327,21 +323,18 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     applyAspectRatioLock(settings_.aspectRatioLock());
     applyVideoFitMode(settings_.videoFitMode());
 
-    if (receiver_ != nullptr) {
-        ReceiverConfigurationBatchRequest startupConfiguration;
-        startupConfiguration.receiverNameChanged = receiver_->receiverName() != settings_.receiverName();
-        startupConfiguration.resolutionChanged = receiver_->videoQuality().resolution
-            != settings_.videoQuality().resolution;
-        startupConfiguration.frameRateChanged = receiver_->videoQuality().frameRate
-            != settings_.videoQuality().frameRate;
-        startupConfiguration.requestedReceiverName = settings_.receiverName();
-        startupConfiguration.rollbackReceiverName = receiver_->receiverName();
-        startupConfiguration.requestedVideoQuality = settings_.videoQuality();
-        startupConfiguration.rollbackVideoQuality = receiver_->videoQuality();
-        if (startupConfiguration.receiverNameChanged || startupConfiguration.resolutionChanged
-            || startupConfiguration.frameRateChanged) {
-            receiver_->applyConfigurationBatch(startupConfiguration);
-        }
+    // Capture terminal qualification before UI handlers can enter nested modal loops.
+    // The UI retains presentation work only, and releases it after the outermost handler.
+    settingsApplyCoordinator_ = std::make_unique<SettingsApplyCoordinator>(
+        settings_, hotkeys_.data(), settingsStore_.get(), receiver_.data(), diagnosticSink_, nullptr,
+        [this](SettingsApplyCoordinator::RecordingPresentationCompletion complete) {
+            pendingRecordingPresentationCompletion_ = std::move(complete);
+        });
+    if (receiver_) {
+        connect(receiver_, &AirPlayReceiver::recordingFinished,
+                this, &MainWindow::handleRecordingFinished);
+        connect(receiver_, &AirPlayReceiver::recordingFailed,
+                this, &MainWindow::handleRecordingFailed);
     }
 
     setVolume(settings_.volume());
@@ -355,15 +348,15 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
         setStatus(StatusKind::HotkeyRegistrationFailures);
     }
 
-    connect(&deferrer_, &SettingsChangeDeferrer::receiverConfigurationReady, this,
-            [this](const ReceiverConfigurationBatchRequest &batch) {
-        const SettingsApplyOutcome outcome = settingsApplyCoordinator_->completeDeferredReceiverApply(
-            batch, settings_);
-        settings_ = outcome.committedSettings;
+    connect(settingsApplyCoordinator_.get(), &SettingsApplyCoordinator::deferredApplyFinished, this,
+            [this](const SettingsDeferredResult &result) {
         toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
         applyShortcutTooltips();
-        if (!outcome.mayClose) {
-            presentDeferredReceiverApplyFailure(outcome);
+        if (const auto *outcome = std::get_if<SettingsApplyOutcome>(&result)) {
+            if (!outcome->mayClose) presentDeferredReceiverApplyFailure(*outcome);
+        } else {
+            QMessageBox::critical(this, tr("Deferred receiver configuration failed"),
+                std::get<SettingsDeferredNotApplied>(result).userReason.render(), QMessageBox::Ok);
         }
     });
 
@@ -376,6 +369,7 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
                 activeSettingsDialog_->reject();
             }
             if (receiver_ != nullptr) {
+                endReceiverLifecycle();
                 receiver_->stop();
             }
             quitApplication_();
@@ -389,7 +383,14 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     }
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() { endReceiverLifecycle(); }
+ReceiverStartPreparationResult MainWindow::prepareReceiverStart() {
+    return settingsApplyCoordinator_->prepareReceiverStart();
+}
+void MainWindow::endReceiverLifecycle() {
+    if (settingsApplyCoordinator_) settingsApplyCoordinator_->endReceiverLifecycle();
+    pendingRecordingPresentationCompletion_ = {};
+}
 
 void MainWindow::changeEvent(QEvent *event) {
     if (event->type() == QEvent::LanguageChange) {
@@ -752,7 +753,7 @@ void MainWindow::updateReceiverState(ReceiverState state) {
         break;
     }
 
-    deferrer_.receiverSessionChanged(wasSessionActive, receiverSessionActive_);
+
 }
 
 void MainWindow::showSettingsDialog() {
@@ -762,32 +763,30 @@ void MainWindow::showSettingsDialog() {
         restartButton->setEnabled(!diagnosticLoggingActive_);
     }
     connect(&dialog, &SettingsDialog::applyRequested, this, [this, &dialog](const AppSettings &draft) {
-        const QString previousLanguage = settings_.language();
         const bool previousHoverReveal = settings_.toolbarHoverReveal();
-        const RecordingState recordingState = receiver_ == nullptr
-            ? RecordingState::Idle : receiver_->recordingState();
-        const SettingsApplyPlan plan = settingsApplyCoordinator_->plan(
-            settings_, draft, receiverSessionActive_, recordingState);
-        const std::optional<ReceiverApplyTiming> timing = chooseReceiverApplyTiming(plan);
-        if (!timing.has_value()) {
+        const auto submitted = settingsApplyCoordinator_->apply(draft, [this] { return chooseReceiverApplyTiming(); });
+        if (submitted.settingsSaved) {
+            if (settings_.toolbarHoverReveal() != previousHoverReveal) {
+                recordDisplayPreferenceChange("hover_reveal", settings_.toolbarHoverReveal(), true);
+            }
+            toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
+            // The manager owns the projected language, including a previous
+            // failed catalogue load. A pre-submit settings snapshot cannot tell
+            // us whether an already saved preference reached the UI.
+            if (languageManager_ != nullptr) {
+                languageManager_->apply(settings_.language());
+                QEvent languageChange(QEvent::LanguageChange);
+                QCoreApplication::sendEvent(&dialog, &languageChange);
+                retranslateUi();
+            }
+            applyShortcutTooltips();
+        }
+        if (submitted.status == SettingsSubmitStatus::Cancelled) return;
+        if (submitted.status != SettingsSubmitStatus::Completed) {
+            dialog.presentSubmitError(submitted.userReason);
             return;
         }
-        const SettingsApplyOutcome outcome = settingsApplyCoordinator_->execute(plan, *timing);
-        settings_ = outcome.committedSettings;
-        if (settings_.toolbarHoverReveal() != previousHoverReveal) {
-            // A committed hover change confirms the initial save; receiver compensation is separate.
-            recordDisplayPreferenceChange("hover_reveal", settings_.toolbarHoverReveal(), true);
-        }
-        toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
-        if (!outcome.globalResult.has_value() && settings_.language() != previousLanguage
-            && languageManager_ != nullptr) {
-            languageManager_->apply(settings_.language());
-            QEvent languageChange(QEvent::LanguageChange);
-            QCoreApplication::sendEvent(&dialog, &languageChange);
-            retranslateUi();
-        }
-        applyShortcutTooltips();
-        dialog.presentApplyOutcome(outcome);
+        dialog.presentApplyOutcome(*submitted.outcome);
     });
     connect(&dialog, &SettingsDialog::restartWithDiagnosticLoggingRequested, this,
             [this, &dialog] { restartWithDiagnosticLogging(dialog); });
@@ -834,12 +833,7 @@ void MainWindow::openDiagnosticLogFolder(SettingsDialog &dialog) {
     dialog.presentDiagnosticActionError(diagnosticLogFolderActions_->ensureAndOpen());
 }
 
-std::optional<ReceiverApplyTiming> MainWindow::chooseReceiverApplyTiming(
-    const SettingsApplyPlan &plan) {
-    if (!plan.requiresReceiverTimingDecision) {
-        return ReceiverApplyTiming::Immediate;
-    }
-
+std::optional<ReceiverApplyTiming> MainWindow::chooseReceiverApplyTiming() {
     QMessageBox prompt(QMessageBox::Question, tr("Apply receiver configuration"),
                        tr("Applying receiver configuration now will disconnect the connected device."),
                        QMessageBox::NoButton, this);
@@ -997,15 +991,18 @@ void MainWindow::updateRecordingUi() {
 }
 
 void MainWindow::handleRecordingStateChanged(RecordingState state) {
-    const RecordingState previous = recordingState_;
     recordingState_ = state;
-    if (previous == RecordingState::Finalizing && state == RecordingState::Idle) {
-        recordingReturnedIdlePendingResult_ = true;
-    }
     updateRecordingUi();
 }
 
 void MainWindow::handleRecordingFinished(const RecordingResult &result) {
+    ++recordingPresentationDepth_;
+    const auto presentationFinished = qScopeGuard([this] {
+        if (--recordingPresentationDepth_ == 0 && !exitConfirmationActive_) {
+            auto complete = std::exchange(pendingRecordingPresentationCompletion_, {});
+            if (complete) complete();
+        }
+    });
     if (exitConfirmationActive_) {
         exitPendingRecordingResult_ = result;
         return;
@@ -1015,7 +1012,6 @@ void MainWindow::handleRecordingFinished(const RecordingResult &result) {
     activeRecordingSession_ = false;
     activeRecordingShowCompletionMessage_ = false;
     if (suppressRecordingCompletion_) {
-        recordingReturnedIdlePendingResult_ = false;
         return;
     }
     if (receiver_ != nullptr) {
@@ -1024,14 +1020,16 @@ void MainWindow::handleRecordingFinished(const RecordingResult &result) {
     if (!result.warning.isEmpty() || showCleanCompletion) {
         showRecordingCompletion(result);
     }
-    if (recordingReturnedIdlePendingResult_) {
-        recordingReturnedIdlePendingResult_ = false;
-        deferrer_.recordingStateChanged(RecordingState::Finalizing,
-                                        RecordingState::Idle);
-    }
 }
 
 void MainWindow::handleRecordingFailed(const QString &error) {
+    ++recordingPresentationDepth_;
+    const auto presentationFinished = qScopeGuard([this] {
+        if (--recordingPresentationDepth_ == 0 && !exitConfirmationActive_) {
+            auto complete = std::exchange(pendingRecordingPresentationCompletion_, {});
+            if (complete) complete();
+        }
+    });
     if (exitConfirmationActive_) {
         exitPendingRecordingError_ = error;
         return;
@@ -1039,7 +1037,6 @@ void MainWindow::handleRecordingFailed(const QString &error) {
     activeRecordingSession_ = false;
     activeRecordingShowCompletionMessage_ = false;
     if (suppressRecordingCompletion_) {
-        recordingReturnedIdlePendingResult_ = false;
         return;
     }
     QMessageBox::critical(
@@ -1047,11 +1044,6 @@ void MainWindow::handleRecordingFailed(const QString &error) {
         error.isEmpty() ? tr("Recording failed for an unknown reason")
                         : tr("Recording failed: %1").arg(error),
         QMessageBox::Ok);
-    if (recordingReturnedIdlePendingResult_) {
-        recordingReturnedIdlePendingResult_ = false;
-        deferrer_.recordingStateChanged(RecordingState::Finalizing,
-                                        RecordingState::Idle);
-    }
 }
 
 void MainWindow::showRecordingCompletion(const RecordingResult &result) {
@@ -1098,14 +1090,19 @@ bool MainWindow::confirmDiscardRecordingOnExit() {
             exitPendingRecordingError_.reset();
             handleRecordingFailed(error);
         }
+        // Cancel keeps the lifecycle; an older ordinary presentation may still be open.
+        if (recordingPresentationDepth_ == 0 && !exitConfirmationActive_) {
+            auto complete = std::exchange(pendingRecordingPresentationCompletion_, {});
+            if (complete) complete();
+        }
         return false;
     }
 
     suppressRecordingCompletion_ = true;
     exitPendingRecordingResult_.reset();
     exitPendingRecordingError_.reset();
+    endReceiverLifecycle();
     receiver->discardRecording();
-    recordingReturnedIdlePendingResult_ = false;
     activeRecordingSession_ = false;
     activeRecordingShowCompletionMessage_ = false;
     return receiver->recordingState() == RecordingState::Idle;

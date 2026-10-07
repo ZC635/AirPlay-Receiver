@@ -1,7 +1,7 @@
 #pragma once
+#include "app/SettingsApplyTypes.h"
 
 #include "app/AppSettings.h"
-#include "app/SettingsChangeDeferrer.h"
 #include "app/WindowStateStore.h"
 #include "backend/ReceiverState.h"
 #include "platform/HotkeyService.h"
@@ -70,6 +70,8 @@ public:
                QWidget *parent = nullptr,
                MainWindowRuntimeServices runtimeServices = {});
     ~MainWindow() override;
+    ReceiverStartPreparationResult prepareReceiverStart();
+    void endReceiverLifecycle();
     bool isToolbarVisible() const;
     void toggleToolbarVisibility();
     bool isAlwaysOnTopEnabled() const;
@@ -122,7 +124,7 @@ private:
     void showSettingsDialog();
     void restartWithDiagnosticLogging(SettingsDialog &dialog);
     void openDiagnosticLogFolder(SettingsDialog &dialog);
-    std::optional<ReceiverApplyTiming> chooseReceiverApplyTiming(const SettingsApplyPlan &plan);
+    std::optional<ReceiverApplyTiming> chooseReceiverApplyTiming();
     void presentDeferredReceiverApplyFailure(const SettingsApplyOutcome &outcome);
     bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
     void applyAspectRatioLock(bool enabled);
@@ -144,7 +146,7 @@ private:
     QLabel *statusLabel_;
     VideoSurfaceWidget *videoSurface_;
     AppSettings settings_;
-    SettingsChangeDeferrer deferrer_;
+
     std::unique_ptr<AppSettingsStore> settingsStore_;
     std::unique_ptr<SettingsApplyCoordinator> settingsApplyCoordinator_;
     QPointer<HotkeyService> hotkeys_;
@@ -183,8 +185,9 @@ private:
     bool activeRecordingShowCompletionMessage_ = false;
     bool activeRecordingSession_ = false;
     bool suppressRecordingCompletion_ = false;
-    bool recordingReturnedIdlePendingResult_ = false;
     bool exitConfirmationActive_ = false;
+    int recordingPresentationDepth_ = 0;
+    std::function<void()> pendingRecordingPresentationCompletion_;
     bool diagnosticLoggingActive_ = false;
     bool diagnosticLoggingStopped_ = false;
     std::optional<RecordingResult> exitPendingRecordingResult_;

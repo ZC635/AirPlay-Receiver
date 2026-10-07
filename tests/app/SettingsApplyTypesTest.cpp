@@ -252,11 +252,12 @@ private slots:
     }
 
     void declaresReceiverTimingAndReservedGlobalFailureStatus() {
-        const SettingsApplyPlan plan;
-        QCOMPARE(plan.validationResults.size(), 0);
-        QVERIFY(!plan.receiverSessionActive);
-        QVERIFY(!plan.recordingIdle);
-        QVERIFY(!plan.requiresReceiverTimingDecision);
+        SettingsSubmitResult result;
+        result.status = SettingsSubmitStatus::TimingSelectionRequired;
+        QVERIFY(!result.outcome);
+        QVERIFY(!result.settingsSaved);
+        QVERIFY(!result.backendInvoked);
+        QVERIFY(!result.backendResult);
         QVERIFY(ReceiverApplyTiming::Immediate != ReceiverApplyTiming::AfterDisconnect);
         QVERIFY(SettingsApplyGlobalStatus::PersistenceFailed
                 == SettingsApplyGlobalStatus::PersistenceFailed);

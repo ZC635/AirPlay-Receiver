@@ -25,6 +25,8 @@
 #include <algorithm>
 
 #include "app/SettingsDialog.h"
+#include "app/SettingsApplyCoordinator.h"
+#include "backend/FakeAirPlayReceiver.h"
 #include "app/SettingsApplyTypes.h"
 #include "app/LanguageManager.h"
 #include "app/UiMessage.h"
@@ -116,6 +118,45 @@ class SettingsDialogTest : public QObject {
     Q_OBJECT
 
 private slots:
+    // A rejected reentrant Apply must neither save nor close/overwrite the user's draft.
+    void submitErrorKeepsDraftAndCommittedBaseline() {
+        struct CountingPersistence : SettingsPersistence {
+            mutable int saves = 0;
+            AppSettingsSaveResult save(const AppSettings &) const override { ++saves; return {true}; }
+        } persistence;
+        auto current = AppSettings::defaults();
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        SettingsApplyCoordinator coordinator(current, nullptr, &persistence, &receiver);
+        SettingsDialog dialog(current);
+        auto *name = dialog.findChild<QLineEdit *>("receiverNameEdit");
+        auto *apply = dialog.findChild<QPushButton *>("applySettingsButton");
+        QVERIFY(name); QVERIFY(apply);
+        name->setText("Retained draft");
+        dialog.show();
+        SettingsSubmitStatus rejectedStatus = SettingsSubmitStatus::Completed;
+        connect(&dialog, &SettingsDialog::applyRequested, &dialog, [&](AppSettings draft) {
+            const auto rejected = coordinator.apply(draft, {});
+            rejectedStatus = rejected.status;
+            dialog.presentSubmitError(rejected.userReason);
+        });
+        auto outer = current; outer.setReceiverName("Outer draft");
+        const auto result = coordinator.apply(outer, [&]() -> std::optional<ReceiverApplyTiming> {
+            apply->click();
+            return std::nullopt;
+        });
+        QCOMPARE(result.status, SettingsSubmitStatus::Cancelled);
+        QCOMPARE(rejectedStatus, SettingsSubmitStatus::Busy);
+        QCOMPARE(persistence.saves, 0);
+        QCOMPARE(dialog.draftSettings().receiverName(), QString("Retained draft"));
+        QCOMPARE(dialog.committedBaseline().receiverName(), QString("AirPlay Receiver"));
+        QVERIFY(dialog.isVisible());
+        QVERIFY(dialog.hasUnappliedChanges());
+        bool foundError = false;
+        for (auto *label : dialog.findChildren<QLabel *>())
+            foundError = foundError || label->text().contains("Settings are being applied. Try again after the current operation finishes.");
+        QVERIFY(foundError);
+    }
     void toolbarHoverRevealDraftCancelAndApply() {
         SettingsDialog dialog(AppSettings::defaults());
         auto *checkbox = dialog.findChild<QCheckBox *>("toolbarHoverRevealCheckBox");
@@ -611,7 +652,7 @@ private slots:
         persistence.globalResult = global;
         dialog.presentApplyOutcome(persistence);
         QCOMPARE(summary->text(),
-                 QString("Could not save C:\\path\\airplay-settings.json: Access is denied. No changes from this Apply were committed."));
+                 QString("Could not confirm saved settings for C:\\path\\airplay-settings.json: Access is denied."));
     }
 
     void persistenceFailureDoesNotHighlightRolledBackFieldsOrSuggestEditingThem() {
@@ -646,7 +687,7 @@ private slots:
         dialog.presentApplyOutcome(outcome);
 
         QCOMPARE(summary->text(),
-                 QString("Could not save C:\\path\\airplay-settings.json: Access is denied. No changes from this Apply were committed."));
+                 QString("Could not confirm saved settings for C:\\path\\airplay-settings.json: Access is denied."));
         QVERIFY(!summary->text().contains("correct the highlighted fields"));
         QVERIFY(receiverError->isHidden());
         auto *shortcutStatus = qobject_cast<QLabel *>(table->cellWidget(3, 2));
@@ -654,10 +695,10 @@ private slots:
         QVERIFY(shortcutStatus->isHidden());
 
         receiver->setText("Edited receiver");
-        QVERIFY(summary->text().contains("Could not save C:\\path\\airplay-settings.json"));
+        QVERIFY(summary->text().contains("Could not confirm saved settings for C:\\path\\airplay-settings.json"));
         open->click();
         QVERIFY(summary->text().contains(actions.openError));
-        QVERIFY(summary->text().contains("Could not save C:\\path\\airplay-settings.json"));
+        QVERIFY(summary->text().contains("Could not confirm saved settings for C:\\path\\airplay-settings.json"));
     }
 
     void persistenceFailureStillHighlightsRecoveryFailureDetails() {
@@ -688,7 +729,7 @@ private slots:
         QVERIFY(shortcutStatus->text().contains("candidate registration failed"));
         QVERIFY(shortcutStatus->text().contains("12345"));
         QVERIFY(shortcutStatus->text().contains("previous binding could not be restored"));
-        QVERIFY(summary->text().contains("Could not save C:\\path\\airplay-settings.json"));
+        QVERIFY(summary->text().contains("Could not confirm saved settings for C:\\path\\airplay-settings.json"));
         QVERIFY(summary->text().contains("Recovery requires attention; issue count: 1."));
         QVERIFY(!summary->text().contains("correct the highlighted fields"));
         QVERIFY(!summary->text().contains("Previous setting was restored"));
@@ -775,7 +816,7 @@ private slots:
         dialog.presentDiagnosticActionError(UiMessage::raw("Could not open diagnostic log folder"));
 
         QVERIFY(!summary->isHidden());
-        QVERIFY(summary->text().contains("Could not save C:/settings.json"));
+        QVERIFY(summary->text().contains("Could not confirm saved settings for C:/settings.json"));
         QVERIFY(summary->text().contains("Could not open diagnostic log folder"));
         QVERIFY(isAscii(summary->text()));
     }

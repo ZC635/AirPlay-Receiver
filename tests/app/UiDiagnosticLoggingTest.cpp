@@ -16,6 +16,7 @@
 #include <QTimer>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <utility>
 
 namespace {
 QByteArray readLog(const DiagnosticSession &session) {
@@ -23,7 +24,31 @@ QByteArray readLog(const DiagnosticSession &session) {
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
 }
 
-class ScriptedPersistence final : public SettingsPersistence {
+class InterruptedPersistence final : public SettingsPersistence {
+public:
+    mutable int saves = 0;
+    mutable std::function<void()> onSave;
+    AppSettingsSaveResult save(const AppSettings &) const override {
+        ++saves;
+        auto callback = std::exchange(onSave, {});
+        if (callback) callback();
+        return {true};
+    }
+};
+class InterruptedReceiver final : public FakeAirPlayReceiver {
+public:
+    std::function<void()> onApply;
+    ReceiverConfigurationBatchResult applyConfigurationBatch(const ReceiverConfigurationBatchRequest &request) override {
+        const auto result = FakeAirPlayReceiver::applyConfigurationBatch(request);
+        if (onApply) onApply();
+        return result;
+    }
+};
+class InactiveSettingsSink final : public DiagnosticLogSink {
+public:
+    QList<DiagnosticEvent> events;
+    void record(DiagnosticEvent event) override { events.append(std::move(event)); }
+};class ScriptedPersistence final : public SettingsPersistence {
 public:
     AppSettingsSaveResult save(const AppSettings &) const override {
         return results.isEmpty() ? AppSettingsSaveResult{true} : results.takeFirst();
@@ -192,15 +217,14 @@ private slots:
         auto created = DiagnosticSession::create(options);
         QVERIFY(created.session);
         AppSettingsStore store(directory.filePath("private-settings.json"));
-        SettingsApplyCoordinator coordinator(nullptr, &store, nullptr, nullptr, created.session.get());
         const auto baseline = AppSettings::defaults();
+        auto current = baseline;
+        SettingsApplyCoordinator coordinator(current, nullptr, &store, nullptr, created.session.get());
         auto candidate = baseline;
         candidate.setReceiverName("   ");
         candidate.setLanguage("en");
         candidate.setToolbarHoverReveal(false);
-        const auto outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const auto outcome = *coordinator.apply(candidate, {}).outcome;
         QVERIFY(store.loadOrDefaults().language() == "en");
         QVERIFY(!store.loadOrDefaults().toolbarHoverReveal());
         QVERIFY(!outcome.globalResult);
@@ -215,10 +239,99 @@ private slots:
         QVERIFY(!output.contains(directory.path().toUtf8()));
     }
 
+    // Waiting Error is a saved/no-backend fact, never a fictional restoration.
+    void notAppliedLogsFactsWithoutPrivateValues() {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        DiagnosticSessionOptions options; options.applicationDirectory = directory.path();
+        auto created = DiagnosticSession::create(options); QVERIFY(created.session);
+        AppSettingsStore store(directory.filePath("settings.json"));
+        auto current = AppSettings::defaults();
+        FakeAirPlayReceiver receiver; receiver.forceState(ReceiverState::Connected);
+        SettingsApplyCoordinator coordinator(current, nullptr, &store, &receiver, created.session.get());
+        QSignalSpy finished(&coordinator, &SettingsApplyCoordinator::deferredApplyFinished);
+        auto candidate = current; candidate.setReceiverName("Private Receiver C:/Users/Private/settings.json");
+        const auto saved = coordinator.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; });
+        QVERIFY(saved.settingsSaved); QVERIFY(!saved.backendInvoked);
+        receiver.forceState(ReceiverState::Error);
+        receiver.forceState(ReceiverState::Error);
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(std::holds_alternative<SettingsDeferredNotApplied>(qvariant_cast<SettingsDeferredResult>(finished.at(0).at(0))));
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QCOMPARE(store.loadOrDefaults().receiverName(), candidate.receiverName());
+        created.session->closeNormally();
+        const auto output = readLog(*created.session);
+        QCOMPARE(output.count(" settings_receiver_not_applied "), 1);
+        QVERIFY(output.contains("reason=receiver_error"));
+        QVERIFY(output.contains("target_saved=yes"));
+        QVERIFY(output.contains("backend_invoked=no"));
+        QVERIFY(!output.contains("rolled_back_count=1"));
+        QVERIFY(!output.contains("origin=compensation"));
+        QVERIFY(!output.contains("Private"));
+        QVERIFY(!output.contains("settings.json"));
+        QVERIFY(!output.contains(directory.path().toUtf8()));
+        InactiveSettingsSink inactive;
+        auto secondCurrent = AppSettings::defaults();
+        FakeAirPlayReceiver second; second.forceState(ReceiverState::Connected);
+        SettingsApplyCoordinator silent(secondCurrent, nullptr, &store, &second, &inactive);
+        silent.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; });
+        second.forceState(ReceiverState::Error);
+        QVERIFY(inactive.events.isEmpty());
+    }
+
+    void interruptedApplyLogsOnlyOccurredFacts_data() {
+        QTest::addColumn<int>("stage");
+        QTest::addColumn<bool>("saved");
+        QTest::addColumn<bool>("backend");
+        QTest::newRow("before-saving") << 0 << false << false;
+        QTest::newRow("during-saving") << 1 << true << false;
+        QTest::newRow("after-backend") << 2 << true << true;
+    }
+    void interruptedApplyLogsOnlyOccurredFacts() {
+        QFETCH(int, stage); QFETCH(bool, saved); QFETCH(bool, backend);
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        DiagnosticSessionOptions options; options.applicationDirectory = directory.path();
+        auto created = DiagnosticSession::create(options); QVERIFY(created.session);
+        auto current = AppSettings::defaults();
+        InterruptedPersistence persistence;
+        InterruptedReceiver receiver; receiver.forceState(ReceiverState::Connected);
+        SettingsApplyCoordinator coordinator(current, nullptr, &persistence, &receiver, created.session.get());
+        if (stage == 1) persistence.onSave = [&] { coordinator.endReceiverLifecycle(); };
+        if (stage == 2) receiver.onApply = [&] { coordinator.endReceiverLifecycle(); };
+        auto draft = current; draft.setReceiverName("Private Receiver C:/Users/Private/settings.json");
+        const auto result = coordinator.apply(draft, [&] {
+            if (stage == 0) coordinator.endReceiverLifecycle();
+            return ReceiverApplyTiming::Immediate;
+        });
+        QCOMPARE(result.status, SettingsSubmitStatus::Interrupted);
+        QCOMPARE(result.settingsSaved, saved);
+        QCOMPARE(result.backendInvoked, backend);
+        QCOMPARE(persistence.saves, saved ? 1 : 0);
+        QCOMPARE(receiver.configurationBatchCount, backend ? 1 : 0);
+        created.session->closeNormally();
+        const auto output = readLog(*created.session);
+        QCOMPARE(output.count(" settings_apply_interrupted "), 1);
+        QVERIFY(output.contains(saved ? "target_saved=yes" : "target_saved=no"));
+        QVERIFY(output.contains(backend ? "backend_invoked=yes" : "backend_invoked=no"));
+        QVERIFY(!output.contains(" settings_apply_completed "));
+        QVERIFY(!output.contains("origin=compensation"));
+        QVERIFY(!output.contains("Private"));
+        QVERIFY(!output.contains("settings.json"));
+        QVERIFY(!output.contains(directory.path().toUtf8()));
+        QCOMPARE(result.userReason.render(), saved
+            ? QString("Settings application was interrupted. Saved changes are kept.")
+            : QString("Settings application was interrupted before saving."));
+        InactiveSettingsSink inactive;
+        auto silentCurrent = AppSettings::defaults();
+        InterruptedPersistence silentPersistence;
+        FakeAirPlayReceiver silentReceiver; silentReceiver.forceState(ReceiverState::Connected);
+        SettingsApplyCoordinator silent(silentCurrent, nullptr, &silentPersistence, &silentReceiver, &inactive);
+        silent.apply(draft, [&] { silent.endReceiverLifecycle(); return ReceiverApplyTiming::Immediate; });
+        QVERIFY(inactive.events.isEmpty());
+    }
     void compensationFailureReportsOriginalStage_data() {
         QTest::addColumn<bool>("deferred");
         QTest::newRow("immediate-unavailable") << false;
-        QTest::newRow("deferred-unavailable") << true;
+        QTest::newRow("deferred-confirmed-rollback") << true;
     }
 
     void compensationFailureReportsOriginalStage() {
@@ -230,25 +343,26 @@ private slots:
         auto created = DiagnosticSession::create(options);
         QVERIFY(created.session);
         ScriptedPersistence persistence;
-        if (!deferred) persistence.results.append(AppSettingsSaveResult{true});
+        persistence.results.append(AppSettingsSaveResult{true});
         persistence.results.append({false, "C:/Users/Private/settings.json", AppSettingsSaveStage::Commit,
                                     QFileDevice::WriteError, "Private receiver and path failure"});
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr, created.session.get());
         const auto baseline = AppSettings::defaults();
+        auto current = baseline;
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.requestedConfigurationRestartError = "Apply failure";
+        SettingsApplyCoordinator coordinator(current, nullptr, &persistence, deferred ? &receiver : nullptr, created.session.get());
         auto candidate = baseline;
         candidate.setReceiverName("Private Receiver");
         SettingsApplyOutcome outcome;
         if (deferred) {
-            ReceiverConfigurationBatchRequest batch;
-            batch.receiverNameChanged = true;
-            batch.requestedReceiverName = candidate.receiverName();
-            batch.rollbackReceiverName = baseline.receiverName();
-            batch.rollbackVideoQuality = baseline.videoQuality();
-            outcome = coordinator.completeDeferredReceiverApply(batch, candidate);
+            QSignalSpy completed(&coordinator, &SettingsApplyCoordinator::deferredApplyFinished);
+            coordinator.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; });
+            receiver.forceState(ReceiverState::Discoverable);
+            QCOMPARE(completed.count(), 1);
+            outcome = std::get<SettingsApplyOutcome>(qvariant_cast<SettingsDeferredResult>(completed.at(0).at(0)));
         } else {
-            outcome = coordinator.execute(
-                coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-                ReceiverApplyTiming::Immediate);
+            outcome = *coordinator.apply(candidate, {}).outcome;
         }
         QVERIFY(outcome.globalResult);
         const auto output = readLog(*created.session);
@@ -256,6 +370,7 @@ private slots:
         QVERIFY(output.contains("origin=compensation"));
         QVERIFY(output.contains("stage=commit"));
         QVERIFY(output.contains("io_error_code="));
+        QVERIFY(output.contains("io_error_code=" + QByteArray::number(static_cast<int>(QFileDevice::WriteError))));
         QCOMPARE(output.count(" ui settings_save_failed "), 1);
         QVERIFY(output.contains("persistence_failed=yes"));
         QVERIFY(output.contains("recovery_failed_count=1"));

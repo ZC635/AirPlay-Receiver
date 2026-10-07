@@ -237,6 +237,25 @@ public:
     int discardCallsIncludingIdle = 0;
 };
 
+// Keep the real Fake recording transitions, while splitting its Idle/terminal delivery.
+// The receiver API reports Idle before recordingFinished/recordingFailed; the UI may
+// pump another recording to that point inside an earlier result's modal loop.
+class SplitTerminalRecordingReceiver final : public FakeAirPlayReceiver {
+public:
+    RecordingState recordingState() const override {
+        return reportedIdle_ ? RecordingState::Idle : FakeAirPlayReceiver::recordingState();
+    }
+    RecordingStartResult startRecording(const RecordingOptions &options) override {
+        reportedIdle_ = false;
+        return FakeAirPlayReceiver::startRecording(options);
+    }
+    void reachIdleBeforeTerminalForTest() {
+        reportedIdle_ = true;
+        emit recordingStateChanged(RecordingState::Idle);
+    }
+private:
+    bool reportedIdle_ = false;
+};
 class FakeDiagnosticUiPrompts final : public DiagnosticUiPrompts {
 public:
     bool confirmPrivacy(QWidget *, const QString &message) override {
@@ -314,10 +333,141 @@ public:
     QStringList events;
 };
 
+class ProjectionCallbackReceiver final : public FakeAirPlayReceiver {
+public:
+    std::function<void()> callback;
+    ReceiverConfigurationBatchResult applyConfigurationBatch(const ReceiverConfigurationBatchRequest &batch) override {
+        const auto result = FakeAirPlayReceiver::applyConfigurationBatch(batch);
+        if (callback) callback();
+        return result;
+    }
+};
+class ProjectionCallbackHotkeys final : public HotkeyService {
+public:
+    FakeHotkeyService fake;
+    std::function<void()> callback;
+    HotkeyRegistrationResult registerShortcut(ShortcutAction action, const QKeySequence &sequence) override {
+        return fake.registerShortcut(action, sequence);
+    }
+    QVector<HotkeyActionRegistrationResult> registerShortcuts(const QVector<HotkeyRegistrationRequest> &requests) override {
+        const auto result = fake.registerShortcuts(requests);
+        if (callback) callback();
+        return result;
+    }
+    void unregisterAll() override { fake.unregisterAll(); }
+};
+
 class MainWindowSmokeTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void savedNoncompletedApplyProjectsLocalPreferences_data() {
+        QTest::addColumn<bool>("interrupted");
+        QTest::newRow("saved-interrupted") << true;
+        QTest::newRow("saved-timing-selection-required") << false;
+    }
+    void savedNoncompletedApplyProjectsLocalPreferences() {
+        QFETCH(bool, interrupted);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("settings.json");
+        auto settings = AppSettings::defaults();
+        settings.setLanguage("en");
+        LanguageManager language(QCoreApplication::instance());
+        QVERIFY(language.apply("en"));
+        ProjectionCallbackReceiver receiver;
+        receiver.forceState(interrupted ? ReceiverState::Connected : ReceiverState::Discoverable);
+        ProjectionCallbackHotkeys hotkeys;
+        MainWindowRuntimeServices services;
+        services.languageManager = &language;
+        MainWindow window(settings, &hotkeys, &receiver, path, nullptr, nullptr, services);
+        window.show();
+        if (interrupted) receiver.callback = [&] { window.endReceiverLifecycle(); };
+        else hotkeys.callback = [&] { receiver.forceState(ReceiverState::Connected); };
+        auto *controller = window.findChild<ToolbarVisibilityController *>();
+        QVERIFY(controller);
+        QString actualLanguage, retryLanguage, actualError, retranslatedError, tooltip, retryTooltip;
+        bool draftKept = false, baselineKept = false, hoverDisabled = false, retryHoverDisabled = false;
+        int batchesBeforeRetry = -1;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = window.findChild<SettingsDialog *>();
+            QVERIFY(dialog);
+            const auto close = qScopeGuard([&] { dialog->reject(); });
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Projection target");
+            auto *combo = dialog->findChild<QComboBox *>("languageCombo");
+            combo->setCurrentIndex(combo->findData("zh-CN"));
+            dialog->findChild<QCheckBox *>("toolbarHoverRevealCheckBox")->setChecked(false);
+            dialog->findChild<QKeySequenceEdit *>("shortcutEdit_volumeUp")->setKeySequence(QKeySequence("Ctrl+Shift+U"));
+            const auto chooseImmediate = [] {
+                auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(prompt);
+                for (auto *button : prompt->buttons()) {
+                    if (prompt->buttonRole(button) == QMessageBox::AcceptRole) { button->click(); return; }
+                }
+                prompt->reject();
+                QFAIL("Missing immediate timing choice");
+            };
+            if (interrupted) QTimer::singleShot(0, dialog, chooseImmediate);
+            dialog->accept();
+            actualLanguage = language.selection();
+            for (auto *label : dialog->findChildren<QLabel *>()) actualError += label->text() + '\n';
+            draftKept = dialog->draftSettings().receiverName() == "Projection target"
+                && dialog->draftSettings().language() == "zh-CN"
+                && !dialog->draftSettings().toolbarHoverReveal()
+                && dialog->draftSettings().shortcutFor(ShortcutAction::VolumeUp) == QKeySequence("Ctrl+Shift+U");
+            baselineKept = dialog->hasUnappliedChanges() && dialog->committedBaseline().language() == "en"
+                && dialog->committedBaseline().receiverName() == "AirPlay Receiver";
+            language.apply("en");
+            QEvent languageChange(QEvent::LanguageChange);
+            QCoreApplication::sendEvent(dialog, &languageChange);
+            for (auto *label : dialog->findChildren<QLabel *>()) retranslatedError += label->text() + '\n';
+            // Leave the manager in English: unchanged Apply must project the saved Chinese preference.
+            controller->receiverStateChanged(ReceiverState::Connected);
+            controller->evaluatePointer(QPoint(-9999, -9999), true);
+            controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+            hoverDisabled = !controller->isVisible();
+            tooltip = window.findChild<QToolButton *>("volumeButton")->toolTip();
+            batchesBeforeRetry = receiver.configurationBatchCount;
+            const QString evidence = qEnvironmentVariable("AIRPLAY_FIX_EVIDENCE");
+            if (!evidence.isEmpty()) {
+                QDir().mkpath(evidence);
+                QVERIFY(QFile::copy(path, QDir(evidence).filePath(QString("projection-%1.json").arg(QTest::currentDataTag()))));
+            }
+            receiver.callback = {};
+            hotkeys.callback = {};
+            if (!interrupted) QTimer::singleShot(0, dialog, chooseImmediate);
+            dialog->accept();
+            retryLanguage = language.selection();
+            retryTooltip = window.findChild<QToolButton *>("volumeButton")->toolTip();
+            controller->receiverStateChanged(ReceiverState::Connected);
+            controller->evaluatePointer(QPoint(-9999, -9999), true);
+            controller->evaluatePointer(window.centralWidget()->mapToGlobal(QPoint(5, 1)), true);
+            retryHoverDisabled = !controller->isVisible();
+        });
+        window.findChild<QToolButton *>("settingsButton")->click();
+        const auto disk = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(disk.language(), QString("zh-CN"));
+        QVERIFY(!disk.toolbarHoverReveal());
+        QCOMPARE(disk.shortcutFor(ShortcutAction::VolumeUp), QKeySequence("Ctrl+Shift+U"));
+        QVERIFY(draftKept);
+        QVERIFY(baselineKept);
+        QCOMPARE(batchesBeforeRetry, interrupted ? 1 : 0);
+        QCOMPARE(actualLanguage, QString("zh-CN"));
+        QCOMPARE(retryLanguage, QString("zh-CN"));
+        QCOMPARE(language.effectiveLanguage(), QString("zh-CN"));
+        const QString reason = QCoreApplication::translate("SettingsApplyCoordinator", interrupted
+            ? "Settings application was interrupted. Saved changes are kept."
+            : "Receiver state changed. Apply again to choose when to apply receiver settings.");
+        QVERIFY(reason.contains(QChar(0x8bbe)) || reason.contains(QChar(0x63a5)));
+        QVERIFY(actualError.contains(reason));
+        QVERIFY(retranslatedError.contains(interrupted ? "Settings application was interrupted. Saved changes are kept."
+            : "Receiver state changed. Apply again to choose when to apply receiver settings."));
+        QVERIFY(hoverDisabled);
+        QVERIFY(retryHoverDisabled);
+        QVERIFY(tooltip.contains("Ctrl+Shift+U"));
+        QVERIFY(retryTooltip.contains("Ctrl+Shift+U"));
+    }
+
     void constructsWithExpectedTitle() {
         MainWindow window;
         QCOMPARE(window.windowTitle(), QString("AirPlay Receiver"));
@@ -1327,6 +1477,412 @@ private slots:
         QCOMPARE(receiver.startCount, 1);
     }
 
+    // Two independently opened dialogs must merge the latest full saved receiver target.
+    void successiveReceiverAppliesMergeThroughSettingsDialog() {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto path = directory.filePath("settings.json");
+        FakeAirPlayReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *settings = window.findChild<QToolButton *>("settingsButton"); QVERIFY(settings);
+        for (int applyNumber = 0; applyNumber < 2; ++applyNumber) {
+            QTimer::singleShot(0, &window, [&, applyNumber] {
+                auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+                const auto close = qScopeGuard([dialog] { dialog->reject(); });
+                if (applyNumber == 0) dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Merged UI target");
+                else {
+                    QCOMPARE(dialog->committedBaseline().receiverName(), QString("Merged UI target"));
+                    auto *resolution = dialog->findChild<QComboBox *>("videoResolutionCombo");
+                    auto *rate = dialog->findChild<QComboBox *>("videoFrameRateCombo");
+                    QVERIFY(resolution); QVERIFY(rate);
+                    resolution->setCurrentIndex(resolution->findData(static_cast<int>(VideoResolution::P720)));
+                    rate->setCurrentIndex(rate->findData(static_cast<int>(VideoFrameRate::Fps60)));
+                }
+                QTimer::singleShot(0, dialog, [] {
+                    auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+                    messageButton(box, "Apply after disconnect")->click();
+                });
+                dialog->findChild<QPushButton *>("applySettingsButton")->click();
+            });
+            settings->click();
+            QCOMPARE(receiver.configurationBatchCount, 0);
+        }
+        const auto saved = AppSettingsStore(path).loadOrDefaults();
+        QCOMPARE(saved.receiverName(), QString("Merged UI target"));
+        QCOMPARE(saved.videoQuality().resolution, VideoResolution::P720);
+        QCOMPARE(saved.videoQuality().frameRate, VideoFrameRate::Fps60);
+        QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto json = QJsonDocument::fromJson(file.readAll()).object();
+        QCOMPARE(json.value("receiverName").toString(), QString("Merged UI target"));
+        QCOMPARE(json.value("videoQuality").toObject().value("resolution").toString(), QString("720p"));
+        QCOMPARE(json.value("videoQuality").toObject().value("frameRate").toInt(), 60);
+        receiver.forceState(ReceiverState::Discoverable);
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.receiverName(), QString("Merged UI target"));
+        QCOMPARE(receiver.videoQuality().resolution, VideoResolution::P720);
+        QCOMPARE(receiver.videoQuality().frameRate, VideoFrameRate::Fps60);
+        QCOMPARE(receiver.configurationBatchRequests.front().requestedReceiverName, QString("Merged UI target"));
+        QVERIFY(receiver.configurationBatchRequests.front().receiverNameChanged);
+        QVERIFY(receiver.configurationBatchRequests.front().resolutionChanged);
+        QVERIFY(receiver.configurationBatchRequests.front().frameRateChanged);
+        QCOMPARE(receiver.configurationRestartCount, 1);
+        receiver.forceState(ReceiverState::Discoverable);
+        QCOMPARE(receiver.configurationBatchCount, 1);
+    }
+
+    void waitingReceiverErrorShowsOneHonestNotice() {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto path = directory.filePath("settings.json");
+        FakeAirPlayReceiver receiver; receiver.forceState(ReceiverState::Connected);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path);
+        auto *settings = window.findChild<QToolButton *>("settingsButton"); QVERIFY(settings);
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            const auto close = qScopeGuard([dialog] { dialog->reject(); });
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Saved error target");
+            QTimer::singleShot(0, dialog, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+                messageButton(box, "Apply after disconnect")->click();
+            });
+            dialog->findChild<QPushButton *>("applySettingsButton")->click();
+        });
+        settings->click();
+        QString notice;
+        int notices = 0;
+        QTimer::singleShot(0, &window, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+            ++notices; notice = box->text();
+            receiver.forceState(ReceiverState::Error);
+            box->button(QMessageBox::Ok)->click();
+        });
+        receiver.forceState(ReceiverState::Error);
+        receiver.forceState(ReceiverState::Error);
+        QCOMPARE(notices, 1);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QCOMPARE(receiver.receiverName(), QString("AirPlay Receiver"));
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("Saved error target"));
+        QVERIFY(!notice.contains("restored", Qt::CaseInsensitive));
+        QVERIFY(!notice.contains("rolled back", Qt::CaseInsensitive));
+        QCOMPARE(notice, QString("Receiver settings have not been applied. The saved configuration is kept for the next receiver start."));
+        receiver.forceState(ReceiverState::Idle);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QCOMPARE(window.prepareReceiverStart().status, ReceiverStartPreparationStatus::Prepared);
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.receiverName(), QString("Saved error target"));
+    }
+
+    void stopAndDiagnosticHandoffEndBeforeIdle_data() {
+        QTest::addColumn<bool>("handoff");
+        QTest::newRow("explicit-stop") << false;
+        QTest::newRow("diagnostic-handoff") << true;
+    }
+    void stopAndDiagnosticHandoffEndBeforeIdle() {
+        QFETCH(bool, handoff);
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto path = directory.filePath("settings.json");
+        DiagnosticOrderingReceiver receiver; receiver.forceState(ReceiverState::Connected);
+        DiagnosticRestartCoordinator restart;
+        QStringList order; receiver.order = &order;
+        MainWindowRuntimeServices services;
+        services.diagnosticRestartCoordinator = &restart;
+        services.quitApplication = [&] { order.append("quit"); };
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, path, nullptr, nullptr, services);
+        auto *settings = window.findChild<QToolButton *>("settingsButton"); QVERIFY(settings);
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            const auto close = qScopeGuard([dialog] { dialog->reject(); });
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Next explicit start");
+            QTimer::singleShot(0, dialog, [] {
+                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box);
+                messageButton(box, "Apply after disconnect")->click();
+            });
+            dialog->findChild<QPushButton *>("applySettingsButton")->click();
+        });
+        settings->click();
+        if (handoff) restart.childReady();
+        else { window.endReceiverLifecycle(); receiver.stop(); }
+        QCOMPARE(receiver.state(), ReceiverState::Idle);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QCOMPARE(receiver.stopCount, 1);
+        QCOMPARE(receiver.startCount, 0);
+        QCOMPARE(order, handoff ? QStringList({"receiver_stop", "quit"}) : QStringList({"receiver_stop"}));
+        QCOMPARE(AppSettingsStore(path).loadOrDefaults().receiverName(), QString("Next explicit start"));
+        receiver.forceState(ReceiverState::Discoverable);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        receiver.forceState(ReceiverState::Idle);
+        QCOMPARE(window.prepareReceiverStart().status, ReceiverStartPreparationStatus::Prepared);
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.receiverName(), QString("Next explicit start"));
+    }
+    void recordingResultPresentationFinishesBeforeDeferredRestart_data() {
+        QTest::addColumn<bool>("firstFails");
+        QTest::addColumn<int>("nextRecordingOrder");
+        QTest::newRow("finished-ordinary") << false << 0;
+        QTest::newRow("failed-ordinary") << true << 0;
+        QTest::newRow("finished-next-raw-idle") << false << 1;
+        QTest::newRow("failed-next-raw-idle") << true << 1;
+        QTest::newRow("finished-reentrant-terminal") << false << 2;
+        QTest::newRow("failed-reentrant-terminal") << true << 2;
+    }
+
+    // Catch release from an older terminal delivery after a new recording reaches
+    // Idle, and release from a nested terminal while an older modal remains open.
+    void recordingResultPresentationFinishesBeforeDeferredRestart() {
+        QFETCH(bool, firstFails);
+        QFETCH(int, nextRecordingOrder);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString settingsPath = directory.filePath("settings.json");
+        SplitTerminalRecordingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        receiver.forceState(ReceiverState::Connected);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, settingsPath);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(recordButton);
+        QVERIFY(settingsButton);
+        recordButton->click();
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Presentation target");
+            QTimer::singleShot(0, dialog, [] {
+                auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(prompt);
+                messageButton(prompt, "Disconnect and apply now")->click();
+            });
+            dialog->accept();
+        });
+        settingsButton->click();
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        int firstModalCount = -1;
+        int nestedModalCount = -1;
+        int countAfterNestedWhileFirstOpen = -1;
+        bool firstModalVisibleAfterNested = false;
+        bool startedNext = false;
+        QString firstTitle;
+        QTimer::singleShot(0, &window, [&] {
+            auto *first = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(first);
+            firstTitle = first->windowTitle();
+            firstModalCount = receiver.configurationBatchCount;
+            if (nextRecordingOrder != 0) {
+                startedNext = receiver.startRecording({}).accepted;
+                receiver.stopRecording();
+                receiver.reachIdleBeforeTerminalForTest();
+                if (nextRecordingOrder == 2) {
+                    QTimer::singleShot(0, &window, [&] {
+                        auto *nested = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                        QVERIFY(nested);
+                        nestedModalCount = receiver.configurationBatchCount;
+                        nested->button(QMessageBox::Ok)->click();
+                    });
+                    receiver.completeRecordingForTest({"C:/recordings/second.mp4", "Second result"});
+                    firstModalVisibleAfterNested = first->isVisible();
+                    countAfterNestedWhileFirstOpen = receiver.configurationBatchCount;
+                }
+            }
+            first->button(QMessageBox::Ok)->click();
+        });
+        if (firstFails) receiver.failRecordingForTest("First recording failed");
+        else receiver.completeRecordingForTest({"C:/recordings/first.mp4", {}});
+        const int countAfterFirstCloses = receiver.configurationBatchCount;
+        if (nextRecordingOrder == 1) {
+            QTimer::singleShot(0, &window, [&] {
+                auto *second = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(second);
+                nestedModalCount = receiver.configurationBatchCount;
+                second->button(QMessageBox::Ok)->click();
+            });
+            receiver.completeRecordingForTest({"C:/recordings/second.mp4", "Second result"});
+        }
+        qInfo("presentation counts: first=%d nested=%d after-nested-first-open=%d first-closed=%d final=%d",
+              firstModalCount, nestedModalCount, countAfterNestedWhileFirstOpen,
+              countAfterFirstCloses, receiver.configurationBatchCount);
+        QCOMPARE(firstTitle, firstFails ? QString("Recording failed") : QString("Recording saved"));
+        QCOMPARE(firstModalCount, 0);
+        if (nextRecordingOrder != 0) {
+            QVERIFY(startedNext);
+            QCOMPARE(nestedModalCount, 0);
+        }
+        if (nextRecordingOrder == 1) QCOMPARE(countAfterFirstCloses, 0);
+        if (nextRecordingOrder == 2) {
+            QVERIFY(firstModalVisibleAfterNested);
+            QCOMPARE(countAfterNestedWhileFirstOpen, 0);
+        }
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.receiverName(), QString("Presentation target"));
+        QCOMPARE(receiver.stopCount, 1);
+        QCOMPARE(receiver.startCount, 1);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, (firstFails ? 0 : 1) + (nextRecordingOrder == 0 ? 0 : 1));
+        QCOMPARE(AppSettingsStore(settingsPath).loadOrDefaults().receiverName(), QString("Presentation target"));
+    }
+    void exitCancelWithinOrdinaryPresentationWaitsForOuterModal_data() {
+        QTest::addColumn<bool>("firstFails");
+        QTest::addColumn<bool>("secondFails");
+        QTest::addColumn<bool>("discard");
+        QTest::newRow("finished-then-finished-cancel") << false << false << false;
+        QTest::newRow("finished-then-failed-cancel") << false << true << false;
+        QTest::newRow("failed-then-finished-cancel") << true << false << false;
+        QTest::newRow("failed-then-failed-cancel") << true << true << false;
+        QTest::newRow("finished-discard-control") << false << false << true;
+        QTest::newRow("failed-discard-control") << true << true << true;
+    }
+    // Catch Cancel releasing a newer terminal completion while an older ordinary
+    // result handler remains inside its QMessageBox, bypassing presentation depth.
+    void exitCancelWithinOrdinaryPresentationWaitsForOuterModal() {
+        QFETCH(bool, firstFails);
+        QFETCH(bool, secondFails);
+        QFETCH(bool, discard);
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto settingsPath = directory.filePath("settings.json");
+        ExitRaceRecordingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        receiver.forceState(ReceiverState::Connected);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, settingsPath);
+        auto *record = window.findChild<QToolButton *>("recordingButton");
+        auto *settings = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(record); QVERIFY(settings);
+        record->click();
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Mixed presentation target");
+            QTimer::singleShot(0, dialog, [] {
+                auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(prompt);
+                messageButton(prompt, "Disconnect and apply now")->click();
+            });
+            dialog->accept();
+        });
+        settings->click();
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        QString firstTitle, replayTitle, exitTitle;
+        int firstOpenCount = -1, exitOpenCount = -1, replayOpenCount = -1;
+        int countAfterCloseWhileFirstOpen = -1;
+        bool nextStarted = false, firstStillVisible = false, closed = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *first = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(first);
+            firstTitle = first->windowTitle();
+            firstOpenCount = receiver.configurationBatchCount;
+            nextStarted = receiver.startRecording({}).accepted;
+            receiver.stopRecording();
+            QTimer::singleShot(0, &window, [&] {
+                auto *confirmation = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(confirmation);
+                exitTitle = confirmation->windowTitle();
+                if (secondFails) receiver.failRecordingForTest("Second recording failed during exit");
+                else receiver.completeRecordingForTest({"C:/recordings/second-during-exit.mp4", "Second recording warning"});
+                exitOpenCount = receiver.configurationBatchCount;
+                if (!discard) QTimer::singleShot(0, &window, [&] {
+                    auto *replay = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                    QVERIFY(replay);
+                    replayTitle = replay->windowTitle();
+                    replayOpenCount = receiver.configurationBatchCount;
+                    replay->button(QMessageBox::Ok)->click();
+                });
+                confirmation->button(discard ? QMessageBox::Discard : QMessageBox::Cancel)->click();
+            });
+            closed = window.close();
+            firstStillVisible = first->isVisible();
+            countAfterCloseWhileFirstOpen = receiver.configurationBatchCount;
+            first->button(QMessageBox::Ok)->click();
+        });
+        if (firstFails) receiver.failRecordingForTest("First ordinary recording failed");
+        else receiver.completeRecordingForTest({"C:/recordings/first-ordinary.mp4", {}});
+        qInfo("mixed presentation: first=%d exit=%d replay=%d after-close-first-open=%d visible=%d closed=%d final=%d",
+              firstOpenCount, exitOpenCount, replayOpenCount, countAfterCloseWhileFirstOpen,
+              firstStillVisible, closed, receiver.configurationBatchCount);
+        QCOMPARE(firstTitle, firstFails ? QString("Recording failed") : QString("Recording saved"));
+        QCOMPARE(exitTitle, QString("Discard recording?"));
+        QVERIFY(nextStarted);
+        QCOMPARE(receiver.startRecordingCount, 2);
+        QCOMPARE(receiver.stopRecordingCount, 2);
+        QCOMPARE(firstOpenCount, 0);
+        QCOMPARE(exitOpenCount, 0);
+        QCOMPARE(closed, discard);
+        if (!discard) {
+            QCOMPARE(replayTitle, secondFails ? QString("Recording failed") : QString("Recording saved with warning"));
+            QCOMPARE(replayOpenCount, 0);
+            QVERIFY(firstStillVisible);
+        } else QCOMPARE(replayOpenCount, -1);
+        QCOMPARE(AppSettingsStore(settingsPath).loadOrDefaults().receiverName(), QString("Mixed presentation target"));
+        QCOMPARE(receiver.discardCallsIncludingIdle, discard ? 1 : 0);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, (firstFails ? 0 : 1) + (!discard && !secondFails ? 1 : 0));
+        QCOMPARE(countAfterCloseWhileFirstOpen, 0);
+        QCOMPARE(receiver.configurationBatchCount, discard ? 0 : 1);
+        QCOMPARE(receiver.stopCount, discard ? 0 : 1);
+        QCOMPARE(receiver.startCount, discard ? 0 : 1);
+        QCOMPARE(receiver.receiverName(), discard ? QString("AirPlay Receiver") : QString("Mixed presentation target"));
+    }
+    void pendingSettingsWaitForExitPromptAndTerminalPresentation_data() {
+        QTest::addColumn<bool>("discard");
+        QTest::newRow("cancel") << false;
+        QTest::newRow("discard") << true;
+    }
+
+    void pendingSettingsWaitForExitPromptAndTerminalPresentation() {
+        QFETCH(bool, discard);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto settingsPath = directory.filePath("settings.json");
+        ExitRaceRecordingReceiver receiver;
+        receiver.setRecordingAvailableForTest(true);
+        receiver.forceState(ReceiverState::Connected);
+        MainWindow window(AppSettings::defaults(), nullptr, &receiver, settingsPath);
+        auto *recordButton = window.findChild<QToolButton *>("recordingButton");
+        auto *settingsButton = window.findChild<QToolButton *>("settingsButton");
+        QVERIFY(recordButton);
+        QVERIFY(settingsButton);
+        recordButton->click();
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<SettingsDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            dialog->findChild<QLineEdit *>("receiverNameEdit")->setText("Saved target");
+            QTimer::singleShot(0, dialog, [] {
+                auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(prompt);
+                messageButton(prompt, "Disconnect and apply now")->click();
+            });
+            dialog->accept();
+        });
+        settingsButton->click();
+        QCOMPARE(receiver.recordingState(), RecordingState::Finalizing);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+        int countWhileExitPromptOpen = -1;
+        int countWhileResultPresented = -1;
+        bool sawResult = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *confirmation = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(confirmation);
+            QCOMPARE(confirmation->windowTitle(), QString("Discard recording?"));
+            receiver.completeRecordingForTest({"C:/recordings/finished-during-prompt.mp4", {}});
+            countWhileExitPromptOpen = receiver.configurationBatchCount;
+            confirmation->button(discard ? QMessageBox::Discard : QMessageBox::Cancel)->click();
+            if (!discard) QTimer::singleShot(0, &window, [&] {
+                auto *completion = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(completion);
+                sawResult = completion->windowTitle() == "Recording saved";
+                countWhileResultPresented = receiver.configurationBatchCount;
+                completion->button(QMessageBox::Ok)->click();
+            });
+        });
+        const bool closed = window.close();
+        qInfo("backend calls: exit prompt=%d, terminal presentation=%d, final=%d",
+            countWhileExitPromptOpen, countWhileResultPresented, receiver.configurationBatchCount);
+        QCOMPARE(countWhileExitPromptOpen, 0);
+        QCOMPARE(closed, discard);
+        QCOMPARE(receiver.configurationBatchCount, discard ? 0 : 1);
+        QCOMPARE(AppSettingsStore(settingsPath).loadOrDefaults().receiverName(), QString("Saved target"));
+        QCOMPARE(receiver.discardCallsIncludingIdle, discard ? 1 : 0);
+        QCOMPARE(receiver.acknowledgeRecordingResultCount, discard ? 0 : 1);
+        QCOMPARE(sawResult, !discard);
+        if (!discard) QCOMPARE(countWhileResultPresented, 0);
+    }
+
     void closeCancelLeavesRecordingUntouched() {
         FakeAirPlayReceiver receiver;
         receiver.setRecordingAvailableForTest(true);
@@ -1765,6 +2321,7 @@ private slots:
         FakeAirPlayReceiver receiver;
 
         MainWindow window(settings, nullptr, &receiver);
+        QCOMPARE(window.prepareReceiverStart().status, ReceiverStartPreparationStatus::Prepared);
 
         QCOMPARE(receiver.receiverName(), QString("Desk Receiver"));
     }
@@ -2074,13 +2631,7 @@ private slots:
             auto *edit = dialog->findChild<QLineEdit *>("receiverNameEdit");
             QVERIFY(edit != nullptr);
             edit->setText("AirPlay Receiver");
-            QTimer::singleShot(0, [] {
-                auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
-                QVERIFY(box != nullptr);
-                auto *defer = messageButton(box, "Apply after disconnect");
-                QVERIFY(defer != nullptr);
-                defer->click();
-            });
+
             dialog->accept();
         });
 
@@ -3275,6 +3826,7 @@ private slots:
         FakeAirPlayReceiver receiver;
 
         MainWindow window(settings, nullptr, &receiver);
+        QCOMPARE(window.prepareReceiverStart().status, ReceiverStartPreparationStatus::Prepared);
 
         QCOMPARE(receiver.lastAppliedVideoQuality, customQuality);
     }

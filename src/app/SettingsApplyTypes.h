@@ -2,6 +2,7 @@
 
 #include "app/AppSettingsStore.h"
 #include "app/UiMessage.h"
+#include "backend/ReceiverConfigurationChange.h"
 
 #include <QVector>
 
@@ -70,15 +71,6 @@ enum class ReceiverApplyTiming {
     AfterDisconnect,
 };
 
-struct SettingsApplyPlan {
-    AppSettings baseline;
-    AppSettings candidate;
-    QVector<SettingsFieldResult> validationResults;
-    QVector<SettingsFieldId> validChangedReceiverFields;
-    bool receiverSessionActive = false;
-    bool recordingIdle = false;
-    bool requiresReceiverTimingDecision = false;
-};
 
 enum class SettingsApplyGlobalStatus {
     PersistenceFailed,
@@ -105,3 +97,26 @@ QString formatSettingsFieldValue(const SettingsFieldValue &value);
 const SettingsFieldResult *resultForField(const QVector<SettingsFieldResult> &results,
                                           const SettingsFieldId &field);
 bool isFailureStatus(SettingsFieldStatus status);
+
+enum class SettingsSubmitStatus { Completed, Cancelled, Busy, Interrupted, TimingSelectionRequired };
+struct SettingsSubmitResult {
+    SettingsSubmitStatus status = SettingsSubmitStatus::Completed;
+    std::optional<SettingsApplyOutcome> outcome;
+    UiMessage userReason;
+    bool settingsSaved = false;
+    bool backendInvoked = false;
+    std::optional<ReceiverConfigurationBatchResult> backendResult;
+};
+enum class ReceiverStartPreparationStatus { Prepared, Unavailable, NotIdle, BackendFailure };
+struct ReceiverStartPreparationResult {
+    ReceiverStartPreparationStatus status = ReceiverStartPreparationStatus::Unavailable;
+    std::optional<ReceiverConfigurationBatchResult> backendResult;
+    UiMessage userReason;
+};
+enum class SettingsNotAppliedReason { ReceiverError };
+struct SettingsDeferredNotApplied {
+    SettingsNotAppliedReason reason = SettingsNotAppliedReason::ReceiverError;
+    UiMessage userReason;
+};
+using SettingsDeferredResult = std::variant<SettingsApplyOutcome, SettingsDeferredNotApplied>;
+Q_DECLARE_METATYPE(SettingsDeferredResult)

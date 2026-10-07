@@ -513,12 +513,15 @@ void SettingsDialog::refreshPresentation() {
     QStringList lines;
     if (globalResult_.has_value()) {
         const AppSettingsSaveResult &persistence = globalResult_->persistence;
-        QString reason = persistence.errorString;
-        if (!reason.endsWith('.')) {
-            reason += '.';
+        if (persistence.errorString.isEmpty() && !persistence.failureStage.has_value()
+            && persistence.fileError == QFileDevice::NoError) {
+            lines.push_back(tr("The final saved settings could not be confirmed. Apply again."));
+        } else {
+            QString reason = persistence.errorString;
+            if (!reason.endsWith('.')) reason += '.';
+            lines.push_back(tr("Could not confirm saved settings for %1: %2")
+                                .arg(persistence.targetPath, reason));
         }
-        lines.push_back(tr("Could not save %1: %2 No changes from this Apply were committed.")
-                            .arg(persistence.targetPath, reason));
     }
     if (globalResult_.has_value()) {
         int recoveryFailures = 0;
@@ -565,4 +568,9 @@ void SettingsDialog::refreshPresentation() {
 
 void SettingsDialog::accept() {
     emit applyRequested(draftSettings());
+}
+
+void SettingsDialog::presentSubmitError(UiMessage error) {
+    diagnosticActionError_ = std::move(error);
+    refreshPresentation();
 }

@@ -66,14 +66,17 @@ class RecordingSettingsPersistence final : public SettingsPersistence {
 public:
     AppSettingsSaveResult save(const AppSettings &settings) const override {
         saved.append(settings);
-        if (responses.isEmpty()) {
-            return {true};
+        const AppSettingsSaveResult result = responses.isEmpty()
+            ? AppSettingsSaveResult{true} : responses.takeFirst();
+        if (result.success) {
+            confirmed = settings;
         }
-        return responses.takeFirst();
+        return result;
     }
 
     mutable QVector<AppSettings> saved;
     mutable QVector<AppSettingsSaveResult> responses;
+    mutable AppSettings confirmed = AppSettings::defaults();
 };
 
 class RecordingHotkeyService final : public HotkeyService {
@@ -127,27 +130,37 @@ private:
     }
 };
 
-const SettingsFieldResult &requireResult(const SettingsApplyPlan &plan, const SettingsFieldId &field) {
-    const SettingsFieldResult *result = resultForField(plan.validationResults, field);
-    Q_ASSERT(result != nullptr);
-    return *result;
+struct ObservedApply : SettingsApplyOutcome { bool timingChosen = false; };
+ObservedApply observeApply(const AppSettings &baseline, const AppSettings &candidate, bool active) {
+    auto current = baseline;
+    FakeAirPlayReceiver receiver;
+    receiver.applyReceiverName(baseline.receiverName());
+    receiver.applyVideoQuality(baseline.videoQuality());
+    SettingsApplyCoordinator coordinator(current, nullptr, nullptr, &receiver);
+    if (active) receiver.forceState(ReceiverState::Connected);
+    bool chosen = false;
+    const auto submitted = coordinator.apply(candidate, [&] { chosen = true; return ReceiverApplyTiming::Immediate; });
+    Q_ASSERT(submitted.outcome.has_value());
+    ObservedApply result;
+    static_cast<SettingsApplyOutcome &>(result) = *submitted.outcome;
+    result.timingChosen = chosen;
+    return result;
 }
-
-void verifyValid(const SettingsApplyPlan &plan, const SettingsFieldId &field) {
-    const SettingsFieldResult &result = requireResult(plan, field);
-    QCOMPARE(result.status, SettingsFieldStatus::Unchanged);
-    QVERIFY(result.reason.isEmpty());
-    QVERIFY(!result.nativeErrorCode.has_value());
-    QVERIFY(result.recoveryError.isEmpty());
+void verifyValid(const SettingsApplyOutcome &outcome, const SettingsFieldId &field) {
+    const auto *result = resultForField(outcome.fieldResults, field);
+    QVERIFY(result);
+    QVERIFY(result->status == SettingsFieldStatus::Unchanged || result->status == SettingsFieldStatus::Applied);
+    QVERIFY(result->reason.isEmpty());
+    QVERIFY(!result->nativeErrorCode.has_value());
+    QVERIFY(result->recoveryError.isEmpty());
 }
-
-void verifyValidationFailure(const SettingsApplyPlan &plan, const SettingsFieldId &field,
-                             const QString &reason) {
-    const SettingsFieldResult &result = requireResult(plan, field);
-    QCOMPARE(result.status, SettingsFieldStatus::ValidationFailed);
-    QCOMPARE(result.reason, reason);
-    QVERIFY(!result.nativeErrorCode.has_value());
-    QVERIFY(result.recoveryError.isEmpty());
+void verifyValidationFailure(const SettingsApplyOutcome &outcome, const SettingsFieldId &field, const QString &reason) {
+    const auto *result = resultForField(outcome.fieldResults, field);
+    QVERIFY(result);
+    QCOMPARE(result->status, SettingsFieldStatus::ValidationFailed);
+    QCOMPARE(result->reason, reason);
+    QVERIFY(!result->nativeErrorCode.has_value());
+    QVERIFY(result->recoveryError.isEmpty());
 }
 
 const SettingsFieldResult &requireResult(const SettingsApplyOutcome &outcome,
@@ -186,10 +199,272 @@ void seed(FakeHotkeyService *hotkeys, const AppSettings &settings) {
 
 } // namespace
 
+class CoordinatorHarness {
+public:
+    CoordinatorHarness() : coordinator(current, nullptr, &persistence, &receiver) {
+        Q_ASSERT(current.receiverName() == receiver.receiverName());
+        Q_ASSERT(current.videoQuality() == receiver.videoQuality());
+        QObject::connect(&coordinator, &SettingsApplyCoordinator::deferredApplyFinished, &receiver,
+            [this](const SettingsDeferredResult &result) { completion = std::get<SettingsApplyOutcome>(result); });
+    }
+    SettingsApplyOutcome submit(const AppSettings &candidate, ReceiverApplyTiming timing) {
+        return *coordinator.apply(candidate, [timing] { return timing; }).outcome;
+    }
+    void disconnectSession() { receiver.forceState(ReceiverState::Discoverable); }
+    AppSettings current = AppSettings::defaults();
+    RecordingSettingsPersistence persistence;
+    FakeAirPlayReceiver receiver;
+    SettingsApplyCoordinator coordinator;
+    std::optional<SettingsApplyOutcome> completion;
+};
 class SettingsApplyCoordinatorTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void invalidNameWithValidQualityFailurePreservesValidation() {
+        for (int failure = 0; failure < 3; ++failure) {
+            CoordinatorHarness h;
+            h.receiver.forceState(ReceiverState::Connected);
+            auto name = h.current;
+            name.setReceiverName("Desk Receiver");
+            h.submit(name, ReceiverApplyTiming::AfterDisconnect);
+            auto candidate = h.current;
+            candidate.setReceiverName("");
+            candidate.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+            h.receiver.requestedConfigurationRestartError = "Requested restart failed";
+            if (failure == 1) {
+                h.receiver.rollbackConfigurationRestartError = "Recovery restart failed";
+            } else if (failure == 2) {
+                h.persistence.responses.append(AppSettingsSaveResult{true});
+                h.persistence.responses.append(
+                    {false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                     QFileDevice::WriteError, "Compensation commit failed"});
+            }
+            const auto outcome = h.submit(candidate, ReceiverApplyTiming::Immediate);
+            const auto &invalid = requireResult(outcome, SettingsFieldId::receiverName());
+            QCOMPARE(invalid.status, SettingsFieldStatus::ValidationFailed);
+            QCOMPARE(std::get<QString>(invalid.attemptedValue), QString(""));
+            QCOMPARE(invalid.reason, QString("Receiver name cannot be empty."));
+            QCOMPARE(h.receiver.configurationBatchCount, 1);
+            QCOMPARE(h.receiver.configurationBatchRequests.constLast().rollbackReceiverName,
+                     QString("AirPlay Receiver"));
+            QCOMPARE(h.current.receiverName(),
+                     failure == 0 ? QString("AirPlay Receiver") : QString("Desk Receiver"));
+            QCOMPARE(h.current.videoQuality(),
+                     failure == 0 ? VideoQualitySettings() : candidate.videoQuality());
+            QCOMPARE(h.persistence.confirmed.receiverName(), h.current.receiverName());
+            QCOMPARE(h.persistence.confirmed.videoQuality(), h.current.videoQuality());
+        }
+    }
+    void mergedFailureUsesActualBaselineAndLatestOtherSettings_data() {
+        QTest::addColumn<bool>("recoveryFails");
+        QTest::addColumn<bool>("compensationFails");
+        QTest::newRow("restored") << false << false;
+        QTest::newRow("recovery-fails") << true << false;
+        QTest::newRow("compensation-commit-fails") << false << true;
+    }
+
+    void mergedFailureUsesActualBaselineAndLatestOtherSettings() {
+        QFETCH(bool, recoveryFails);
+        QFETCH(bool, compensationFails);
+        CoordinatorHarness h;
+        h.receiver.forceState(ReceiverState::Connected);
+        auto name = h.current;
+        name.setReceiverName("Desk Receiver");
+        h.submit(name, ReceiverApplyTiming::AfterDisconnect);
+        auto quality = h.current;
+        quality.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+        h.submit(quality, ReceiverApplyTiming::AfterDisconnect);
+        auto other = h.current;
+        other.setLanguage("zh-CN");
+        h.submit(other, ReceiverApplyTiming::Immediate);
+        h.current.setVolume(42);
+        QVERIFY(h.persistence.save(h.current).success);
+        h.receiver.requestedConfigurationRestartError = "Requested restart failed";
+        if (recoveryFails) {
+            h.receiver.rollbackConfigurationRestartError = "Recovery restart failed";
+        }
+        if (compensationFails) {
+            h.persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
+                                            QFileDevice::WriteError, "Compensation commit failed"});
+        }
+        h.disconnectSession();
+        QVERIFY(h.completion.has_value());
+        QCOMPARE(h.receiver.configurationBatchCount, 1);
+        QCOMPARE(h.receiver.configurationBatchRequests.constLast().rollbackReceiverName,
+                 QString("AirPlay Receiver"));
+        QCOMPARE(h.receiver.configurationBatchRequests.constLast().rollbackVideoQuality,
+                 VideoQualitySettings());
+        QCOMPARE(h.current.volume(), 42);
+        QCOMPARE(h.current.language(), QString("zh-CN"));
+        if (recoveryFails || compensationFails) {
+            QCOMPARE(h.current.receiverName(), QString("Desk Receiver"));
+            QCOMPARE(h.current.videoQuality(), quality.videoQuality());
+            verifyStatus(*h.completion, SettingsFieldId::receiverName(),
+                         SettingsFieldStatus::RecoveryFailed);
+        } else {
+            QCOMPARE(h.current.receiverName(), QString("AirPlay Receiver"));
+            QCOMPARE(h.current.videoQuality(), VideoQualitySettings());
+            verifyStatus(*h.completion, SettingsFieldId::receiverName(),
+                         SettingsFieldStatus::ApplyFailedRolledBack);
+        }
+        if (compensationFails) {
+            QVERIFY(h.completion->globalResult.has_value());
+            QCOMPARE(h.completion->globalResult->status, SettingsApplyGlobalStatus::PersistenceFailed);
+        }
+        QCOMPARE(h.persistence.confirmed.receiverName(), h.current.receiverName());
+        QCOMPARE(h.persistence.confirmed.videoQuality(), h.current.videoQuality());
+        QCOMPARE(h.persistence.confirmed.volume(), h.current.volume());
+        QCOMPARE(h.persistence.confirmed.language(), h.current.language());
+        QCOMPARE(h.receiver.receiverName(), QString("AirPlay Receiver"));
+        QCOMPARE(h.receiver.videoQuality(), VideoQualitySettings());
+    }
+
+    void mergesSuccessiveNameAndQualityAfterDisconnect() {
+        CoordinatorHarness h;
+        h.receiver.forceState(ReceiverState::Connected);
+        auto name = h.current;
+        name.setReceiverName("Desk Receiver");
+        h.submit(name, ReceiverApplyTiming::AfterDisconnect);
+        auto quality = h.current;
+        quality.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+        h.submit(quality, ReceiverApplyTiming::AfterDisconnect);
+        QCOMPARE(h.receiver.configurationBatchCount, 0);
+        QCOMPARE(h.persistence.confirmed.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(h.persistence.confirmed.videoQuality(), quality.videoQuality());
+        h.disconnectSession();
+        QCOMPARE(h.receiver.configurationBatchCount, 1);
+        QCOMPARE(h.receiver.configurationRestartCount, 1);
+        QCOMPARE(h.receiver.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(h.receiver.videoQuality(), quality.videoQuality());
+        QCOMPARE(h.current.receiverName(), h.receiver.receiverName());
+    }
+
+    void latestReceiverTimingControlsMergedBatch() {
+        for (bool recording : {false, true}) {
+            CoordinatorHarness h;
+            h.receiver.forceState(ReceiverState::Connected);
+            auto name = h.current;
+            name.setReceiverName("Desk Receiver");
+            h.submit(name, ReceiverApplyTiming::AfterDisconnect);
+            if (recording) {
+                h.receiver.setRecordingAvailableForTest(true);
+                QVERIFY(h.receiver.startRecording({}).accepted);
+            }
+            auto quality = h.current;
+            quality.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+            h.submit(quality, ReceiverApplyTiming::Immediate);
+            QCOMPARE(h.receiver.configurationBatchCount, recording ? 0 : 1);
+            if (recording) {
+                QCOMPARE(h.receiver.recordingState(), RecordingState::Finalizing);
+                h.receiver.completeRecordingForTest({});
+            }
+            QCOMPARE(h.receiver.configurationBatchCount, 1);
+            QCOMPARE(h.receiver.receiverName(), QString("Desk Receiver"));
+            QCOMPARE(h.receiver.videoQuality(), quality.videoQuality());
+            QCOMPARE(h.receiver.configurationBatchRequests.constLast().rollbackReceiverName,
+                     QString("AirPlay Receiver"));
+        }
+    }
+
+    void withdrawnFieldsDoNotRestartButOtherFieldsRemainPending() {
+        for (int withdrawnField = 0; withdrawnField < 3; ++withdrawnField) {
+            CoordinatorHarness h;
+            h.receiver.forceState(ReceiverState::Connected);
+            auto target = h.current;
+            target.setReceiverName("Desk Receiver");
+            target.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+            h.submit(target, ReceiverApplyTiming::AfterDisconnect);
+            auto withdrawn = h.current;
+            if (withdrawnField == 0) {
+                withdrawn.setReceiverName("AirPlay Receiver");
+            } else {
+                auto quality = withdrawn.videoQuality();
+                if (withdrawnField == 1) {
+                    quality.resolution = VideoResolution::P1080;
+                } else {
+                    quality.frameRate = VideoFrameRate::Fps30;
+                }
+                withdrawn.setVideoQuality(quality);
+            }
+            h.submit(withdrawn, ReceiverApplyTiming::AfterDisconnect);
+            h.disconnectSession();
+            QCOMPARE(h.receiver.configurationBatchCount, 1);
+            QCOMPARE(h.receiver.configurationRestartCount, 1);
+            const auto &batch = h.receiver.configurationBatchRequests.constLast();
+            QCOMPARE(batch.receiverNameChanged, withdrawnField != 0);
+            QCOMPARE(batch.resolutionChanged, withdrawnField != 1);
+            QCOMPARE(batch.frameRateChanged, withdrawnField != 2);
+            QCOMPARE(h.receiver.receiverName(), withdrawn.receiverName());
+            QCOMPARE(h.receiver.videoQuality(), withdrawn.videoQuality());
+        }
+
+        CoordinatorHarness all;
+        all.receiver.forceState(ReceiverState::Connected);
+        auto changed = all.current;
+        changed.setReceiverName("Desk Receiver");
+        changed.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+        all.submit(changed, ReceiverApplyTiming::AfterDisconnect);
+        auto original = all.current;
+        original.setReceiverName("AirPlay Receiver");
+        original.setVideoQuality(VideoQualitySettings());
+        all.submit(original, ReceiverApplyTiming::AfterDisconnect);
+        QCOMPARE(all.receiver.configurationBatchCount, 0);
+        all.disconnectSession();
+        QCOMPARE(all.receiver.configurationBatchCount, 0);
+    }
+    void nonReceiverInvalidAndSaveFailurePreservePendingGates() {
+        for (AppSettingsSaveStage stage : {AppSettingsSaveStage::Open,
+                                           AppSettingsSaveStage::Write,
+                                           AppSettingsSaveStage::Commit}) {
+            CoordinatorHarness h;
+            h.receiver.forceState(ReceiverState::Connected);
+            auto name = h.current;
+            name.setReceiverName("Desk Receiver");
+            h.submit(name, ReceiverApplyTiming::AfterDisconnect);
+            auto language = h.current;
+            language.setLanguage("zh-CN");
+            h.submit(language, ReceiverApplyTiming::Immediate);
+            auto invalid = h.current;
+            invalid.setReceiverName("");
+            const auto invalidOutcome = h.submit(invalid, ReceiverApplyTiming::Immediate);
+            verifyStatus(invalidOutcome, SettingsFieldId::receiverName(),
+                         SettingsFieldStatus::ValidationFailed);
+            auto failed = h.current;
+            failed.setReceiverName("Failed Receiver");
+            h.persistence.responses.append({false, "C:/settings.json", stage,
+                                            QFileDevice::WriteError, "Exact save failure"});
+            QVERIFY(h.submit(failed, ReceiverApplyTiming::Immediate).globalResult.has_value());
+            QCOMPARE(h.receiver.configurationBatchCount, 0);
+            h.disconnectSession();
+            QCOMPARE(h.receiver.configurationBatchCount, 1);
+            QCOMPARE(h.receiver.receiverName(), QString("Desk Receiver"));
+            QCOMPARE(h.current.language(), QString("zh-CN"));
+            QCOMPARE(h.persistence.confirmed.receiverName(), QString("Desk Receiver"));
+        }
+    }
+
+    void invalidNameWithValidQualityPreservesValidationAndPriorTarget() {
+        CoordinatorHarness h;
+        h.receiver.forceState(ReceiverState::Connected);
+        auto name = h.current;
+        name.setReceiverName("Desk Receiver");
+        h.submit(name, ReceiverApplyTiming::AfterDisconnect);
+        auto candidate = h.current;
+        candidate.setReceiverName("");
+        candidate.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+        const auto outcome = h.submit(candidate, ReceiverApplyTiming::AfterDisconnect);
+        const auto &invalid = requireResult(outcome, SettingsFieldId::receiverName());
+        QCOMPARE(invalid.status, SettingsFieldStatus::ValidationFailed);
+        QCOMPARE(std::get<QString>(invalid.attemptedValue), QString(""));
+        QCOMPARE(invalid.reason, QString("Receiver name cannot be empty."));
+        QCOMPARE(h.current.receiverName(), QString("Desk Receiver"));
+        h.disconnectSession();
+        QCOMPARE(h.receiver.configurationBatchCount, 1);
+        QCOMPARE(h.receiver.receiverName(), QString("Desk Receiver"));
+        QCOMPARE(h.receiver.videoQuality(), candidate.videoQuality());
+    }
+
     void emptyReceiverNameDoesNotInvalidateFrameRate() {
         const AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
@@ -198,17 +473,14 @@ private slots:
         quality.frameRate = VideoFrameRate::Fps60;
         candidate.setVideoQuality(quality);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, true, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, true);
 
-        QCOMPARE(plan.validationResults.size(), 15);
+        QCOMPARE(plan.fieldResults.size(), 15);
         verifyValidationFailure(plan, SettingsFieldId::receiverName(),
                                 QStringLiteral("Receiver name cannot be empty."));
         verifyValid(plan, SettingsFieldId::language());
         verifyValid(plan, SettingsFieldId::videoFrameRate());
-        QVERIFY(plan.validChangedReceiverFields
-                == QVector<SettingsFieldId>{SettingsFieldId::videoFrameRate()});
-        QVERIFY(plan.requiresReceiverTimingDecision);
+        QVERIFY(plan.timingChosen);
     }
 
     void duplicateShortcutMarksBothRowsInvalid() {
@@ -218,8 +490,7 @@ private slots:
         candidate.setShortcut(ShortcutAction::ToggleToolbar, duplicate);
         candidate.setShortcut(ShortcutAction::ToggleRecording, duplicate);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, false);
 
         const QString reason = QStringLiteral("Shortcut Ctrl+Alt+B is assigned to more than one action.");
         verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), reason);
@@ -240,8 +511,7 @@ private slots:
         candidate.setShortcut(ShortcutAction::ToggleToolbar, multipleCombinations);
         candidate.setShortcut(ShortcutAction::ToggleRecording, multipleCombinations);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, false);
 
         const QString reason = QStringLiteral("Shortcut must use a single key combination.");
         verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), reason);
@@ -255,8 +525,7 @@ private slots:
         candidate.setShortcut(ShortcutAction::ToggleToolbar, unsupported);
         candidate.setShortcut(ShortcutAction::ToggleRecording, unsupported);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, false);
 
         const QString reason = QStringLiteral("Shortcut is not supported as a Windows global hotkey.");
         verifyValidationFailure(plan, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar), reason);
@@ -274,8 +543,7 @@ private slots:
         candidate.setShortcut(ShortcutAction::ToggleToolbar, duplicate);
         candidate.setShortcut(ShortcutAction::ToggleRecording, duplicate);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, false);
 
         verifyValidationFailure(plan, SettingsFieldId::receiverName(),
                                 QStringLiteral("Receiver name cannot be empty."));
@@ -299,17 +567,12 @@ private slots:
     }
 
     void unchangedOrInvalidReceiverFieldsDoNotRequestTimingDecision() {
-        const AppSettings baseline = AppSettings::defaults();
-        const SettingsApplyCoordinator coordinator(nullptr, nullptr, nullptr, nullptr);
-        QVERIFY(!coordinator.plan(baseline, baseline, true, RecordingState::Idle)
-                     .requiresReceiverTimingDecision);
-
-        AppSettings invalidName = baseline;
-        invalidName.setReceiverName({});
-        const SettingsApplyPlan invalidPlan = coordinator.plan(baseline, invalidName, true,
-                                                               RecordingState::Idle);
-        QVERIFY(!invalidPlan.requiresReceiverTimingDecision);
-        QVERIFY(invalidPlan.validChangedReceiverFields.isEmpty());
+        const auto baseline=AppSettings::defaults();
+        QVERIFY(!observeApply(baseline, baseline, true).timingChosen);
+        auto invalid=baseline; invalid.setReceiverName({});
+        const auto result=observeApply(baseline, invalid, true);
+        QVERIFY(!result.timingChosen);
+        verifyStatus(result, SettingsFieldId::receiverName(), SettingsFieldStatus::ValidationFailed);
     }
 
     void oneValidChangedReceiverFieldRequestsTimingDecisionDuringSession() {
@@ -319,12 +582,9 @@ private slots:
         quality.resolution = VideoResolution::P720;
         candidate.setVideoQuality(quality);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, true, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, true);
 
-        QVERIFY(plan.requiresReceiverTimingDecision);
-        QVERIFY(plan.validChangedReceiverFields
-                == QVector<SettingsFieldId>{SettingsFieldId::videoResolution()});
+        QVERIFY(plan.timingChosen);
     }
 
     void validReceiverChangeDoesNotRequestDecisionWhenSessionInactive() {
@@ -332,12 +592,9 @@ private slots:
         AppSettings candidate = baseline;
         candidate.setReceiverName("Desk Receiver");
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, false);
 
-        QVERIFY(!plan.requiresReceiverTimingDecision);
-        QVERIFY(plan.validChangedReceiverFields
-                == QVector<SettingsFieldId>{SettingsFieldId::receiverName()});
+        QVERIFY(!plan.timingChosen);
     }
 
     void invalidReceiverFieldAlongsideValidChangeStillRequestsDecision() {
@@ -348,12 +605,9 @@ private slots:
         quality.frameRate = VideoFrameRate::Fps60;
         candidate.setVideoQuality(quality);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, true, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, true);
 
-        QVERIFY(plan.requiresReceiverTimingDecision);
-        QVERIFY(plan.validChangedReceiverFields
-                == QVector<SettingsFieldId>{SettingsFieldId::videoFrameRate()});
+        QVERIFY(plan.timingChosen);
     }
 
     void languageOnlyChangeDoesNotRequestReceiverTimingDecision() {
@@ -361,11 +615,9 @@ private slots:
         AppSettings candidate = baseline;
         candidate.setLanguage("zh-CN");
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, true, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, true);
 
-        QVERIFY(!plan.requiresReceiverTimingDecision);
-        QVERIFY(plan.validChangedReceiverFields.isEmpty());
+        QVERIFY(!plan.timingChosen);
         verifyValid(plan, SettingsFieldId::language());
     }
 
@@ -374,11 +626,10 @@ private slots:
         AppSettings candidate = baseline;
         candidate.setLanguage("zh-CN");
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QCOMPARE(persistence.saved.constFirst().language(), QString("zh-CN"));
@@ -394,11 +645,10 @@ private slots:
         RecordingSettingsPersistence persistence;
         persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
                                       QFileDevice::WriteError, "Disk full"});
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QCOMPARE(outcome.committedSettings.language(), QString("system"));
@@ -413,15 +663,13 @@ private slots:
         AppSettings candidate = baseline;
         candidate.setToolbarHoverReveal(false);
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyPlan plan = coordinator.plan(
-            baseline, candidate, true, RecordingState::Idle);
-        QVERIFY(!plan.requiresReceiverTimingDecision);
-        QVERIFY(plan.validChangedReceiverFields.isEmpty());
+        const ObservedApply plan = observeApply(baseline, candidate, true);
+        QVERIFY(!plan.timingChosen);
         verifyValid(plan, SettingsFieldId::toolbarHoverReveal());
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            plan, ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QVERIFY(!persistence.saved.constFirst().toolbarHoverReveal());
@@ -438,11 +686,10 @@ private slots:
         RecordingSettingsPersistence persistence;
         persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
                                       QFileDevice::WriteError, "Disk full"});
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QVERIFY(outcome.committedSettings.toolbarHoverReveal());
@@ -452,12 +699,19 @@ private slots:
         QVERIFY(!outcome.mayClose);
     }
 
-    void planCopiesRecordingIdleState() {
-        const AppSettings settings = AppSettings::defaults();
-        const SettingsApplyCoordinator coordinator(nullptr, nullptr, nullptr, nullptr);
-        QVERIFY(coordinator.plan(settings, settings, false, RecordingState::Idle).recordingIdle);
-        QVERIFY(!coordinator.plan(settings, settings, false, RecordingState::Recording).recordingIdle);
-        QVERIFY(!coordinator.plan(settings, settings, false, RecordingState::Finalizing).recordingIdle);
+    void recordingIdleControlsApplyGate() {
+        for (auto state : {RecordingState::Idle, RecordingState::Recording, RecordingState::Finalizing}) {
+            CoordinatorHarness h;
+            if (state != RecordingState::Idle) {
+                h.receiver.setRecordingAvailableForTest(true);
+                h.receiver.startRecording({});
+                if (state == RecordingState::Finalizing) h.receiver.stopRecording();
+            }
+            auto draft=h.current; draft.setReceiverName("New name");
+            h.submit(draft, ReceiverApplyTiming::Immediate);
+            QCOMPARE(h.receiver.configurationBatchCount, state == RecordingState::Idle ? 1 : 0);
+            QCOMPARE(h.receiver.stopRecordingCount, state == RecordingState::Idle ? 0 : 1);
+        }
     }
 
     void validationOrderAndAttemptedValuesCoverEveryFieldType() {
@@ -470,47 +724,47 @@ private slots:
         candidate.setRecordingOutputDirectory("C:/Temp/AirPlay");
         candidate.setShowRecordingCompletionMessage(false);
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, false);
 
-        QCOMPARE(plan.baseline.receiverName(), baseline.receiverName());
-        QCOMPARE(plan.candidate.receiverName(), candidate.receiverName());
-        QCOMPARE(plan.receiverSessionActive, false);
-        QCOMPARE(plan.validationResults.size(), allSettingsFields().size());
+        QCOMPARE(baseline.receiverName(), QString("AirPlay Receiver"));
+        QCOMPARE(plan.committedSettings.receiverName(), candidate.receiverName());
+        QCOMPARE(plan.timingChosen, false);
+        QCOMPARE(plan.fieldResults.size(), allSettingsFields().size());
         const QVector<SettingsFieldId> fields = allSettingsFields();
-        for (qsizetype index = 0; index < plan.validationResults.size(); ++index) {
+        for (qsizetype index = 0; index < plan.fieldResults.size(); ++index) {
             const SettingsFieldId &field = fields.at(index);
-            QCOMPARE(plan.validationResults.at(index).field, field);
-            QVERIFY(plan.validationResults.at(index).attemptedValue
+            QCOMPARE(plan.fieldResults.at(index).field, field);
+            QVERIFY(plan.fieldResults.at(index).attemptedValue
                     == settingsFieldValue(candidate, field));
         }
-        QVERIFY(std::holds_alternative<QString>(plan.validationResults.at(0).attemptedValue));
-        QCOMPARE(std::get<QString>(plan.validationResults.at(1).attemptedValue), QString("zh-CN"));
-        QVERIFY(std::holds_alternative<VideoResolution>(plan.validationResults.at(2).attemptedValue));
-        QVERIFY(std::holds_alternative<VideoFrameRate>(plan.validationResults.at(3).attemptedValue));
-        QVERIFY(std::holds_alternative<QKeySequence>(plan.validationResults.at(4).attemptedValue));
-        QVERIFY(std::holds_alternative<RecordingFormat>(plan.validationResults.at(11).attemptedValue));
-        QVERIFY(std::holds_alternative<QString>(plan.validationResults.at(12).attemptedValue));
-        QVERIFY(std::holds_alternative<bool>(plan.validationResults.at(13).attemptedValue));
+        QVERIFY(std::holds_alternative<QString>(plan.fieldResults.at(0).attemptedValue));
+        QCOMPARE(std::get<QString>(plan.fieldResults.at(1).attemptedValue), QString("zh-CN"));
+        QVERIFY(std::holds_alternative<VideoResolution>(plan.fieldResults.at(2).attemptedValue));
+        QVERIFY(std::holds_alternative<VideoFrameRate>(plan.fieldResults.at(3).attemptedValue));
+        QVERIFY(std::holds_alternative<QKeySequence>(plan.fieldResults.at(4).attemptedValue));
+        QVERIFY(std::holds_alternative<RecordingFormat>(plan.fieldResults.at(11).attemptedValue));
+        QVERIFY(std::holds_alternative<QString>(plan.fieldResults.at(12).attemptedValue));
+        QVERIFY(std::holds_alternative<bool>(plan.fieldResults.at(13).attemptedValue));
     }
 
-    void planDoesNotInvokeDependenciesAndAllowsNullDependencies() {
-        const AppSettings settings = AppSettings::defaults();
+    void cancelledTimingChoiceInvokesNoApplyDependencies() {
+        auto current = AppSettings::defaults();
         FakeHotkeyService hotkeys;
         CountingPersistence persistence;
         FakeAirPlayReceiver receiver;
-        SettingsChangeDeferrer deferrer;
-        const SettingsApplyCoordinator coordinator(&hotkeys, &persistence, &receiver, &deferrer);
-
-        coordinator.plan(settings, settings, false, RecordingState::Idle);
-
+        SettingsApplyCoordinator coordinator(current, &hotkeys, &persistence, &receiver);
+        receiver.forceState(ReceiverState::Connected);
+        auto draft=current; draft.setReceiverName("Cancelled");
+        const auto result=coordinator.apply(draft, [&] {
+            Q_ASSERT(hotkeys.attempts.isEmpty() && persistence.saveCount == 0 && receiver.configurationBatchCount == 0);
+            return std::optional<ReceiverApplyTiming>{};
+        });
+        QCOMPARE(result.status, SettingsSubmitStatus::Cancelled);
         QVERIFY(hotkeys.attempts.isEmpty());
         QCOMPARE(persistence.saveCount, 0);
         QCOMPARE(receiver.configurationBatchCount, 0);
-        QVERIFY(!deferrer.hasPendingReceiverConfiguration());
-        const SettingsApplyPlan nullPlan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                                .plan(settings, settings, false, RecordingState::Idle);
-        QCOMPARE(nullPlan.validationResults.size(), 15);
+        SettingsApplyCoordinator nullCoordinator(current, nullptr, nullptr, nullptr);
+        QCOMPARE(nullCoordinator.apply(current, {}).outcome->fieldResults.size(), 15);
     }
 
     void oneShortcutFailureDoesNotRollbackAnotherShortcut() {
@@ -525,11 +779,10 @@ private slots:
         hotkeys.responses = {{true, false},
                               {false, false, HotkeyError{123, "Candidate rejected"}, true}};
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QCOMPARE(persistence.saved.first().shortcutFor(ShortcutAction::ToggleAlwaysOnTop), alwaysOnTop);
@@ -558,11 +811,10 @@ private slots:
         FakeHotkeyService hotkeys;
         seed(&hotkeys, baseline);
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(outcome.fieldResults.size(), allSettingsFields().size());
         for (qsizetype index = 0; index < outcome.fieldResults.size(); ++index) {
@@ -600,11 +852,10 @@ private slots:
                        baseline.shortcutFor(ShortcutAction::VolumeUp), 1409,
                        "Volume Up restoration rejected");
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         const AppSettings &saved = persistence.saved.constFirst();
@@ -658,11 +909,10 @@ private slots:
         hotkeys.reject(ShortcutAction::VolumeUp,
                        candidate.shortcutFor(ShortcutAction::VolumeUp));
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
                      SettingsFieldStatus::ApplyFailedRolledBack);
@@ -692,11 +942,10 @@ private slots:
         RecordingSettingsPersistence persistence;
         persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
                                       QFileDevice::WriteError, "Disk full"});
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QVERIFY(outcome.globalResult.has_value());
         verifyStatus(outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleToolbar),
@@ -732,12 +981,10 @@ private slots:
         hotkeys.responses = {{false, false, HotkeyError{321, "Denied"}, true}};
         RecordingSettingsPersistence persistence;
         FakeAirPlayReceiver receiver;
-        SettingsChangeDeferrer deferrer;
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, &receiver, &deferrer);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
                  baseline.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
@@ -761,11 +1008,10 @@ private slots:
         hotkeys.seed(baseline);
         hotkeys.responses = {{false, false, HotkeyError{87, "Candidate rejected"}, false,
                               HotkeyError{88, "Restore rejected"}}};
-        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, nullptr, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &result = requireResult(
             outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop));
 
@@ -785,10 +1031,10 @@ private slots:
         const AppSettings baseline = AppSettings::defaults();
         RecordingHotkeyService hotkeys;
         hotkeys.seed(baseline);
-        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, nullptr, nullptr);
 
-        coordinator.execute(coordinator.plan(baseline, baseline, false, RecordingState::Idle),
-                            ReceiverApplyTiming::Immediate);
+        *coordinator.apply(baseline, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         const QVector<ShortcutAction> expected = shortcutActionsInSettingsOrder();
         QCOMPARE(hotkeys.calls.size(), expected.size());
@@ -805,13 +1051,11 @@ private slots:
         candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
         RecordingHotkeyService hotkeys;
         hotkeys.seed(baseline);
-        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, nullptr, nullptr);
 
-        const SettingsApplyOutcome first = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
-        coordinator.execute(coordinator.plan(first.committedSettings, candidate, false, RecordingState::Idle),
-                            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome first = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
+        *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(hotkeys.calls.size(), 14);
         QCOMPARE(hotkeys.calls.at(7).action, ShortcutAction::ToggleAlwaysOnTop);
@@ -827,11 +1071,10 @@ private slots:
         RecordingHotkeyService hotkeys;
         hotkeys.seed(baseline);
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
@@ -858,12 +1101,10 @@ private slots:
                                                 QFileDevice::WriteError, "Exact save failure"};
             persistence.responses.append(failure);
             FakeAirPlayReceiver receiver;
-            SettingsChangeDeferrer deferrer;
-            SettingsApplyCoordinator coordinator(&hotkeys, &persistence, &receiver, &deferrer);
+                AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, &receiver);
 
-            const SettingsApplyOutcome outcome = coordinator.execute(
-                coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-                ReceiverApplyTiming::Immediate);
+            const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
             QCOMPARE(persistence.saved.size(), 1);
             QVERIFY(outcome.globalResult.has_value());
@@ -874,7 +1115,7 @@ private slots:
             QCOMPARE(outcome.globalResult->persistence.errorString, failure.errorString);
             QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
             QCOMPARE(receiver.configurationBatchCount, 0);
-            QVERIFY(!deferrer.hasPendingReceiverConfiguration());
+            QCOMPARE(receiver.configurationBatchCount, 0);
             QVERIFY(!outcome.mayClose);
         }
     }
@@ -889,11 +1130,10 @@ private slots:
         RecordingSettingsPersistence persistence;
         persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
                                       QFileDevice::WriteError, "Commit failed"});
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(hotkeys.calls.size(), 9);
         QCOMPARE(hotkeys.calls.at(7).action, ShortcutAction::VolumeUp);
@@ -929,11 +1169,10 @@ private slots:
         RecordingSettingsPersistence persistence;
         persistence.responses.append({false, "C:/settings.json", AppSettingsSaveStage::Commit,
                                       QFileDevice::WriteError, "Commit failed"});
-        SettingsApplyCoordinator coordinator(&hotkeys, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &volumeUp = requireResult(
             outcome, SettingsFieldId::shortcut(ShortcutAction::VolumeUp));
 
@@ -953,11 +1192,10 @@ private slots:
         const AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
         candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
-        SettingsApplyCoordinator coordinator(nullptr, nullptr, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, nullptr, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::AfterDisconnect);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; }).outcome;
 
         QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
                  candidate.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
@@ -974,12 +1212,10 @@ private slots:
         candidate.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
         RecordingSettingsPersistence persistence;
         FakeAirPlayReceiver receiver;
-        SettingsChangeDeferrer deferrer;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QCOMPARE(receiver.configurationBatchCount, 1);
@@ -1008,12 +1244,10 @@ private slots:
         FakeAirPlayReceiver receiver;
         receiver.forceState(ReceiverState::Connected);
         receiver.requestedConfigurationRestartError = "Requested restart failed";
-        SettingsChangeDeferrer deferrer;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(receiver.configurationBatchCount, 1);
         QCOMPARE(persistence.saved.size(), 2);
@@ -1044,12 +1278,10 @@ private slots:
         FakeAirPlayReceiver receiver;
         receiver.forceState(ReceiverState::Connected);
         receiver.requestedConfigurationRestartError = "Requested restart failed";
-        SettingsChangeDeferrer deferrer;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         verifyStatus(outcome, SettingsFieldId::videoResolution(), SettingsFieldStatus::Unchanged);
         QCOMPARE(outcome.committedSettings.videoQuality().resolution,
@@ -1065,11 +1297,10 @@ private slots:
         receiver.forceState(ReceiverState::Connected);
         receiver.requestedConfigurationRestartError = "Requested restart failed";
         receiver.rollbackConfigurationRestartError = "Rollback restart failed";
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
 
         QCOMPARE(result.status, SettingsFieldStatus::RecoveryFailed);
@@ -1092,11 +1323,10 @@ private slots:
         FakeAirPlayReceiver receiver;
         receiver.forceState(ReceiverState::Connected);
         receiver.requestedConfigurationRestartError = "Requested restart failed";
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
 
         QCOMPARE(result.status, SettingsFieldStatus::RecoveryFailed);
@@ -1117,16 +1347,15 @@ private slots:
         candidate.setVideoQuality(quality);
         RecordingSettingsPersistence persistence;
         FakeAirPlayReceiver receiver;
-        SettingsChangeDeferrer deferrer;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+        receiver.forceState(ReceiverState::Connected);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
-            ReceiverApplyTiming::AfterDisconnect);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 1);
         QCOMPARE(receiver.configurationBatchCount, 0);
-        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+        QCOMPARE(receiver.configurationBatchCount, 0);
         QVERIFY(outcome.airPlayDeferred);
         verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::Deferred);
         verifyStatus(outcome, SettingsFieldId::videoResolution(), SettingsFieldStatus::Deferred);
@@ -1141,16 +1370,14 @@ private slots:
         FakeAirPlayReceiver receiver;
         receiver.setRecordingAvailableForTest(true);
         QVERIFY(receiver.startRecording({}).accepted);
-        SettingsChangeDeferrer deferrer;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Recording),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(receiver.stopRecordingCount, 1);
         QCOMPARE(receiver.configurationBatchCount, 0);
-        QVERIFY(deferrer.hasPendingReceiverConfiguration());
+        QCOMPARE(receiver.configurationBatchCount, 0);
         QVERIFY(outcome.airPlayDeferred);
         verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::Deferred);
         QVERIFY(outcome.mayClose);
@@ -1165,21 +1392,16 @@ private slots:
         FakeAirPlayReceiver receiver;
         receiver.forceState(ReceiverState::Connected);
         receiver.requestedConfigurationRestartError = "Requested restart failed";
-        SettingsChangeDeferrer deferrer;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, &deferrer);
-        const SettingsApplyPlan plan = coordinator.plan(baseline, candidate, true, RecordingState::Idle);
-        const SettingsApplyOutcome initial = coordinator.execute(plan, ReceiverApplyTiming::AfterDisconnect);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, &receiver);
+        const SettingsApplyOutcome initial = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; }).outcome;
         verifyStatus(initial, SettingsFieldId::receiverName(), SettingsFieldStatus::Deferred);
         QVERIFY(initial.mayClose);
-        ReceiverConfigurationBatchRequest batch;
-        batch.receiverNameChanged = true;
-        batch.requestedReceiverName = candidate.receiverName();
-        batch.rollbackReceiverName = baseline.receiverName();
-        batch.requestedVideoQuality = candidate.videoQuality();
-        batch.rollbackVideoQuality = baseline.videoQuality();
-
-        const SettingsApplyOutcome completion =
-            coordinator.completeDeferredReceiverApply(batch, initial.committedSettings);
+        QSignalSpy completed(&coordinator, &SettingsApplyCoordinator::deferredApplyFinished);
+        receiver.forceState(ReceiverState::Discoverable);
+        QCOMPARE(completed.count(), 1);
+        const SettingsApplyOutcome completion = std::get<SettingsApplyOutcome>(
+            qvariant_cast<SettingsDeferredResult>(completed.at(0).at(0)));
 
         QCOMPARE(persistence.saved.size(), 2);
         QCOMPARE(completion.committedSettings.receiverName(), baseline.receiverName());
@@ -1198,11 +1420,10 @@ private slots:
         candidate.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
         candidate.setShowRecordingCompletionMessage(false);
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
 
         QCOMPARE(persistence.saved.size(), 2);
         QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
@@ -1219,43 +1440,22 @@ private slots:
                      SettingsFieldStatus::Applied);
         QVERIFY(!outcome.mayClose);
 
-        const SettingsApplyPlan retry = coordinator.plan(outcome.committedSettings, candidate, false,
-                                                          RecordingState::Idle);
-        QVERIFY(retry.validChangedReceiverFields.contains(SettingsFieldId::receiverName()));
+        const auto retry = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; }).outcome;
+        verifyStatus(retry, SettingsFieldId::receiverName(), SettingsFieldStatus::RecoveryFailed);
+        QCOMPARE(persistence.saved.size(), 4);
     }
 
-    void missingDeferrerCompensatesOnlyReceiverSettingsForRetry() {
-        const AppSettings baseline = AppSettings::defaults();
-        AppSettings candidate = baseline;
-        VideoQualitySettings quality = candidate.videoQuality();
-        quality.frameRate = VideoFrameRate::Fps60;
-        candidate.setVideoQuality(quality);
-        candidate.setRecordingOutputDirectory("C:/AirPlay-recordings");
-        RecordingSettingsPersistence persistence;
-        FakeAirPlayReceiver receiver;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
-
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
-            ReceiverApplyTiming::AfterDisconnect);
-
-        QCOMPARE(receiver.configurationBatchCount, 0);
-        QCOMPARE(persistence.saved.size(), 2);
-        QCOMPARE(outcome.committedSettings.videoQuality().frameRate,
-                 baseline.videoQuality().frameRate);
-        QCOMPARE(outcome.committedSettings.recordingOutputDirectory(),
-                 candidate.recordingOutputDirectory());
-        QCOMPARE(persistence.saved.last().videoQuality().frameRate,
-                 baseline.videoQuality().frameRate);
-        verifyStatus(outcome, SettingsFieldId::videoFrameRate(), SettingsFieldStatus::RecoveryFailed);
-        QVERIFY(requireResult(outcome, SettingsFieldId::videoFrameRate())
-                     .reason.contains("saved state was restored"));
-        QVERIFY(requireResult(outcome, SettingsFieldId::videoFrameRate())
-                     .recoveryError.contains("unchanged"));
-
-        const SettingsApplyPlan retry = coordinator.plan(outcome.committedSettings, candidate, true,
-                                                          RecordingState::Idle);
-        QVERIFY(retry.validChangedReceiverFields.contains(SettingsFieldId::videoFrameRate()));
+    void internalDeferrerAlwaysInstallsAndConsumesPendingTarget() {
+        CoordinatorHarness h;
+        h.receiver.forceState(ReceiverState::Connected);
+        auto draft=h.current; draft.setReceiverName("Owned pending target");
+        const auto outcome=h.submit(draft, ReceiverApplyTiming::AfterDisconnect);
+        verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::Deferred);
+        QCOMPARE(h.receiver.configurationBatchCount, 0);
+        h.disconnectSession();
+        QCOMPARE(h.receiver.configurationBatchCount, 1);
+        QCOMPARE(h.receiver.receiverName(), QString("Owned pending target"));
+        QVERIFY(h.completion.has_value());
     }
 
     void missingReceiverCompensationSaveFailureKeepsKnownRequestedSnapshot() {
@@ -1267,11 +1467,10 @@ private slots:
             false, "C:/settings.json", AppSettingsSaveStage::Commit, QFileDevice::WriteError,
             "Compensation commit failed"};
         persistence.responses = {{true}, compensationFailure};
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
 
         QCOMPARE(persistence.saved.size(), 2);
@@ -1286,35 +1485,27 @@ private slots:
         QVERIFY(result.recoveryError.contains("saved state cannot be confirmed"));
     }
 
-    void deferredCompletionWithoutReceiverCompensatesReceiverSettingsForRetry() {
-        const AppSettings baseline = AppSettings::defaults();
-        AppSettings currentlyCommitted = baseline;
-        currentlyCommitted.setReceiverName("Desk Receiver");
-        currentlyCommitted.setShortcut(ShortcutAction::ToggleAlwaysOnTop, QKeySequence("Ctrl+Alt+Y"));
+    void destroyedReceiverRetainsOldTargetAndNewApplyReportsUnavailable() {
+        auto current=AppSettings::defaults();
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
-        ReceiverConfigurationBatchRequest batch;
-        batch.receiverNameChanged = true;
-        batch.requestedReceiverName = currentlyCommitted.receiverName();
-        batch.rollbackReceiverName = baseline.receiverName();
-        batch.requestedVideoQuality = currentlyCommitted.videoQuality();
-        batch.rollbackVideoQuality = baseline.videoQuality();
-
-        const SettingsApplyOutcome outcome =
-            coordinator.completeDeferredReceiverApply(batch, currentlyCommitted);
-
+        auto receiver=std::make_unique<FakeAirPlayReceiver>();
+        SettingsApplyCoordinator coordinator(current, nullptr, &persistence, receiver.get());
+        QSignalSpy completed(&coordinator, &SettingsApplyCoordinator::deferredApplyFinished);
+        receiver->forceState(ReceiverState::Connected);
+        auto draft=current; draft.setReceiverName("Saved target");
+        coordinator.apply(draft, [] { return ReceiverApplyTiming::AfterDisconnect; });
+        receiver.reset();
+        QCoreApplication::sendPostedEvents();
+        QCOMPARE(current.receiverName(), QString("Saved target"));
         QCOMPARE(persistence.saved.size(), 1);
-        QCOMPARE(outcome.committedSettings.receiverName(), baseline.receiverName());
-        QCOMPARE(outcome.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
-                 currentlyCommitted.shortcutFor(ShortcutAction::ToggleAlwaysOnTop));
-        QCOMPARE(persistence.saved.constFirst().receiverName(), baseline.receiverName());
+        QCOMPARE(completed.count(), 0);
+        draft.setReceiverName("New unavailable target");
+        draft.setLanguage("zh-CN");
+        const auto outcome=*coordinator.apply(draft, {}).outcome;
+        QCOMPARE(current.receiverName(), QString("Saved target"));
+        QCOMPARE(current.language(), QString("zh-CN"));
         verifyStatus(outcome, SettingsFieldId::receiverName(), SettingsFieldStatus::RecoveryFailed);
-        QVERIFY(requireResult(outcome, SettingsFieldId::receiverName()).reason.contains("saved state was restored"));
-        QVERIFY(requireResult(outcome, SettingsFieldId::receiverName()).recoveryError.contains("unavailable"));
-
-        const SettingsApplyPlan retry = coordinator.plan(outcome.committedSettings, currentlyCommitted,
-                                                          false, RecordingState::Idle);
-        QVERIFY(retry.validChangedReceiverFields.contains(SettingsFieldId::receiverName()));
+        QCOMPARE(persistence.saved.size(), 3);
     }
 
     void mayCloseAndSnapshotMergeFollowExecutionResults() {
@@ -1327,11 +1518,10 @@ private slots:
         candidate.setAspectRatioLock(true);
         candidate.setVideoFitMode(true);
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyOutcome failedValidation = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome failedValidation = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         QVERIFY(!failedValidation.mayClose);
         QCOMPARE(failedValidation.committedSettings.receiverName(), baseline.receiverName());
         QCOMPARE(failedValidation.committedSettings.shortcutFor(ShortcutAction::ToggleAlwaysOnTop),
@@ -1342,9 +1532,7 @@ private slots:
         QCOMPARE(failedValidation.committedSettings.aspectRatioLock(), baseline.aspectRatioLock());
         QCOMPARE(failedValidation.committedSettings.videoFitMode(), baseline.videoFitMode());
 
-        const SettingsApplyOutcome success = coordinator.execute(
-            coordinator.plan(baseline, baseline, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome success = *coordinator.apply(baseline, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         QVERIFY(success.mayClose);
     }
     void validationReasonRendersUsingCurrentTranslator() {
@@ -1352,8 +1540,7 @@ private slots:
         AppSettings candidate = baseline;
         candidate.setReceiverName(QString());
 
-        const SettingsApplyPlan plan = SettingsApplyCoordinator(nullptr, nullptr, nullptr, nullptr)
-                                           .plan(baseline, candidate, false, RecordingState::Idle);
+        const ObservedApply plan = observeApply(baseline, candidate, false);
         const SettingsFieldResult &result = requireResult(plan, SettingsFieldId::receiverName());
         QCOMPARE(result.reason, QString("Receiver name cannot be empty."));
         QCOMPARE(result.userReason.render(), QString("Receiver name cannot be empty."));
@@ -1371,10 +1558,9 @@ private slots:
         RecordingHotkeyService hotkeys;
         hotkeys.seed(baseline);
         hotkeys.responses = {{false, false, HotkeyError{87, "Raw registration detail"}, true}};
-        SettingsApplyCoordinator shortcutCoordinator(&hotkeys, nullptr, nullptr, nullptr);
-        const SettingsApplyOutcome shortcutOutcome = shortcutCoordinator.execute(
-            shortcutCoordinator.plan(baseline, shortcutCandidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        AppSettings shortcutCoordinatorCurrent = baseline;
+        SettingsApplyCoordinator shortcutCoordinator(shortcutCoordinatorCurrent, &hotkeys, nullptr, nullptr);
+        const SettingsApplyOutcome shortcutOutcome = *shortcutCoordinator.apply(shortcutCandidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &shortcutResult = requireResult(
             shortcutOutcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop));
 
@@ -1384,10 +1570,9 @@ private slots:
         receiver.forceState(ReceiverState::Connected);
         receiver.requestedConfigurationRestartError = "Raw apply detail";
         receiver.rollbackConfigurationRestartError = "Raw recovery detail";
-        SettingsApplyCoordinator receiverCoordinator(nullptr, nullptr, &receiver, nullptr);
-        const SettingsApplyOutcome receiverOutcome = receiverCoordinator.execute(
-            receiverCoordinator.plan(baseline, receiverCandidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        AppSettings receiverCoordinatorCurrent = baseline;
+        SettingsApplyCoordinator receiverCoordinator(receiverCoordinatorCurrent, nullptr, nullptr, &receiver);
+        const SettingsApplyOutcome receiverOutcome = *receiverCoordinator.apply(receiverCandidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &receiverResult = requireResult(receiverOutcome, SettingsFieldId::receiverName());
 
         QCOMPARE(shortcutResult.userReason.render(),
@@ -1405,20 +1590,19 @@ private slots:
         QCoreApplication::removeTranslator(&translator);
     }
 
-    void unavailableDeferrerReasonRetranslatesWithoutUnavailableDetail() {
+    void unavailableReceiverReasonRetranslatesWithoutUnavailableDetail() {
         AppSettings baseline = AppSettings::defaults();
         AppSettings candidate = baseline;
         candidate.setReceiverName("New Receiver");
         FakeAirPlayReceiver receiver;
         RecordingSettingsPersistence persistence;
-        SettingsApplyCoordinator coordinator(nullptr, &persistence, &receiver, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, nullptr, &persistence, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, true, RecordingState::Idle),
-            ReceiverApplyTiming::AfterDisconnect);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::AfterDisconnect; }).outcome;
         const SettingsFieldResult &result = requireResult(outcome, SettingsFieldId::receiverName());
         QCOMPARE(result.reason,
-                 QString("Receiver configuration did not start: Receiver configuration deferrer is unavailable. The saved state was restored to receiver name 'AirPlay Receiver', 1080p, 30 fps."));
+                 QString("Receiver configuration did not start: AirPlay receiver is unavailable. The saved state was restored to receiver name 'AirPlay Receiver', 1080p, 30 fps."));
         QCOMPARE(result.userReason.render(),
                  QString("Receiver configuration did not start. The saved state was restored."));
 
@@ -1436,11 +1620,10 @@ private slots:
         hotkeys.seed(baseline);
         hotkeys.responses = {{false, false, HotkeyError{87, "Raw candidate detail"}, false,
                               HotkeyError{88, "Raw recovery detail"}}};
-        SettingsApplyCoordinator coordinator(&hotkeys, nullptr, nullptr, nullptr);
+        AppSettings coordinatorCurrent = baseline;
+        SettingsApplyCoordinator coordinator(coordinatorCurrent, &hotkeys, nullptr, nullptr);
 
-        const SettingsApplyOutcome outcome = coordinator.execute(
-            coordinator.plan(baseline, candidate, false, RecordingState::Idle),
-            ReceiverApplyTiming::Immediate);
+        const SettingsApplyOutcome outcome = *coordinator.apply(candidate, [] { return ReceiverApplyTiming::Immediate; }).outcome;
         const SettingsFieldResult &result = requireResult(
             outcome, SettingsFieldId::shortcut(ShortcutAction::ToggleAlwaysOnTop));
         QCOMPARE(result.userRecoveryError.render(),

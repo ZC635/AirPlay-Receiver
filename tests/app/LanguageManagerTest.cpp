@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "app/LanguageManager.h"
+#include "app/UiMessage.h"
 #include "diagnostics/DiagnosticSession.h"
 
 namespace {
@@ -51,6 +52,33 @@ class LanguageManagerTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void lifecycleMessagesUseEmbeddedChineseCatalogue_data() {
+        QTest::addColumn<QString>("source");
+        QTest::addColumn<QString>("chinese");
+        QTest::newRow("busy") << "Settings are being applied. Try again after the current operation finishes." << QStringLiteral("正在应用设置。请在当前操作结束后重试。");
+        QTest::newRow("reconciliation-unconfirmed") << "Settings were saved, but their final saved state could not be confirmed. Apply again." << QStringLiteral("设置已保存，但无法确认最终保存状态。请重新应用。");
+        QTest::newRow("interrupted-saved") << "Settings application was interrupted. Saved changes are kept." << QStringLiteral("设置应用已中断。已保存的改动保留。");
+        QTest::newRow("interrupted-before-save") << "Settings application was interrupted before saving." << QStringLiteral("设置应用在保存前中断。");
+        QTest::newRow("timing") << "Receiver state changed. Apply again to choose when to apply receiver settings." << QStringLiteral("接收器状态已变化。请重新点击应用，选择接收器设置的应用时机。");
+        QTest::newRow("not-applied") << "Receiver settings have not been applied. The saved configuration is kept for the next receiver start." << QStringLiteral("接收器设置尚未应用。已保存配置保留至下次启动接收服务。");
+        QTest::newRow("ended-save") << "Receiver settings are saved for the next receiver start." << QStringLiteral("接收器设置已保存，留待下次启动接收服务。");
+        QTest::newRow("prepare-unavailable") << "The receiver is unavailable." << QStringLiteral("接收器不可用。");
+        QTest::newRow("prepare-not-idle") << "Receiver preparation requires an idle receiver." << QStringLiteral("准备接收器配置需要接收器处于空闲状态。");
+        QTest::newRow("prepare-backend-failure") << "Receiver preparation did not complete." << QStringLiteral("接收器配置准备未完成。");
+    }
+    // Missing embedded translations leave these user-facing lifecycle facts in English.
+    void lifecycleMessagesUseEmbeddedChineseCatalogue() {
+        QFETCH(QString, source);
+        QFETCH(QString, chinese);
+        const auto message = UiMessage::translated("SettingsApplyCoordinator", source);
+        LanguageManager manager(QCoreApplication::instance());
+        QVERIFY(manager.apply("en", QLocale("en-US")));
+        QCOMPARE(message.render(), source);
+        QVERIFY(manager.apply("zh-CN", QLocale("en-US")));
+        QCOMPARE(message.render(), chinese);
+        QVERIFY(manager.apply("en", QLocale("zh-CN")));
+        QCOMPARE(message.render(), source);
+    }
     void startupCacheMessagesTranslateToSimplifiedChinese() {
         LanguageManager manager(QCoreApplication::instance());
         manager.apply("zh-CN");
