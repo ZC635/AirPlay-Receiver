@@ -303,6 +303,7 @@ UxPlayReceiver::UxPlayReceiver(UxPlayReceiverConfig config, QObject *parent)
 #endif
 {
     m_config.diagnosticSink = m_diagnosticSink;
+    m_videoObservation = std::make_shared<VideoObservation>(m_diagnosticSink);
 #if AIRPLAY_WITH_UXPLAY
     m_recordingController = std::make_unique<RecordingController>(
         videoQualityMaxFPS(m_config.videoQuality.frameRate),
@@ -416,6 +417,7 @@ void UxPlayReceiver::start() {
         return;
     }
 
+    m_videoObservation->serviceBegin();
     setState(ReceiverState::Starting);
     const auto generation = m_callbackGeneration.fetch_add(1) + 1;
     m_connectionResetReported.store(false);
@@ -481,6 +483,7 @@ void UxPlayReceiver::start() {
         QStringLiteral("initialization"), {{QStringLiteral("stage"), QStringLiteral("video_renderer_init")},
                                               {QStringLiteral("result"), QStringLiteral("success")}}, true));
     video_renderer_start();
+    observeVideoRendererBoundary("start_after");
     const QString frameRate = m_config.videoQuality.frameRate == VideoFrameRate::Fps15
         ? QStringLiteral("fps15") : m_config.videoQuality.frameRate == VideoFrameRate::Fps60
         ? QStringLiteral("fps60") : QStringLiteral("fps30");
@@ -907,6 +910,7 @@ void UxPlayReceiver::handleClientRequestFromUxPlayCallback(const char *model, qu
 
 void UxPlayReceiver::handleConnectionInitializedFromUxPlayCallback(quint64 generation) {
     m_callbackDispatch.runIfCurrent(generation, [&] {
+        m_videoObservation->connectionBegin();
         m_connectionResetReported.store(false);
     });
 }
@@ -1086,7 +1090,9 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
         const auto restartVideoRenderer = [this] {
             m_videoRendererStopped.store(true);
             observeRendererCall(QStringLiteral("video_renderer_stop"));
+            observeVideoRendererBoundary("stop_before");
             video_renderer_stop();
+            observeVideoRendererBoundary("stop_after");
             clearVideoSampleTap();
             observeRendererCall(QStringLiteral("video_frame_bridge_reset"));
             resetVideoFrameBridge();
@@ -1113,9 +1119,12 @@ void UxPlayReceiver::handleVideoResetFromUxPlayCallback(int resetType, quint64 g
             applyVideoFitModeToRenderer();
             observeRendererCall(QStringLiteral("video_renderer_start"));
             video_renderer_start();
+            observeVideoRendererBoundary("start_after");
             observeRendererCall(m_videoIsH265 ? QStringLiteral("video_choose_h265")
                                               : QStringLiteral("video_choose_h264"));
-            if (chooseVideoRendererCodec(false, m_videoIsH265) == 0) {
+            const int codecResult = chooseVideoRendererCodec(false, m_videoIsH265);
+            observeVideoRendererBoundary("reset_codec_after", codecResult, true);
+            if (codecResult == 0) {
                 observeRendererCall(QStringLiteral("video_frame_bridge_attach"));
                 attachVideoFrameBridgeToCurrentPipeline();
             } else {
@@ -1155,13 +1164,17 @@ void UxPlayReceiver::stopVideoPipelineForDisconnect(quint64 generation) {
     }
     m_callbackDispatch.runWithRendererStarted(generation, [&] {
         if (m_videoRendererStopped.exchange(true)) {
+            m_videoObservation->close("disconnect_already_stopped");
             return;
         }
+        observeVideoRendererBoundary("stop_before");
         video_renderer_stop();
+        observeVideoRendererBoundary("stop_after");
         if (m_state == ReceiverState::Connected) {
             recordDiagnostic(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("receiver"),
                 QStringLiteral("disconnect"), {{QStringLiteral("result"), QStringLiteral("success")}}, true));
         }
+        m_videoObservation->close("disconnect");
     });
 }
 
@@ -1173,8 +1186,31 @@ void UxPlayReceiver::restartVideoPipelineForConnect(quint64 generation) {
     m_callbackDispatch.runWithRendererStarted(generation, [&] {
         if (m_videoRendererStopped.exchange(false)) {
             video_renderer_start();
+            observeVideoRendererBoundary("start_after");
         }
         m_acceptingVideoTapSamples.store(true, std::memory_order_release);
+    });
+}
+
+void UxPlayReceiver::observeVideoRendererBoundary(const char *boundary, int callResult, bool hasReturn) const {
+    m_videoObservation->boundary(boundary, [&] {
+        QMap<QString, QString> fields{{"call_return", hasReturn ? QString::number(callResult) : QStringLiteral("void_no_return")},
+                                    {"initialized", m_videoRendererInitialized ? "true" : "false"},
+                                    {"stopped_flag", m_videoRendererStopped.load() ? "true" : "false"}};
+        auto *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
+        fields.insert("selected_pipeline", pipeline ? "present" : "absent_selection_pending_or_unavailable");
+        if (pipeline) {
+            GstState current = GST_STATE_VOID_PENDING, pending = GST_STATE_VOID_PENDING;
+            const auto query = gst_element_get_state(pipeline, &current, &pending, 0);
+            fields.insert("query_return", QString::number(query));
+            fields.insert("current_state", QString::fromLatin1(gst_element_state_get_name(current)));
+            fields.insert("pending_state", QString::fromLatin1(gst_element_state_get_name(pending)));
+        } else {
+            fields.insert("query_return", "not_queried");
+            fields.insert("current_state", "unknown");
+            fields.insert("pending_state", "unknown");
+        }
+        return fields;
     });
 }
 
@@ -1268,6 +1304,8 @@ void UxPlayReceiver::renderVideoBufferFromCallback(void *data, int *data_len, in
 void UxPlayReceiver::renderVideoBufferFromCallback(void *data, int *data_len, int *nal_count, uint64_t *ntp_time,
                                                    quint64 generation) {
     m_callbackDispatch.runWithRendererStarted(generation, [&] {
+        if (m_videoObservation->active() && data && data_len && *data_len > 0)
+            m_videoObservation->observe(VideoObservation::Input);
         video_renderer_render_buffer(static_cast<unsigned char *>(data), data_len, nal_count, ntp_time);
     });
 }
@@ -1312,6 +1350,7 @@ int UxPlayReceiver::chooseVideoCodecFromCallback(bool video_is_h265, quint64 gen
     int result = -1;
     if (!m_callbackDispatch.runWithRendererStarted(generation, [&] {
         result = chooseVideoRendererCodec(false, video_is_h265);
+        observeVideoRendererBoundary("codec_after", result, true);
         if (result == 0) {
             m_videoIsH265 = video_is_h265;
             QPointer<UxPlayReceiver> guardedReceiver(this);
@@ -1346,15 +1385,26 @@ void UxPlayReceiver::resetVideoFrameBridge() {
 
     delete m_videoFrameBridge;
     m_videoFrameBridge = nullptr;
+    m_observedBridgePipeline = nullptr;
 }
 
 void UxPlayReceiver::attachVideoFrameBridgeToCurrentPipeline() {
     if (m_videoFrameBridge || !m_frameCallback) {
+        m_videoObservation->boundary("bridge_binding", [&] {
+            QMap<QString, QString> fields{{"binding", m_videoFrameBridge ? "reused" : "absent_no_callback"}};
+            if (m_videoFrameBridge) {
+                void *selected = video_renderer_get_pipeline();
+                fields.insert("selected_pipeline", selected ? "present" : "absent");
+                fields.insert("matches_bound_pipeline", selected ? (selected == m_observedBridgePipeline ? "true" : "false") : "unknown");
+            }
+            return fields;
+        });
         return;
     }
 
     GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
     if (!pipeline) {
+        m_videoObservation->boundary("bridge_binding", [] { return QMap<QString, QString>{{"binding", "absent_no_selected_pipeline"}}; });
         return;
     }
 
@@ -1363,13 +1413,20 @@ void UxPlayReceiver::attachVideoFrameBridgeToCurrentPipeline() {
         appsink = gst_bin_get_by_name(GST_BIN(pipeline), "appsink_h265");
     }
     if (!appsink) {
+        m_videoObservation->boundary("bridge_binding", [] { return QMap<QString, QString>{{"binding", "absent_no_appsink"}}; });
         return;
     }
 
-    m_videoFrameBridge = new VideoFrameBridge(std::make_unique<GstAppSinkFrameSource>(appsink), this);
+    auto source = std::make_unique<GstAppSinkFrameSource>(appsink);
+    source->setVideoObservation(m_videoObservation);
+    m_videoFrameBridge = new VideoFrameBridge(std::move(source), this);
+    m_videoFrameBridge->setVideoObservation(m_videoObservation);
+    if (m_videoObservation->active()) m_observedBridgePipeline = pipeline;
+    m_videoObservation->boundary("bridge_binding", [] { return QMap<QString, QString>{{"binding", "new"}, {"matches_bound_pipeline", "true"}}; });
     m_videoFrameBridge->start();
     QObject::connect(m_videoFrameBridge, &VideoFrameBridge::frameReady,
                      this, [this](QImage frame) {
+                         m_videoObservation->observe(VideoObservation::ReceiverQueued);
                          if (m_frameCallback) m_frameCallback(frame);
                      }, Qt::QueuedConnection);
     gst_object_unref(appsink);
@@ -1515,7 +1572,9 @@ void UxPlayReceiver::cleanupUxPlay() {
         clearVideoSampleTap();
         clearAudioSampleTap();
         if (m_videoRendererInitialized) {
+            observeVideoRendererBoundary("stop_before");
             video_renderer_stop();
+            observeVideoRendererBoundary("stop_after");
             observeRendererCall(QStringLiteral("video_renderer_destroy"));
             video_renderer_destroy();
             m_videoRendererInitialized = false;
@@ -1529,6 +1588,7 @@ void UxPlayReceiver::cleanupUxPlay() {
         m_audioRendererStarted.store(false);
         m_videoRendererStopped.store(false);
     }
+    m_videoObservation->close("service_stop");
     if (m_logger) {
         logger_destroy(static_cast<logger_t *>(m_logger));
         m_logger = nullptr;

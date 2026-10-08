@@ -3,6 +3,8 @@
 #include <QImage>
 #include <QMutex>
 #include <QWidget>
+#include <memory>
+#include "diagnostics/VideoObservation.h"
 
 class QPainter;
 class QPaintEvent;
@@ -14,6 +16,7 @@ class VideoSurfaceWidget final : public QWidget {
 public:
     explicit VideoSurfaceWidget(QWidget *parent = nullptr);
     ~VideoSurfaceWidget() override;
+    void setVideoObservation(std::shared_ptr<VideoObservation> observation) { m_observation = std::move(observation); }
     void reset();
     void setVideoFitMode(bool fit);
 
@@ -32,4 +35,5 @@ private:
     QImage m_pendingFrame;
     QImage m_cachedFrame;
     bool m_videoFitMode = false;
+    std::shared_ptr<VideoObservation> m_observation;
 };

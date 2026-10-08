@@ -13,6 +13,7 @@
 #include "backend/AirPlayReceiver.h"
 #include "backend/UxPlayCallbackDispatch.h"
 #include "diagnostics/DiagnosticLogSink.h"
+#include "diagnostics/VideoObservation.h"
 #if AIRPLAY_WITH_UXPLAY
 #include "backend/RecordingController.h"
 #include <gst/gst.h>
@@ -44,6 +45,7 @@ public:
     explicit UxPlayReceiver(UxPlayReceiverConfig config = {}, QObject *parent = nullptr);
     ~UxPlayReceiver() override;
 
+    std::shared_ptr<VideoObservation> videoObservation() const { return m_videoObservation; }
     void start() override;
     void stop() override;
     void setVolume(double volume) override;
@@ -142,6 +144,7 @@ private:
     void endRecordingSession(bool canFinalize, bool waitForIdle);
     void handleBackendError(QString error, BackendErrorSafety safety, QString diagnosticStage);
     void observeRendererCall(const QString &call) const;
+    void observeVideoRendererBoundary(const char *boundary, int callResult = 0, bool hasReturn = false) const;
     void installVideoSampleTap();
     void installAudioSampleTap();
     void clearVideoSampleTap();
@@ -154,6 +157,7 @@ private:
 
     UxPlayReceiverConfig m_config;
     DiagnosticLogSink *m_diagnosticSink = &nullDiagnosticLogSink();
+    std::shared_ptr<VideoObservation> m_videoObservation;
     ReceiverState m_state = ReceiverState::Idle;
     QString m_error;
     std::atomic<double> m_volume = 1.0;
@@ -183,6 +187,7 @@ private:
     bool m_videoRendererInitialized = false;
     bool m_audioRendererInitialized = false;
     bool m_videoIsH265 = false;
+    void *m_observedBridgePipeline = nullptr;
     UxPlayDiscovery *m_discovery = nullptr;
 #endif
 };

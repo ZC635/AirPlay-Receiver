@@ -3966,6 +3966,41 @@ private slots:
         window.show();
         window.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&window));
+        const char *checkpoint = "initial activation";
+        const auto hoverActive = [&] {
+            return QGuiApplication::applicationState() == Qt::ApplicationActive
+                && window.isActiveWindow() && !QApplication::activeModalWidget();
+        };
+        bool captureHoverFailure = true;
+        const auto captureFailure = qScopeGuard([&] {
+            if (!captureHoverFailure || !QTest::currentTestFailed()) return;
+            const HWND foreground = GetForegroundWindow();
+            DWORD foregroundPid = 0;
+            const DWORD foregroundTid = GetWindowThreadProcessId(foreground, &foregroundPid);
+            GUITHREADINFO gui{};
+            gui.cbSize = sizeof(gui);
+            SetLastError(ERROR_SUCCESS);
+            const BOOL guiOk = GetGUIThreadInfo(GetCurrentThreadId(), &gui);
+            const DWORD guiError = guiOk ? ERROR_SUCCESS : GetLastError();
+            const QPoint cursor = QCursor::pos();
+            const auto handle = [](HWND hwnd) {
+                return QString::number(reinterpret_cast<quintptr>(hwnd), 16);
+            };
+            qInfo().noquote() << QStringLiteral(
+                "HOVER_FAILURE checkpoint=%1 appState=%2 mainActive=%3 modal=%4 popup=%5 "
+                "pid=%6 tid=%7 mainHwnd=%8 foreground=%9 foregroundPid=%10 foregroundTid=%11 "
+                "guiOk=%12 guiError=%13 guiActive=%14 guiFocus=%15 cursor=(%16,%17) toolbar=%18")
+                .arg(QString::fromLatin1(checkpoint))
+                .arg(int(QGuiApplication::applicationState())).arg(window.isActiveWindow())
+                .arg(QApplication::activeModalWidget() != nullptr)
+                .arg(QApplication::activePopupWidget() != nullptr)
+                .arg(GetCurrentProcessId()).arg(GetCurrentThreadId())
+                .arg(handle(reinterpret_cast<HWND>(window.winId())))
+                .arg(handle(foreground)).arg(foregroundPid).arg(foregroundTid)
+                .arg(guiOk).arg(guiError).arg(handle(gui.hwndActive)).arg(handle(gui.hwndFocus))
+                .arg(cursor.x()).arg(cursor.y()).arg(window.isToolbarVisible());
+        });
+        QVERIFY2(hoverActive(), "Hover requires an active Qt application and main window");
         auto *controller = window.findChild<ToolbarVisibilityController *>();
         QVERIFY(controller);
         auto *surface = window.findChild<VideoSurfaceWidget *>();
@@ -3974,18 +4009,27 @@ private slots:
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
         window.toggleToolbarVisibility();
         QVERIFY(!window.isToolbarVisible());
+        checkpoint = "first hover";
+        QVERIFY2(hoverActive(), "Hover requires an active Qt application and main window");
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
         QTRY_VERIFY(window.isToolbarVisible());
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 150)));
         QTRY_VERIFY(!window.isToolbarVisible());
+        checkpoint = "second hover";
+        QVERIFY2(hoverActive(), "Hover requires an active Qt application and main window");
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
         QTRY_VERIFY(window.isToolbarVisible());
+        checkpoint = "fullscreen enter";
         window.setFullscreenEnabled(true);
         QTest::qWait(70);
         QVERIFY(window.isToolbarVisible());
+        checkpoint = "fullscreen leave";
         window.setFullscreenEnabled(false);
         QTest::qWait(70);
         QVERIFY(window.isToolbarVisible());
+        // Later popup/foreign-window objects would unwind before this guard.
+        // Limit this snapshot to the preceding hover/fullscreen checkpoints.
+        captureHoverFailure = false;
         auto *toolbar = window.findChild<QToolButton *>("settingsButton")->parentWidget();
         QMenu popup(toolbar);
         popup.addAction("Owned popup");
@@ -4020,6 +4064,8 @@ private slots:
         QTRY_VERIFY(!window.isToolbarVisible());
         window.activateWindow();
         QVERIFY(QTest::qWaitForWindowActive(&window));
+        checkpoint = "hover after popup";
+        QVERIFY2(hoverActive(), "Hover requires an active Qt application and main window");
         QCursor::setPos(window.centralWidget()->mapToGlobal(QPoint(5, 15)));
         QTRY_VERIFY(window.isToolbarVisible());
         QWidget foreignWindow;

@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "backend/AppSinkFrameSource.h"
+#include "diagnostics/VideoObservation.h"
 
 class VideoFrameBridge : public QObject {
     Q_OBJECT
@@ -15,6 +16,7 @@ public:
     explicit VideoFrameBridge(AppSinkFrameSource *source, QObject *parent = nullptr);
     explicit VideoFrameBridge(std::unique_ptr<AppSinkFrameSource> source, QObject *parent = nullptr);
     ~VideoFrameBridge() override;
+    void setVideoObservation(std::shared_ptr<VideoObservation> observation) { m_observation = std::move(observation); }
     void start();
     void processFrame();
 
@@ -25,4 +27,5 @@ private:
     std::unique_ptr<AppSinkFrameSource> m_ownedSource;
     AppSinkFrameSource *m_source = nullptr;
     bool m_started = false;
+    std::shared_ptr<VideoObservation> m_observation;
 };

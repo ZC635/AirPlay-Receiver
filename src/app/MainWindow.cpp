@@ -14,6 +14,7 @@
 #include "app/VideoSurfaceWidget.h"
 #include "app/WindowStateStore.h"
 #include "backend/AirPlayReceiver.h"
+#include "backend/UxPlayReceiver.h"
 #include "platform/AspectRatioSizing.h"
 #include "platform/DiagnosticLogFolderActions.h"
 #include "platform/HotkeyService.h"
@@ -245,6 +246,12 @@ MainWindow::MainWindow(AppSettings settings, HotkeyService *hotkeys,
     setCentralWidget(central);
     toolbarVisibility_ = new ToolbarVisibilityController(central, toolbar_, this);
     toolbarVisibility_->setDiagnosticSink(diagnosticSink_);
+    // Share receiver observation-time IDs without changing the public receiver interface.
+    if (auto *uxplay = qobject_cast<UxPlayReceiver *>(receiver_.data())) {
+        videoSurface_->setVideoObservation(uxplay->videoObservation());
+    } else {
+        videoSurface_->setVideoObservation(std::make_shared<VideoObservation>(diagnosticSink_));
+    }
     toolbarVisibility_->setHoverRevealEnabled(settings_.toolbarHoverReveal());
     connect(toolbarVisibility_, &ToolbarVisibilityController::visibilityChanged, this, [this](bool visible) {
         toolbar_->setVisible(visible);
