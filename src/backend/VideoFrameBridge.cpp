@@ -25,14 +25,28 @@ void VideoFrameBridge::start() {
 
 void VideoFrameBridge::processFrame() {
     auto sample = m_source->pullSample();
-    if (!sample) return;
-    if (sample->bytes.isEmpty() || sample->width <= 0 || sample->height <= 0) return;
-    if (sample->format != QStringLiteral("RGBA")) return;
-    if (sample->bytesPerLine < sample->width * 4) return;
+    if (!sample) {
+        if (m_observation) m_observation->observe(VideoObservation::BridgeRejected, "no_sample");
+        return;
+    }
+    if (m_observation) m_observation->observe(VideoObservation::BridgeSample);
+    if (sample->bytes.isEmpty() || sample->width <= 0 || sample->height <= 0) {
+        if (m_observation) m_observation->observe(VideoObservation::BridgeRejected, "empty_or_dimensions");
+        return;
+    }
+    if (sample->format != QStringLiteral("RGBA")) {
+        if (m_observation) m_observation->observe(VideoObservation::BridgeRejected, "format");
+        return;
+    }
+    if (sample->bytesPerLine < sample->width * 4) {
+        if (m_observation) m_observation->observe(VideoObservation::BridgeRejected, "stride");
+        return;
+    }
 
     QImage frame(reinterpret_cast<const uchar *>(sample->bytes.constData()),
                  sample->width, sample->height,
                  sample->bytesPerLine, QImage::Format_RGBA8888);
     QImage copy = frame.copy();
+    if (m_observation) m_observation->observe(VideoObservation::BridgeAccepted);
     emit frameReady(copy);
 }

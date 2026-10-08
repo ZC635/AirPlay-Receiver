@@ -1,6 +1,7 @@
 #pragma once
 
 #include "backend/AppSinkFrameSource.h"
+#include "diagnostics/VideoObservation.h"
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -14,6 +15,7 @@ public:
     explicit GstAppSinkFrameSource(GstElement *appsink);
     ~GstAppSinkFrameSource() override;
 
+    void setVideoObservation(std::shared_ptr<VideoObservation> observation) { m_observation = std::move(observation); }
     std::optional<VideoFrameSample> pullSample() override;
     void setFrameAvailableCallback(std::function<void()> callback) override;
     void start() override;
@@ -34,4 +36,5 @@ private:
     std::shared_ptr<CallbackState> *m_signalCallbackState = nullptr;
     gulong m_newSampleHandlerId = 0;
     bool m_started = false;
+    std::shared_ptr<VideoObservation> m_observation;
 };

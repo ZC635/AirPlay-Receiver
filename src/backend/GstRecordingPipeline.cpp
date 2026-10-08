@@ -1,5 +1,7 @@
 #include "backend/GstRecordingPipeline.h"
 #include "backend/RecordingFileTransaction.h"
+#include "backend/HiddenFileLease.h"
+#include "backend/GstFileLocation.h"
 
 #include <QDir>
 #include <QFile>
@@ -280,7 +282,7 @@ bool sampleHasVideoCaps(GstSample *sample,
     return true;
 }
 
-QString busMessageError(GstMessage *message)
+QString busMessageError(GstMessage *message, const QStringList &logicalPaths)
 {
     GError *error = nullptr;
     gchar *debug = nullptr;
@@ -291,79 +293,8 @@ QString busMessageError(GstMessage *message)
                                   QString::fromUtf8(debug ? debug : "none"));
     g_clear_error(&error);
     g_free(debug);
-    return text;
+    return GstFileLocation::logicalError(text, logicalPaths);
 }
-
-class HiddenFileLease {
-public:
-    explicit HiddenFileLease(QString path)
-        : m_path(std::move(path))
-    {
-    }
-
-    bool makeVisible(QString *error)
-    {
-#ifdef Q_OS_WIN
-        const std::wstring nativePath = QDir::toNativeSeparators(m_path).toStdWString();
-        m_originalAttributes = GetFileAttributesW(nativePath.c_str());
-        if (m_originalAttributes == INVALID_FILE_ATTRIBUTES) {
-            if (error) {
-                *error = QStringLiteral("Could not read owned placeholder attributes for %1 (Windows error %2)")
-                             .arg(m_path).arg(GetLastError());
-            }
-            return false;
-        }
-        DWORD visibleAttributes = m_originalAttributes & ~FILE_ATTRIBUTE_HIDDEN;
-        if (visibleAttributes == 0) visibleAttributes = FILE_ATTRIBUTE_NORMAL;
-        if (!SetFileAttributesW(nativePath.c_str(), visibleAttributes)) {
-            if (error) {
-                *error = QStringLiteral("Could not make owned placeholder visible for writer %1 (Windows error %2)")
-                             .arg(m_path).arg(GetLastError());
-            }
-            return false;
-        }
-        m_changed = true;
-#else
-        if (!QFile::exists(m_path)) {
-            if (error) *error = QStringLiteral("Owned placeholder is missing: %1").arg(m_path);
-            return false;
-        }
-#endif
-        return true;
-    }
-
-    bool restore(QString *error)
-    {
-#ifdef Q_OS_WIN
-        if (!m_changed) return true;
-        const std::wstring nativePath = QDir::toNativeSeparators(m_path).toStdWString();
-        if (!SetFileAttributesW(nativePath.c_str(), m_originalAttributes)) {
-            if (error) {
-                *error = QStringLiteral("Could not restore HIDDEN on owned recording file %1 (Windows error %2)")
-                             .arg(m_path).arg(GetLastError());
-            }
-            return false;
-        }
-        m_changed = false;
-#else
-        Q_UNUSED(error);
-#endif
-        return true;
-    }
-
-    ~HiddenFileLease()
-    {
-        QString ignored;
-        restore(&ignored);
-    }
-
-private:
-    QString m_path;
-#ifdef Q_OS_WIN
-    DWORD m_originalAttributes = INVALID_FILE_ATTRIBUTES;
-    bool m_changed = false;
-#endif
-};
 
 struct DemuxLinkTarget {
     GstElement *sink = nullptr;
@@ -454,6 +385,8 @@ public:
 
     bool buildVideo(const QString &encoderName, QString *error)
     {
+        const QByteArray videoLocation = GstFileLocation::forIo(config.videoSpoolPath, error);
+        if (videoLocation.isEmpty()) return false;
         cleanupVideo();
         const QString actualEncoderName = hooks.encoderFactoryAlias(encoderName);
         const GstRecordingEncoderConfiguration encoderConfiguration =
@@ -511,7 +444,7 @@ public:
         g_object_set(inputCapsFilter, "caps", encoderInputCaps, nullptr);
         g_object_set(outputCapsFilter, "caps", outputCaps, nullptr);
         g_object_set(mux, "offset-to-zero", TRUE, nullptr);
-        g_object_set(sink, "location", config.videoSpoolPath.toUtf8().constData(), nullptr);
+        g_object_set(sink, "location", videoLocation.constData(), nullptr);
         gst_caps_unref(sourceCaps);
         gst_caps_unref(encoderInputCaps);
         gst_caps_unref(outputCaps);
@@ -648,7 +581,7 @@ public:
         GstMessage *message = gst_bus_pop_filtered(bus, GST_MESSAGE_ERROR);
         gst_object_unref(bus);
         if (message) {
-            if (error) *error = QStringLiteral("Video spool startup error: %1").arg(busMessageError(message));
+            if (error) *error = QStringLiteral("Video spool startup error: %1").arg(busMessageError(message, {config.videoSpoolPath, config.audioSpoolPath, config.temporaryMp4Path}));
             gst_message_unref(message);
             return false;
         }
@@ -686,6 +619,8 @@ public:
 
     bool buildAudio(QString *error)
     {
+        const QByteArray audioLocation = GstFileLocation::forIo(config.audioSpoolPath, error);
+        if (audioLocation.isEmpty()) return false;
         cleanupAudio();
         GstElement *pipeline = gst_pipeline_new("recording_audio_spool");
         GstElement *source = create("appsrc", "recording_audio_source");
@@ -737,7 +672,7 @@ public:
         }
         observe(QStringLiteral("avenc_aac"), QStringLiteral("bitrate"), QStringLiteral("192000"));
         g_object_set(mux, "offset-to-zero", TRUE, nullptr);
-        g_object_set(sink, "location", config.audioSpoolPath.toUtf8().constData(), nullptr);
+        g_object_set(sink, "location", audioLocation.constData(), nullptr);
         gst_bin_add_many(GST_BIN(pipeline), source, convert, resample, rawCapsFilter,
                          encoder, parser, aacCapsFilter, mux, sink, nullptr);
         if (!gst_element_link_many(source, convert, resample, rawCapsFilter, encoder,
@@ -815,7 +750,7 @@ public:
                 return true;
             }
             if (type == GST_MESSAGE_ERROR) {
-                *error = QStringLiteral("%1 error: %2").arg(label, busMessageError(message));
+                *error = QStringLiteral("%1 error: %2").arg(label, busMessageError(message, {config.videoSpoolPath, config.audioSpoolPath, config.temporaryMp4Path}));
                 gst_message_unref(message);
                 gst_object_unref(bus);
                 return false;
@@ -830,6 +765,10 @@ public:
     bool remux(int deadlineMs, qint64 deadlineStartMs,
                const std::atomic_bool &cancelled, QString *error)
     {
+        const QByteArray videoLocation = GstFileLocation::forIo(config.videoSpoolPath, error);
+        const QByteArray outputLocation = GstFileLocation::forIo(config.temporaryMp4Path, error);
+        const QByteArray audioLocation = hasAudio ? GstFileLocation::forIo(config.audioSpoolPath, error) : QByteArray();
+        if (videoLocation.isEmpty() || outputLocation.isEmpty() || (hasAudio && audioLocation.isEmpty())) return false;
         GstElement *pipeline = gst_pipeline_new("recording_spool_remux");
         GstElement *videoFile = create("filesrc", "recording_remux_video_file");
         GstElement *videoDemux = create("matroskademux", "recording_remux_video_demux");
@@ -855,8 +794,8 @@ public:
             return false;
         }
 
-        g_object_set(videoFile, "location", config.videoSpoolPath.toUtf8().constData(), nullptr);
-        g_object_set(sink, "location", config.temporaryMp4Path.toUtf8().constData(), nullptr);
+        g_object_set(videoFile, "location", videoLocation.constData(), nullptr);
+        g_object_set(sink, "location", outputLocation.constData(), nullptr);
         GstCaps *videoCaps = gst_caps_from_string(
             "video/x-h264,stream-format=avc,alignment=au");
         GstCaps *audioCaps = hasAudio
@@ -874,7 +813,7 @@ public:
         g_object_set(videoCapsFilter, "caps", videoCaps, nullptr);
         gst_caps_unref(videoCaps);
         if (hasAudio) {
-            g_object_set(audioFile, "location", config.audioSpoolPath.toUtf8().constData(), nullptr);
+            g_object_set(audioFile, "location", audioLocation.constData(), nullptr);
             g_object_set(audioCapsFilter, "caps", audioCaps, nullptr);
             gst_caps_unref(audioCaps);
         }

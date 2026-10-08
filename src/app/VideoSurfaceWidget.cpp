@@ -28,6 +28,7 @@ void VideoSurfaceWidget::paintEvent(QPaintEvent *) {
 }
 
 void VideoSurfaceWidget::onFrameReady(QImage frame) {
+    if (m_observation) m_observation->observe(VideoObservation::QtReceived);
     QImage converted = frame.format() == QImage::Format_RGBA8888 ? frame : frame.convertToFormat(QImage::Format_RGBA8888);
     {
         QMutexLocker locker(&m_frameMutex);
@@ -43,6 +44,7 @@ void VideoSurfaceWidget::processPendingFrame() {
             return;
         }
         m_cachedFrame = m_pendingFrame;
+        if (m_observation) m_observation->observe(VideoObservation::CacheCommit);
         m_pendingFrame = QImage();
     }
     update();
@@ -69,6 +71,7 @@ void VideoSurfaceWidget::setVideoFitMode(bool fit) {
 void VideoSurfaceWidget::paintFallback(QPainter &painter) {
     if (m_cachedFrame.isNull()) {
         painter.fillRect(rect(), Qt::white);
+        if (m_observation) m_observation->observe(VideoObservation::EmptyPaint);
         return;
     }
 
@@ -81,4 +84,5 @@ void VideoSurfaceWidget::paintFallback(QPainter &painter) {
 
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter.drawImage(targetRect, m_cachedFrame);
+    if (m_observation) m_observation->observe(VideoObservation::ImagePaint);
 }

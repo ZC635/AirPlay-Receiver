@@ -77,10 +77,12 @@ std::optional<VideoFrameSample> GstAppSinkFrameSource::pullSample() {
 
     GstSample *sample = gst_app_sink_pull_sample(GST_APP_SINK(m_appsink));
     if (!sample) return std::nullopt;
+    if (m_observation) m_observation->observe(VideoObservation::AppSink);
 
     GstBuffer *buffer = gst_sample_get_buffer(sample);
     GstCaps *caps = gst_sample_get_caps(sample);
     if (!buffer || !caps) {
+        if (m_observation) m_observation->observe(VideoObservation::SourceRejected, "buffer_or_caps");
         gst_sample_unref(sample);
         return std::nullopt;
     }
@@ -88,6 +90,7 @@ std::optional<VideoFrameSample> GstAppSinkFrameSource::pullSample() {
     GstStructure *s = gst_caps_get_structure(caps, 0);
     const gchar *formatName = gst_structure_get_string(s, "format");
     if (!formatName || g_strcmp0(formatName, "RGBA") != 0) {
+        if (m_observation) m_observation->observe(VideoObservation::SourceRejected, "format");
         gst_sample_unref(sample);
         return std::nullopt;
     }
@@ -95,12 +98,14 @@ std::optional<VideoFrameSample> GstAppSinkFrameSource::pullSample() {
     int width = 0, height = 0;
     if (!gst_structure_get_int(s, "width", &width) ||
         !gst_structure_get_int(s, "height", &height)) {
+        if (m_observation) m_observation->observe(VideoObservation::SourceRejected, "dimensions");
         gst_sample_unref(sample);
         return std::nullopt;
     }
 
     GstMapInfo map;
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+        if (m_observation) m_observation->observe(VideoObservation::SourceRejected, "map");
         gst_sample_unref(sample);
         return std::nullopt;
     }
@@ -112,6 +117,7 @@ std::optional<VideoFrameSample> GstAppSinkFrameSource::pullSample() {
     }
 
     if (bytesPerLine <= 0 || height <= 0) {
+        if (m_observation) m_observation->observe(VideoObservation::SourceRejected, "stride_or_height");
         gst_buffer_unmap(buffer, &map);
         gst_sample_unref(sample);
         return std::nullopt;
@@ -119,6 +125,7 @@ std::optional<VideoFrameSample> GstAppSinkFrameSource::pullSample() {
 
     const gint64 needed = static_cast<gint64>(bytesPerLine) * height;
     if (needed <= 0 || needed > static_cast<gint64>(map.size)) {
+        if (m_observation) m_observation->observe(VideoObservation::SourceRejected, "buffer_size");
         gst_buffer_unmap(buffer, &map);
         gst_sample_unref(sample);
         return std::nullopt;
