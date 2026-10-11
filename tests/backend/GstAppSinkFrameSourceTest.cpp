@@ -1,5 +1,8 @@
 #include <QtTest/QtTest>
 #include <QSemaphore>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <cstdio>
 #include <atomic>
 #include <memory>
 #include <thread>
@@ -25,7 +28,82 @@ private:
 class GstAppSinkFrameSourceTest : public QObject {
     Q_OBJECT
 
+private:
+    struct ChildResult {
+        bool started = false;
+        bool finished = false;
+        bool reaped = false;
+        bool blockedCallbackEntered = false;
+        int exitCode = -1;
+        QProcess::ExitStatus exitStatus = QProcess::CrashExit;
+        QByteArray output;
+    };
+
+    static ChildResult runIsolated(const QString &test, bool blockCallback = false) {
+        QProcess child;
+        auto environment = QProcessEnvironment::systemEnvironment();
+        environment.insert("AIRPLAY_CALLBACK_TEST_CHILD", test);
+        if (blockCallback)
+            environment.insert("AIRPLAY_CALLBACK_TEST_BLOCK", "1");
+        else
+            environment.remove("AIRPLAY_CALLBACK_TEST_BLOCK");
+        child.setProcessEnvironment(environment);
+        child.setProcessChannelMode(QProcess::MergedChannels);
+        child.start(QCoreApplication::applicationFilePath(), {test});
+        ChildResult result;
+        result.started = child.waitForStarted(1000);
+        if (result.started) {
+            if (blockCallback) {
+                QElapsedTimer deadline;
+                deadline.start();
+                while (deadline.elapsed() < 5000 && child.state() != QProcess::NotRunning) {
+                    const auto remaining = 5000 - deadline.elapsed();
+                    if (remaining <= 0) break;
+                    child.waitForReadyRead(static_cast<int>(remaining));
+                    result.output += child.readAll();
+                    if (result.output.contains("CALLBACK_BLOCK_ENTERED")) {
+                        result.blockedCallbackEntered = true;
+                        break;
+                    }
+                }
+            }
+            // A genuine callback deadlock cannot be cancelled safely in-process.
+            // Fail the isolated test process; never detach a stack-owning worker.
+            result.finished = child.waitForFinished(blockCallback ? 1000 : 5000);
+            if (!result.finished) {
+                child.kill();
+                result.reaped = child.waitForFinished(1000);
+            } else {
+                result.reaped = true;
+            }
+            result.exitCode = child.exitCode();
+            result.exitStatus = child.exitStatus();
+        }
+        result.output += child.readAll();
+        return result;
+    }
+
+    static bool isIsolatedChild() {
+        return qEnvironmentVariable("AIRPLAY_CALLBACK_TEST_CHILD") ==
+               QString::fromLatin1(QTest::currentTestFunction());
+    }
+
 private slots:
+    void callbackTimeoutIsContainedAndNextRunSucceeds() {
+        const QString scenario = QStringLiteral(
+            "clearingGstSourceCallbackFromCallbackDoesNotDeadlock");
+        const auto blocked = runIsolated(scenario, true);
+        QVERIFY2(blocked.started, blocked.output.constData());
+        QVERIFY2(blocked.blockedCallbackEntered, blocked.output.constData());
+        QVERIFY2(!blocked.finished, "The deliberately blocked callback must time out");
+        QVERIFY2(blocked.reaped, "The timed-out child must exit before another test starts");
+        const auto healthy = runIsolated(scenario);
+        QVERIFY2(healthy.started && healthy.finished && healthy.reaped,
+                 healthy.output.constData());
+        QCOMPARE(healthy.exitStatus, QProcess::NormalExit);
+        QCOMPARE(healthy.exitCode, 0);
+    }
+
     void initTestCase() {
         gst_init(nullptr, nullptr);
     }
@@ -88,6 +166,13 @@ private slots:
     }
 
     void clearingGstSourceCallbackFromCallbackDoesNotDeadlock() {
+        if (!isIsolatedChild()) {
+            const auto child = runIsolated(QString::fromLatin1(QTest::currentTestFunction()));
+            QVERIFY2(child.started && child.finished && child.reaped, child.output.constData());
+            QCOMPARE(child.exitStatus, QProcess::NormalExit);
+            QCOMPARE(child.exitCode, 0);
+            return;
+        }
         GstElement *appsink = gst_element_factory_make("appsink", nullptr);
         QVERIFY(appsink != nullptr);
 
@@ -95,6 +180,12 @@ private slots:
         std::atomic_bool callbackReturned = false;
 
         source->setFrameAvailableCallback([&] {
+            if (qEnvironmentVariableIsSet("AIRPLAY_CALLBACK_TEST_BLOCK")) {
+                std::fputs("CALLBACK_BLOCK_ENTERED\n", stdout);
+                std::fflush(stdout);
+                QSemaphore neverReleased;
+                neverReleased.acquire();
+            }
             source->setFrameAvailableCallback({});
             callbackReturned.store(true);
         });
@@ -109,13 +200,11 @@ private slots:
             QTest::qWait(10);
         }
 
-        if (!callbackReturned.load()) {
-            emitter.detach();
-            source.release();
-            QFAIL("Clearing the callback from inside the active callback deadlocked");
-        }
-
+        const bool returnedInTime = callbackReturned.load();
+        // On deadlock the parent's watchdog fails this child; all captured locals
+        // remain alive here until it exits instead of leaking into the next test.
         emitter.join();
+        QVERIFY(returnedInTime);
         source.reset();
         gst_object_unref(appsink);
     }
@@ -173,6 +262,13 @@ private slots:
     }
 
     void concurrentInCallbackClearsBothReturn() {
+        if (!isIsolatedChild()) {
+            const auto child = runIsolated(QString::fromLatin1(QTest::currentTestFunction()));
+            QVERIFY2(child.started && child.finished && child.reaped, child.output.constData());
+            QCOMPARE(child.exitStatus, QProcess::NormalExit);
+            QCOMPARE(child.exitCode, 0);
+            return;
+        }
         GstElement *appsink = gst_element_factory_make("appsink", nullptr);
         QVERIFY(appsink != nullptr);
 
@@ -211,17 +307,11 @@ private slots:
             QTest::qWait(10);
         }
 
-        if (callbacksReturned.load() != 2) {
-            firstEmitter.detach();
-            secondEmitter.detach();
-            source.release();
-            gst_object_unref(appsink);
-            QFAIL("Concurrent in-callback clears deadlocked");
-        }
-
+        const bool returnedInTime = callbacksReturned.load() == 2;
         firstEmitter.join();
         secondEmitter.join();
         source.reset();
+        QVERIFY(returnedInTime);
         QVERIFY(bothCallbacksEntered);
         QVERIFY(bothCallbacksReadyToClear);
         QCOMPARE(callbacksReturned.load(), 2);
