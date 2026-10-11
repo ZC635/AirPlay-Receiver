@@ -6,6 +6,7 @@
 #include <QtTest>
 
 #include <QFileInfo>
+#include <QFile>
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -695,15 +696,31 @@ private slots:
         QVERIFY(!reportedBitrateInTier(500'000, 4'000'000));
     }
 
+    void videoOnly540p30ThroughControllerIsDiscoverable_data()
+    {
+        QTest::addColumn<bool>("longUnicodePath");
+        QTest::newRow("normal-path") << false;
+        QTest::newRow("long-unicode-path") << true;
+    }
+
     void videoOnly540p30ThroughControllerIsDiscoverable()
     {
+        QFETCH(bool, longUnicodePath);
         QTemporaryDir output;
+        QVERIFY(output.isValid());
+        QString outputPath = output.path();
+        if (longUnicodePath) {
+            while (outputPath.size() < 280)
+                outputPath += QStringLiteral("/录制目录-") + QString(40, QChar('x'));
+            QVERIFY(QDir().mkpath(outputPath));
+            QVERIFY(outputPath.size() > 260);
+        }
         RecordingController controller(30, openH264Hooks());
         GstSample *probe = videoSample(960, 540, 30, 0);
         QVERIFY(!controller.tryEnqueueVideoSample(probe));
         gst_sample_unref(probe);
         QTRY_VERIFY(controller.available());
-        const RecordingStartResult start = controller.start({output.path(), RecordingFormat::Mp4});
+        const RecordingStartResult start = controller.start({outputPath, RecordingFormat::Mp4});
         QVERIFY2(start.accepted, qPrintable(start.error));
         QSignalSpy finished(&controller, &RecordingController::finished);
         QSignalSpy failed(&controller, &RecordingController::failed);
@@ -716,9 +733,19 @@ private slots:
         for (GstSample *frame : frames) enqueueVideo(controller, frame);
         const RecordingResult result = finish(controller, &finished, &failed);
         QVERIFY(QFileInfo::exists(result.finalPath));
+        QString inspectionPath = result.finalPath;
+        if (longUnicodePath) {
+            QVERIFY(result.finalPath.size() > 260);
+            // The tested Windows GstDiscoverer file-URI path failed above MAX_PATH.
+            // Inspect an exact copy: creation/remux/publication above still use
+            // the long path, and the original media assertions remain unchanged.
+            inspectionPath = output.filePath(QStringLiteral("inspection.mp4"));
+            QVERIFY(QFile::copy(result.finalPath, inspectionPath));
+            QCOMPARE(QFileInfo(inspectionPath).size(), QFileInfo(result.finalPath).size());
+        }
         MediaSummary media;
         QString error;
-        QVERIFY2(discover(result.finalPath, &media, &error), qPrintable(error));
+        QVERIFY2(discover(inspectionPath, &media, &error), qPrintable(error));
         QCOMPARE(media.video.size(), 1);
         QCOMPARE(media.audio.size(), 0);
         QVERIFY(media.container.contains(QStringLiteral("quicktime"), Qt::CaseInsensitive) ||
@@ -961,16 +988,23 @@ private slots:
         if (!mfh) QSKIP("mfh264enc is not installed on this host");
         gst_object_unref(mfh);
         Files files;
-        GstRecordingPipeline pipeline;
+        GstRecordingPipelineHooks hardwareOnly;
+        hardwareOnly.encoderBuildAllowed = [](const QString &encoder, QString *error) {
+            if (encoder == QStringLiteral("mfh264enc")) return true;
+            if (error) *error = QStringLiteral("Hardware acceptance must not use software fallback");
+            return false;
+        };
+        GstRecordingPipeline pipeline(hardwareOnly);
         QString error;
         GstSample *first = videoSample(160, 120, 30, 0);
         auto mfhConfig = config(files.reservation, 160, 120, 30);
         mfhConfig.preferredEncoder = QStringLiteral("mfh264enc");
         if (!pipeline.start(mfhConfig, first, &error)) {
             gst_sample_unref(first);
-            QSKIP(qPrintable(QStringLiteral("mfh264enc cannot run without a usable GPU: %1").arg(error)));
+            QSKIP(qPrintable(QStringLiteral("mfh264enc could not start on this host: %1").arg(error)));
         }
         gst_sample_unref(first);
+        QCOMPARE(pipeline.encoderFactoryName(), QStringLiteral("mfh264enc"));
         for (int frame = 1; frame < 30; ++frame) {
             GstSample *sample = videoSample(160, 120, 30, frame * GST_SECOND / 30);
             QVERIFY2(pipeline.pushVideo(sample, frame * GST_SECOND / 30, &error), qPrintable(error));
@@ -978,10 +1012,8 @@ private slots:
         }
         std::atomic_bool cancelled{false};
         const auto result = pipeline.finalize(30'000, cancelled);
-        if (!result.success) {
-            QSKIP(qPrintable(QStringLiteral("mfh264enc finalization unavailable without GPU: %1")
-                             .arg(result.error)));
-        }
+        QVERIFY2(result.success, qPrintable(result.error));
+
         QVERIFY2(files.commit().isEmpty(), "mfh MP4 could not be committed");
         MediaSummary media;
         QVERIFY2(discover(files.reservation.finalPath, &media, &error), qPrintable(error));

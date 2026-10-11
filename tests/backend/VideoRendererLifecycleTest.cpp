@@ -2,6 +2,8 @@
 
 #if AIRPLAY_WITH_UXPLAY
 #include <algorithm>
+#include <atomic>
+#include <cstring>
 #include <memory>
 
 #include <gst/gst.h>
@@ -15,7 +17,38 @@
 class VideoRendererLifecycleTest : public QObject {
     Q_OBJECT
 
+private:
+#if AIRPLAY_WITH_UXPLAY
+    static const char *applicationIdentity() {
+        // Renderer labels are not process identities. Match the embedding contract.
+        const char *name = g_get_application_name();
+        return name ? name : "VideoRendererLifecycleTest";
+    }
+
+    std::atomic_int m_duplicateNameWarnings{0};
+    guint m_glibHandler = 0;
+#endif
+
 private slots:
+    void initTestCase() {
+#if AIRPLAY_WITH_UXPLAY
+        m_glibHandler = g_log_set_handler("GLib", G_LOG_LEVEL_WARNING,
+            [](const gchar *domain, GLogLevelFlags level, const gchar *message, gpointer context) {
+                auto *self = static_cast<VideoRendererLifecycleTest *>(context);
+                if (message && std::strstr(message, "g_set_application_name() called multiple times"))
+                    self->m_duplicateNameWarnings.fetch_add(1);
+                g_log_default_handler(domain, level, message, nullptr);
+            }, this);
+#endif
+    }
+
+    void cleanupTestCase() {
+#if AIRPLAY_WITH_UXPLAY
+        g_log_remove_handler("GLib", m_glibHandler);
+        QCOMPARE(m_duplicateNameWarnings.load(), 0);
+#endif
+    }
+
     void reconnectDeliversFreshDecodedFrames_data() {
         QTest::addColumn<bool>("recordingTap");
         QTest::newRow("display-only") << false;
@@ -85,7 +118,7 @@ private slots:
         if (recordingTap)
             video_renderer_set_sample_callback([](GstSample *, void *) {}, nullptr);
         videoflip_t flip[2] = {NONE, NONE};
-        QCOMPARE(video_renderer_init(logger.get(), "Reconnect Frame Test", flip,
+        QCOMPARE(video_renderer_init(logger.get(), applicationIdentity(), flip,
                                       "h264parse", "", "decodebin", "videoconvert",
                                       "appsink", "", false, false, false, false,
                                       3, nullptr), 0);
@@ -167,7 +200,7 @@ private slots:
         videoflip_t videoFlip[2] = {NONE, NONE};
 
         video_renderer_set_sample_callback(tap, nullptr);
-        QCOMPARE(video_renderer_init(logger.get(), "Tap Recreate H264", videoFlip,
+        QCOMPARE(video_renderer_init(logger.get(), applicationIdentity(), videoFlip,
                                       "h264parse", "", "decodebin", "videoconvert",
                                       "appsink", "", false, false, true, false,
                                       3, nullptr), 0);
@@ -179,7 +212,7 @@ private slots:
         video_renderer_destroy();
 
         video_renderer_set_sample_callback(tap, nullptr);
-        QCOMPARE(video_renderer_init(logger.get(), "Tap Recreate H265", videoFlip,
+        QCOMPARE(video_renderer_init(logger.get(), applicationIdentity(), videoFlip,
                                       "h264parse", "", "decodebin", "videoconvert",
                                       "appsink", "", false, false, true, false,
                                       3, nullptr), 0);
@@ -211,7 +244,7 @@ private slots:
         } cleanup;
 
         videoflip_t videoFlip[2] = {NONE, NONE};
-        const int result = video_renderer_init(logger.get(), "Bad Playbin Test", videoFlip, "h264parse", "",
+        const int result = video_renderer_init(logger.get(), applicationIdentity(), videoFlip, "h264parse", "",
                                                 "decodebin", "videoconvert", "fakesink", "", false, false, false, false,
                                                 99, "http://fake-hls-stream.example/test.m3u8");
         QVERIFY2(result != 0, "video_renderer_init must return non-zero for invalid playbin version");
@@ -240,7 +273,7 @@ private slots:
         } cleanup;
 
         videoflip_t videoFlip[2] = {NONE, NONE};
-        QCOMPARE(video_renderer_init(logger.get(), "Video Renderer Lifecycle Test", videoFlip, "h264parse", "",
+        QCOMPARE(video_renderer_init(logger.get(), applicationIdentity(), videoFlip, "h264parse", "",
                                       "decodebin", "videoconvert", "fakesink", "", false, false, false, false,
                                       3, nullptr), 0);
         video_renderer_start();
@@ -285,7 +318,7 @@ private slots:
         } cleanup;
 
         videoflip_t videoFlip[2] = {NONE, NONE};
-        QCOMPARE(video_renderer_init(logger.get(), "Video Renderer Reconnect Test", videoFlip, "h264parse", "",
+        QCOMPARE(video_renderer_init(logger.get(), applicationIdentity(), videoFlip, "h264parse", "",
                                       "decodebin", "videoconvert", "fakesink", "", false, false, false, true,
                                       3, nullptr), 0);
         video_renderer_start();
