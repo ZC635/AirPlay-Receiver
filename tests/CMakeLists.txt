@@ -812,3 +812,12 @@ add_executable(ReconnectVideoEvidenceTest diagnostics/ReconnectVideoEvidenceTest
 target_link_libraries(ReconnectVideoEvidenceTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME ReconnectVideoEvidenceTest COMMAND ReconnectVideoEvidenceTest)
 set_tests_properties(ReconnectVideoEvidenceTest PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}")
+
+if(AIRPLAY_WITH_UXPLAY)
+    add_executable(UpstreamProtocolRegressionTest backend/UpstreamProtocolRegressionTest.cpp)
+    target_link_libraries(UpstreamProtocolRegressionTest PRIVATE airplay_app_lib Qt6::Test Qt6::Network)
+    target_include_directories(UpstreamProtocolRegressionTest PRIVATE "${PROJECT_SOURCE_DIR}/third_party/uxplay")
+    add_test(NAME UpstreamProtocolRegressionTest COMMAND UpstreamProtocolRegressionTest)
+    set_tests_properties(UpstreamProtocolRegressionTest PROPERTIES TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}")
+endif()

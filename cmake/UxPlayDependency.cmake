@@ -6,6 +6,7 @@ if(AIRPLAY_WITH_UXPLAY)
     endif()
     find_package(Qt6 REQUIRED COMPONENTS Network)
     find_package(QMdnsEngine REQUIRED)
+    set(UXPLAY_EXTERNAL_MDNS_PUBLISHER ON)
     add_subdirectory("${PROJECT_SOURCE_DIR}/third_party/uxplay" "${CMAKE_CURRENT_BINARY_DIR}/third_party/uxplay" EXCLUDE_FROM_ALL)
     add_library(uxplay_dependency INTERFACE)
     target_include_directories(uxplay_dependency INTERFACE

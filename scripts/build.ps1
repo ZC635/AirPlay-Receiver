@@ -356,10 +356,16 @@ function Start-PortableProcess {
 function Build-CTestPrerequisiteTargets {
     param([Parameter(Mandatory = $true)][string]$Directory)
 
-    Write-Host "Building CTest prerequisite: RendererSampleTapsTest [$Directory]" -ForegroundColor Gray
-    cmake --build $Directory --target RendererSampleTapsTest
+    Write-Host "Building UxPlay CTest prerequisites [$Directory]" -ForegroundColor Gray
+    cmake --build $Directory --target RendererSampleTapsTest HttpdTimeoutTest PairingRegressionTest RaopNtpRegressionTest MirrorNalRegressionTest
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not build RendererSampleTapsTest in $Directory"
+        throw "Could not build UxPlay CTest prerequisites in $Directory"
+    }
+    foreach ($target in @('HttpdTimeoutTest', 'PairingRegressionTest', 'RaopNtpRegressionTest', 'MirrorNalRegressionTest')) {
+        $testExe = Join-Path $Directory "third_party\uxplay\tests\$target.exe"
+        if (-not (Test-Path -LiteralPath $testExe)) {
+            throw "CTest prerequisite target completed without producing: $testExe"
+        }
     }
     $rendererSampleTapsTest = Join-Path $Directory `
         "third_party\uxplay\tests\RendererSampleTapsTest.exe"
