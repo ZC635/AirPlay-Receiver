@@ -2055,7 +2055,7 @@ private slots:
     void dnssdProducesValidTxtRecordsOnWindows() {
         const char hw_addr[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
         int error = -1;
-        dnssd_t *dnssd = dnssd_init("TestReceiver", 12, hw_addr, sizeof(hw_addr), &error, 0);
+        dnssd_t *dnssd = dnssd_init("TestReceiver", 12, hw_addr, sizeof(hw_addr), 0, &error);
         QVERIFY2(dnssd != NULL, "dnssd_init returned NULL");
         QCOMPARE(error, 0);
 
@@ -2139,7 +2139,7 @@ private slots:
     void dnsSdFeatureBit42AlwaysAdvertisesH265() {
         const char hw_addr[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
         int error = -1;
-        dnssd_t *dnssd = dnssd_init("TestReceiver", 12, hw_addr, sizeof(hw_addr), &error, 0);
+        dnssd_t *dnssd = dnssd_init("TestReceiver", 12, hw_addr, sizeof(hw_addr), 0, &error);
         QVERIFY2(dnssd != NULL, "dnssd_init returned NULL");
         QCOMPARE(error, 0);
 

@@ -260,7 +260,7 @@ bool UxPlayDiscovery::createBroadcast()
     auto *dnssd = injectedFailure
         ? nullptr
         : dnssd_init(serverName.constData(), serverName.size(), hwAddress.constData(), hwAddress.size(),
-                     &dnssdError, 0);
+                     0, &dnssdError);
     if (dnssdError || !dnssd) {
         if (injectedFailure) {
             recordFailure(QStringLiteral("dns_sd_init"),
