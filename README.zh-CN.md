@@ -121,7 +121,7 @@ ctest --test-dir build --output-on-failure
 
 诊断日志仅写入相邻的 `logs` 目录：每个会话一个文件，每个文件最大 20 MB，保留最新 10 个文件。日志绝不会自动上传；仅在被要求时手动发送。`[Diagnostic Logging]` 标题后缀是诊断日志已启用的唯一持续指示。若相邻目录不可写入，则不会使用备用目录，也不需要管理员权限。诊断日志提供排障信息；它不会自动确定根本原因。
 
-日志也记录语言应用、全屏恢复、工具栏显隐变化、有效显示偏好，以及设置保存和目录操作失败。具体字段见[界面与设置事件参考](docs/diagnostic-events.md)。
+除启动、发现、接收器和网络事件外，日志也记录语言切换、全屏恢复、工具栏显隐、显示偏好，以及设置保存和目录打开失败。事件与字段名在任何界面语言下都保持英文。日志不包含设置内容、接收器名称、文件路径、屏幕标识或光标坐标。
 
 ### 运行
 
@@ -191,7 +191,6 @@ src/
 cmake/          UxPlay, QMdnsEngine, and renderer dependency integration
 config/         Portable runtime manifest
 scripts/        PowerShell build, deploy, portable packaging, and run helpers
-docs/           Project overview and maintenance notes
 third_party/
   uxplay/       UxPlay submodule
 tests/
