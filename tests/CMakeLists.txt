@@ -391,8 +391,8 @@ if(AIRPLAY_POWERSHELL AND AIRPLAY_WITH_UXPLAY)
     add_library(GStreamerNonPluginFixture SHARED support/GStreamerNonPluginFixture.cpp)
     set_target_properties(GStreamerNonPluginFixture PROPERTIES PREFIX "" AUTOMOC OFF)
     set(AIRPLAY_STARTUP_ACCEPTANCE_REPORT_DIRECTORY
-        "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/gstreamer-startup-acceptance"
-        CACHE PATH "Ignored report directory for real GStreamer startup acceptance")
+        "${PROJECT_BINARY_DIR}/test-reports/gstreamer-startup-acceptance"
+        CACHE PATH "Report directory for real GStreamer startup acceptance")
     add_test(NAME GStreamerStartupProcessContainmentTest
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/StartupProcessContainmentTest.ps1"
@@ -738,7 +738,7 @@ if(WIN32 AND AIRPLAY_WITH_UXPLAY)
                 -FixtureExecutable "$<IF:$<STREQUAL:${_mode},TransitiveImport>,$<TARGET_FILE:DnssdTransitiveImportFixture>,$<TARGET_FILE:DnssdDirectImportFixture>>"
                 -FixtureDll $<TARGET_FILE:DnssdExternalRuntimeFixture>
                 -Mode ${_mode}
-                -ReportDirectory "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/dnssd-runtime-acceptance/${_mode}"
+                -ReportDirectory "${PROJECT_BINARY_DIR}/test-reports/dnssd-runtime-acceptance/${_mode}"
         )
         set_tests_properties(DnssdRuntime${_mode}Test PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
@@ -749,7 +749,7 @@ endif()
 if(AIRPLAY_WITH_UXPLAY)
     add_executable(GStreamerCacheStorageTest platform/GStreamerCacheStorageTest.cpp)
     target_link_libraries(GStreamerCacheStorageTest PRIVATE airplay_app_lib Qt6::Test)
-    set(AIRPLAY_CACHE_STORAGE_TEST_REPORT_DIRECTORY "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/cache-storage" CACHE PATH "Storage test evidence directory")
+    set(AIRPLAY_CACHE_STORAGE_TEST_REPORT_DIRECTORY "${PROJECT_BINARY_DIR}/test-reports/cache-storage" CACHE PATH "Storage test evidence directory")
     file(MAKE_DIRECTORY "${AIRPLAY_CACHE_STORAGE_TEST_REPORT_DIRECTORY}")
     add_test(NAME GStreamerCacheStorageTest COMMAND GStreamerCacheStorageTest
         -o "${AIRPLAY_CACHE_STORAGE_TEST_REPORT_DIRECTORY}/storage-results.txt,txt")
@@ -767,7 +767,7 @@ if(WIN32 AND AIRPLAY_WITH_UXPLAY)
     add_executable(GStreamerCacheProcessTest platform/GStreamerCacheProcessTest.cpp)
     target_link_libraries(GStreamerCacheProcessTest PRIVATE airplay_app_lib Qt6::Test)
     add_dependencies(GStreamerCacheProcessTest GStreamerCacheProcessFixture)
-    set(AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/cache-process" CACHE PATH "Process test evidence directory")
+    set(AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY "${PROJECT_BINARY_DIR}/test-reports/cache-process" CACHE PATH "Process test evidence directory")
     file(MAKE_DIRECTORY "${AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY}")
     add_test(NAME GStreamerCacheProcessTest COMMAND GStreamerCacheProcessTest
         -o "${AIRPLAY_CACHE_PROCESS_TEST_REPORT_DIRECTORY}/task2-process-results.txt,txt")
@@ -797,7 +797,7 @@ target_link_libraries(HiddenFileLeaseTest PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME HiddenFileLeaseTest COMMAND HiddenFileLeaseTest)
 set_tests_properties(HiddenFileLeaseTest PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}")
 
-set(AIRPLAY_BOUNDARY_REPORT_DIRECTORY "${PROJECT_SOURCE_DIR}/docs/superpowers/reports/path-lock-boundaries-2026-10-08" CACHE PATH "File boundary evidence")
+set(AIRPLAY_BOUNDARY_REPORT_DIRECTORY "${PROJECT_BINARY_DIR}/test-reports/path-lock-boundaries" CACHE PATH "File boundary evidence")
 set_tests_properties(HiddenFileLeaseTest PROPERTIES ENVIRONMENT "AIRPLAY_BOUNDARY_RUNTIME=${AIRPLAY_BOUNDARY_REPORT_DIRECTORY}/runtime")
 if(AIRPLAY_WITH_UXPLAY)
     pkg_check_modules(GST_FILE_APP REQUIRED IMPORTED_TARGET gstreamer-app-1.0)
