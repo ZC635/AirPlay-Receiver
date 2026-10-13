@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(AirPlayReceiver VERSION 0.4.1 LANGUAGES CXX RC)
+project(AirPlayReceiver VERSION 0.4.3 LANGUAGES CXX RC)
 
 include(cmake/CpuCompatibility.cmake)
 
