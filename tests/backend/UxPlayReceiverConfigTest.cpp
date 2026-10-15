@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 #include <QElapsedTimer>
 #include <QTemporaryDir>
+#include <QScopeGuard>
 
 #include <cmath>
 #include <array>
@@ -18,6 +19,9 @@
 #include "backend/UxPlayCallbackDispatch.h"
 #include "backend/UxPlayDiscovery.h"
 #include "backend/UxPlayReceiver.h"
+#if AIRPLAY_WITH_UXPLAY
+#include "backend/UxPlayVideoLifecycle.h"
+#endif
 #if AIRPLAY_WITH_UXPLAY
 #undef private
 #endif
@@ -463,7 +467,16 @@ private slots:
 #endif
 
 #if AIRPLAY_WITH_UXPLAY
+    void videoResetClearsOldTapBeforeDestroyAndRegistersNewTapBeforeInit_data() {
+        QTest::addColumn<int>("resetType");
+        QTest::newRow("no-hold") << int(RESET_TYPE_NOHOLD);
+        QTest::newRow("rtp-shutdown") << int(RESET_TYPE_RTP_SHUTDOWN);
+        QTest::newRow("hls-shutdown") << int(RESET_TYPE_HLS_SHUTDOWN);
+        QTest::newRow("hls-eos") << int(RESET_TYPE_HLS_EOS);
+        QTest::newRow("rtp-to-hls") << int(RESET_TYPE_RTP_TO_HLS_TEARDOWN);
+    }
     void videoResetClearsOldTapBeforeDestroyAndRegistersNewTapBeforeInit() {
+        QFETCH(int, resetType);
         FakeMdnsPublishing publisher;
         QStringList calls;
         UxPlayReceiverConfig config;
@@ -479,7 +492,7 @@ private slots:
         QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
         calls.clear();
 
-        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+        receiver.handleVideoResetFromUxPlayCallback(resetType);
 
         const auto indexOf = [&calls](const QString &call) { return calls.indexOf(call); };
         QVERIFY(indexOf("video_renderer_stop") >= 0);
@@ -504,6 +517,84 @@ private slots:
 #endif
 
 #if AIRPLAY_WITH_UXPLAY
+    void videoResetInitializationFailureReleasesResourcesAndAllowsFreshStart() {
+        FakeMdnsPublishing publisher;
+        QStringList calls;
+        UxPlayReceiverConfig config;
+        config.videoSink = "appsink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        config.rendererCallObserver = [&](const QString &call) { calls.append(call); };
+        UxPlayReceiver receiver(config);
+        receiver.setVideoFrameCallback([](QImage) {});
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        calls.clear();
+        // A missing sink may still produce a partial pipeline. Missing appsrc
+        // makes the real initializer fail its mandatory source lookup.
+        GstRegistry *registry = gst_registry_get();
+        GstPluginFeature *source = gst_registry_find_feature(registry, "appsrc", GST_TYPE_ELEMENT_FACTORY);
+        QVERIFY(source != nullptr);
+        gst_registry_remove_feature(registry, source);
+        bool sourceRestored = false;
+        const auto restoreSource = qScopeGuard([&] {
+            if (!sourceRestored) gst_registry_add_feature(registry, source);
+            gst_object_unref(source);
+        });
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+        QCOMPARE(receiver.state(), ReceiverState::Error);
+        QVERIFY(!receiver.m_acceptingCallbacks.load());
+        QVERIFY(!receiver.m_acceptingVideoTapSamples.load());
+        QVERIFY(receiver.m_videoTapContext == nullptr);
+        QVERIFY(receiver.m_audioTapContext == nullptr);
+        QVERIFY(receiver.findChildren<VideoFrameBridge *>().isEmpty());
+        QCOMPARE(calls.count("video_set_sample_callback"), 1);
+        QCOMPARE(calls.count("video_clear_sample_callback"), 2);
+        QCOMPARE(calls.count("video_renderer_init"), 1);
+        QCOMPARE(calls.count("video_renderer_start"), 0);
+
+        receiver.stop();
+        sourceRestored = gst_registry_add_feature(registry, source);
+        QVERIFY(sourceRestored);
+        receiver.start();
+        QCOMPARE(receiver.state(), ReceiverState::Discoverable);
+        QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCOMPARE(receiver.findChildren<VideoFrameBridge *>().size(), 1);
+        receiver.stop();
+    }
+
+    void queuedCodecAttachmentAcrossSameGenerationResetKeepsSingleBridge() {
+        FakeMdnsPublishing publisher;
+        UxPlayReceiverConfig config;
+        config.videoSink = "appsink";
+        config.audioSink = "fakesink";
+        config.mdnsPublisher = &publisher;
+        UxPlayReceiver receiver(config);
+        receiver.setVideoFrameCallback([](QImage) {});
+        receiver.start();
+        receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
+        const auto generation = receiver.callbackGenerationForUxPlayCallback();
+        int result = -1;
+        std::thread worker([&] { result = receiver.chooseVideoCodecFromCallback(false, generation); });
+        worker.join();
+        QCOMPARE(result, 0);
+        QVERIFY(receiver.findChildren<VideoFrameBridge *>().isEmpty());
+        receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
+        QCOMPARE(receiver.callbackGenerationForUxPlayCallback(), generation);
+        const auto bridges = receiver.findChildren<VideoFrameBridge *>();
+        QCOMPARE(bridges.size(), 1);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCOMPARE(receiver.findChildren<VideoFrameBridge *>(), bridges);
+        QCOMPARE(bridges.front()->thread(), receiver.thread());
+        receiver.stop();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QVERIFY(receiver.findChildren<VideoFrameBridge *>().isEmpty());
+    }
+
     void videoResetCodecSelectionFailureIsBrokenBackendError() {
         FakeMdnsPublishing publisher;
         QStringList calls;
@@ -541,11 +632,11 @@ private slots:
         QVERIFY(!receiver.recordingAvailable());
         QVERIFY(!receiver.m_acceptingCallbacks.load());
         QVERIFY(!receiver.m_acceptingVideoTapSamples.load());
-        QVERIFY(!receiver.m_videoTapRegistered);
+        QVERIFY(!receiver.m_video->m_tap.context);
         QVERIFY(!receiver.m_audioTapRegistered);
         QVERIFY(receiver.m_videoTapContext == nullptr);
         QVERIFY(receiver.m_audioTapContext == nullptr);
-        QVERIFY(!receiver.m_videoRendererInitialized);
+        QVERIFY(!receiver.m_video->m_initialized);
         QVERIFY(!receiver.m_audioRendererInitialized);
         QVERIFY(calls.contains(QStringLiteral("cleanup_after_recording_boundary")));
         QVERIFY(calls.contains(QStringLiteral("video_renderer_destroy")));
@@ -1190,13 +1281,13 @@ private slots:
         receiver.m_callbackGeneration.store(7);
         receiver.m_renderersStarted.store(true);
         receiver.setState(ReceiverState::Connected);
-        receiver.m_videoRendererStopped.store(true);
+        receiver.m_video->m_stopped.store(true);
 
         receiver.setStateFromUxPlayCallback(ReceiverState::Discoverable, 6);
         receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN, 6);
 
         QCOMPARE(receiver.state(), ReceiverState::Connected);
-        QVERIFY(receiver.m_videoRendererStopped.load());
+        QVERIFY(receiver.m_video->m_stopped.load());
         receiver.m_renderersStarted.store(false);
     }
 #endif
@@ -1208,13 +1299,13 @@ private slots:
         receiver.m_callbackGeneration.store(7);
         receiver.m_renderersStarted.store(true);
 
-        receiver.m_videoRendererStopped.store(true);
+        receiver.m_video->m_stopped.store(true);
         receiver.restartVideoPipelineForConnect(6);
-        QVERIFY(receiver.m_videoRendererStopped.load());
+        QVERIFY(receiver.m_video->m_stopped.load());
 
-        receiver.m_videoRendererStopped.store(false);
+        receiver.m_video->m_stopped.store(false);
         receiver.stopVideoPipelineForDisconnect(6);
-        QVERIFY(!receiver.m_videoRendererStopped.load());
+        QVERIFY(!receiver.m_video->m_stopped.load());
         receiver.m_renderersStarted.store(false);
     }
 #endif
@@ -1228,9 +1319,9 @@ private slots:
 
         QCOMPARE(receiver.chooseVideoCodecFromCallback(false), -1);
 
-        receiver.m_videoRendererStopped.store(true);
+        receiver.m_video->m_stopped.store(true);
         receiver.restartVideoPipelineForConnect();
-        QVERIFY(receiver.m_videoRendererStopped.load());
+        QVERIFY(receiver.m_video->m_stopped.load());
     }
 #endif
 
@@ -1429,10 +1520,10 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
 
         receiver.stopVideoPipelineForDisconnect();
-        QVERIFY(receiver.m_videoRendererStopped.load());
+        QVERIFY(receiver.m_video->m_stopped.load());
 
         receiver.restartVideoPipelineForConnect();
-        QVERIFY(!receiver.m_videoRendererStopped.load());
+        QVERIFY(!receiver.m_video->m_stopped.load());
 
         receiver.stop();
     }
@@ -1861,7 +1952,7 @@ private slots:
         QCOMPARE(receiver.state(), ReceiverState::Discoverable);
         receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
         QCOMPARE(receiver.chooseVideoCodecFromCallback(false), 0);
-        QTRY_VERIFY(receiver.m_videoFrameBridge != nullptr);
+        QTRY_VERIFY(receiver.m_video->m_bridge != nullptr);
 
         auto appsinkHasOneFrameHandler = [&receiver] {
             GstElement *pipeline = static_cast<GstElement *>(video_renderer_get_pipeline());
@@ -1888,7 +1979,7 @@ private slots:
 
         receiver.handleVideoResetFromUxPlayCallback(RESET_TYPE_RTP_SHUTDOWN);
 
-        QVERIFY(receiver.m_videoFrameBridge != nullptr);
+        QVERIFY(receiver.m_video->m_bridge != nullptr);
         QVERIFY(appsinkHasOneFrameHandler());
 
         receiver.stop();
@@ -1905,7 +1996,7 @@ private slots:
         receiver.setVideoFrameCallback([](QImage) {});
         receiver.start();
         receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
-        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+        QVERIFY(receiver.m_video->m_bridge == nullptr);
 
         std::atomic_int result = -1;
         const quint64 generation = receiver.callbackGenerationForUxPlayCallback();
@@ -1917,8 +2008,8 @@ private slots:
         QCOMPARE(result.load(), 0);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         QCoreApplication::processEvents();
-        QVERIFY(receiver.m_videoFrameBridge != nullptr);
-        QCOMPARE(receiver.m_videoFrameBridge->thread(), receiver.thread());
+        QVERIFY(receiver.m_video->m_bridge != nullptr);
+        QCOMPARE(receiver.m_video->m_bridge->thread(), receiver.thread());
 
         receiver.stop();
     }
@@ -1934,7 +2025,7 @@ private slots:
         receiver.setVideoFrameCallback([](QImage) {});
         receiver.start();
         receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
-        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+        QVERIFY(receiver.m_video->m_bridge == nullptr);
 
         std::atomic_int result = -1;
         const quint64 generation = receiver.callbackGenerationForUxPlayCallback();
@@ -1947,7 +2038,7 @@ private slots:
         receiver.m_callbackGeneration.fetch_add(1);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         QCoreApplication::processEvents();
-        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+        QVERIFY(receiver.m_video->m_bridge == nullptr);
 
         receiver.stop();
     }
@@ -1963,7 +2054,7 @@ private slots:
         receiver.setVideoFrameCallback([](QImage) {});
         receiver.start();
         receiver.setStateFromUxPlayCallback(ReceiverState::Connected);
-        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+        QVERIFY(receiver.m_video->m_bridge == nullptr);
 
         std::atomic_int result = -1;
         const quint64 generation = receiver.callbackGenerationForUxPlayCallback();
@@ -1976,7 +2067,7 @@ private slots:
         receiver.stopVideoPipelineForDisconnect(generation);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         QCoreApplication::processEvents();
-        QVERIFY(receiver.m_videoFrameBridge == nullptr);
+        QVERIFY(receiver.m_video->m_bridge == nullptr);
 
         receiver.stop();
     }

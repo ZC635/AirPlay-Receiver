@@ -7,13 +7,11 @@
 
 #include <QPointer>
 #include <optional>
-#include <memory>
 #include <functional>
 #include <QObject>
 
 class AirPlayReceiver;
 class HotkeyService;
-class SettingsChangeDeferrer;
 class SettingsPersistence;
 class DiagnosticLogSink;
 struct SettingsApplyPlan;
@@ -48,7 +46,6 @@ private:
     QPointer<HotkeyService> hotkeys_;
     SettingsPersistence *persistence_ = nullptr;
     QPointer<AirPlayReceiver> receiver_;
-    std::unique_ptr<SettingsChangeDeferrer> deferrer_;
     AppSettings &current_;
     RecordingPresentationDispatcher presentationDispatcher_;
     SettingsSubmitResult *activeSubmit_ = nullptr;

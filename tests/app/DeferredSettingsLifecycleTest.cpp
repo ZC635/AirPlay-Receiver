@@ -120,6 +120,56 @@ void retainSubmitFacts(const SettingsSubmitResult &submit) {
 class DeferredSettingsLifecycleTest : public QObject {
     Q_OBJECT
 private slots:
+    void deferredConfigurationWaitsForBothGatesAndAppliesLatestTargetOnce_data() {
+        QTest::addColumn<bool>("disconnectFirst");
+        QTest::newRow("disconnect-then-presentation") << true;
+        QTest::newRow("presentation-then-disconnect") << false;
+    }
+    void deferredConfigurationWaitsForBothGatesAndAppliesLatestTargetOnce() {
+        QFETCH(bool, disconnectFirst);
+        auto current = AppSettings::defaults();
+        ScriptedPersistence persistence;
+        CallbackReceiver receiver;
+        receiver.forceState(ReceiverState::Connected);
+        receiver.setRecordingAvailableForTest(true);
+        SettingsApplyCoordinator::RecordingPresentationCompletion presentation;
+        SettingsApplyCoordinator coordinator(current, nullptr, &persistence, &receiver, nullptr, nullptr,
+            [&](auto completion) { presentation = std::move(completion); });
+        QSignalSpy completed(&coordinator, &SettingsApplyCoordinator::deferredApplyFinished);
+        receiver.startRecording({});
+        auto draft = current;
+        draft.setReceiverName("Superseded target");
+        QVERIFY(coordinator.apply(draft, [] { return ReceiverApplyTiming::AfterDisconnect; }).settingsSaved);
+        draft = current;
+        draft.setReceiverName("Latest target");
+        draft.setVideoQuality({VideoResolution::P720, VideoFrameRate::Fps60});
+        QVERIFY(coordinator.apply(draft, [] { return ReceiverApplyTiming::AfterDisconnect; }).settingsSaved);
+        QCOMPARE(receiver.configurationBatchCount, 0);
+
+        if (disconnectFirst) receiver.forceState(ReceiverState::Discoverable);
+        receiver.stopRecording();
+        receiver.completeRecordingForTest({});
+        QVERIFY(presentation);
+        QCOMPARE(receiver.configurationBatchCount, 0); // Idle alone cannot release the recording gate.
+        presentation();
+        if (!disconnectFirst) {
+            QCOMPARE(receiver.configurationBatchCount, 0);
+            receiver.forceState(ReceiverState::Discoverable);
+        }
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(receiver.receiverName(), QString("Latest target"));
+        QCOMPARE(receiver.videoQuality().resolution, VideoResolution::P720);
+        QCOMPARE(receiver.videoQuality().frameRate, VideoFrameRate::Fps60);
+        QCOMPARE(completed.count(), 1);
+
+        presentation();
+        emit receiver.recordingFinished({});
+        receiver.forceState(ReceiverState::Connected);
+        receiver.forceState(ReceiverState::Discoverable);
+        QCoreApplication::sendPostedEvents();
+        QCOMPARE(receiver.configurationBatchCount, 1);
+        QCOMPARE(completed.count(), 1);
+    }
     void interruptedUnknownFirstFailureDoesNotClaimSavingSucceeded() {
         class UnknownFailurePersistence final : public SettingsPersistence {
         public:

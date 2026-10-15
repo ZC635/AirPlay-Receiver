@@ -1,7 +1,6 @@
 #include "app/SettingsApplyCoordinator.h"
 #include "app/SettingsDiagnostics.h"
 
-#include "app/SettingsChangeDeferrer.h"
 #include "app/UiMessage.h"
 #include "backend/AirPlayReceiver.h"
 #include "platform/HotkeyService.h"
@@ -539,7 +538,7 @@ SettingsApplyCoordinator::SettingsApplyCoordinator(AppSettings &current, HotkeyS
     SettingsPersistence *persistence, AirPlayReceiver *receiver,
     DiagnosticLogSink *diagnosticSink, QObject *parent, RecordingPresentationDispatcher presentationDispatcher)
     : QObject(parent), hotkeys_(hotkeys), persistence_(persistence), receiver_(receiver),
-      deferrer_(std::make_unique<SettingsChangeDeferrer>()), current_(current), presentationDispatcher_(std::move(presentationDispatcher)), diagnosticSink_(diagnosticSink) {
+      current_(current), presentationDispatcher_(std::move(presentationDispatcher)), diagnosticSink_(diagnosticSink) {
     qRegisterMetaType<SettingsDeferredResult>();
     ready_ = receiver_ && receiver_->state() != ReceiverState::Error
         && receiver_->state() != ReceiverState::Starting;
@@ -551,8 +550,6 @@ SettingsApplyCoordinator::SettingsApplyCoordinator(AppSettings &current, HotkeyS
         connect(receiver_, &AirPlayReceiver::recordingFailed, this, [this] { recordingTerminated(); });
         connect(receiver_, &QObject::destroyed, this, [this] { endReceiverLifecycle(); });
     }
-    connect(deferrer_.get(), &SettingsChangeDeferrer::receiverConfigurationReady, this,
-        [this] { consumeReady(epoch_, version_); });
 }
 SettingsApplyCoordinator::~SettingsApplyCoordinator() { endReceiverLifecycle(); }
 
@@ -578,7 +575,7 @@ void SettingsApplyCoordinator::receiverStateChanged(ReceiverState state) {
     }
     if (state == ReceiverState::Discoverable || state == ReceiverState::Connecting || state == ReceiverState::Connected) preparedStart_ = false;
     if (ready_ && pendingReceiverBatch_ && !sessionActive())
-        deferrer_->receiverSessionChanged(true, false);
+        consumeReady(epoch_, version_);
 }
 void SettingsApplyCoordinator::recordingStateChanged(RecordingState state) {
     if (state == RecordingState::Recording) ++recordingVersion_;
@@ -597,7 +594,7 @@ void SettingsApplyCoordinator::recordingTerminated() {
             || !owner->receiver_ || owner->receiver_->recordingState() != RecordingState::Idle) return;
         owner->awaitingRecordingResult_ = false;
         if (owner->ready_ && owner->pendingReceiverBatch_)
-            owner->deferrer_->recordingStateChanged(RecordingState::Finalizing, RecordingState::Idle);
+            owner->consumeReady(owner->epoch_, owner->version_);
     };
     // The UI owns only presentation work. The qualified completion owns no raw module pointer.
     if (presentationDispatcher_) presentationDispatcher_(std::move(complete));
@@ -605,14 +602,12 @@ void SettingsApplyCoordinator::recordingTerminated() {
 }
 void SettingsApplyCoordinator::consumeReady(quint64 epoch, quint64 version) {
     if (epoch != epoch_ || version != version_ || !ready_ || !pendingReceiverBatch_) return;
+    // Events only request a readiness check. The current batch and live gates
+    // are authoritative, including when a queued continuation is delivered.
+    if (recordingBlocked() || (pendingTiming_ == ReceiverApplyTiming::AfterDisconnect && sessionActive())) return;
     if (busy_) {
         // Nested modal loops may deliver existing MetaCalls, but cannot execute or retry work.
         readyWhileBusy_ = std::make_pair(epoch, version);
-        return;
-    }
-    if (recordingBlocked() || (pendingTiming_ == ReceiverApplyTiming::AfterDisconnect && sessionActive())) {
-        deferrer_->deferReceiverConfiguration(*pendingReceiverBatch_,
-            pendingTiming_ == ReceiverApplyTiming::AfterDisconnect && sessionActive(), recordingBlocked());
         return;
     }
     busy_ = true;
@@ -738,7 +733,6 @@ void SettingsApplyCoordinator::endReceiverLifecycle() {
     pendingReceiverBatch_.reset();
     posted_.reset();
     readyWhileBusy_.reset();
-    deferrer_->cancelPendingReceiverConfiguration();
 }
 
 SettingsApplyPlan SettingsApplyCoordinator::plan(const AppSettings &baseline,
@@ -957,7 +951,6 @@ SettingsApplyOutcome SettingsApplyCoordinator::executePlan(const SettingsApplyPl
             ++version_;
             pendingReceiverBatch_.reset();
             readyWhileBusy_.reset();
-            deferrer_->cancelPendingReceiverConfiguration();
             timingSelectionPending_ = true;
         }
         outcome.globalResult = SettingsApplyGlobalResult{SettingsApplyGlobalStatus::PersistenceFailed, persistenceResult};
@@ -975,14 +968,10 @@ SettingsApplyOutcome SettingsApplyCoordinator::executePlan(const SettingsApplyPl
         const ReceiverConfigurationBatchRequest batch = mergeSavedReceiverTarget(current_, delta);
         if (!hasReceiverChanges(batch)) {
             pendingReceiverBatch_.reset();
-            if (deferrer_ != nullptr) {
-                deferrer_->cancelPendingReceiverConfiguration();
-            }
             updateMayClose(&outcome);
             return outcome;
         }
         ++version_;
-        deferrer_->cancelPendingReceiverConfiguration();
         pendingReceiverBatch_ = batch;
         pendingTiming_ = timing;
         if (operationEpoch_ != epoch_ || (receiver_ && !ready_)) {
@@ -1004,7 +993,6 @@ SettingsApplyOutcome SettingsApplyCoordinator::executePlan(const SettingsApplyPl
         const bool waitSession = timing == ReceiverApplyTiming::AfterDisconnect && sessionActive();
         const bool waitRecording = recordingBlocked();
         if (receiver_ && (waitSession || waitRecording)) {
-            deferrer_->deferReceiverConfiguration(batch, waitSession, waitRecording);
             markReceiverFieldsDeferred(&outcome, batch);
             if (timing == ReceiverApplyTiming::Immediate && waitRecording) receiver_->stopRecording();
             updateMayClose(&outcome);
@@ -1018,9 +1006,6 @@ SettingsApplyOutcome SettingsApplyCoordinator::executePlan(const SettingsApplyPl
             unavailable.knownRuntimeReceiverName = QStringLiteral("unavailable");
             unavailable.knownRuntimeVideoQuality = batch.rollbackVideoQuality;
             pendingReceiverBatch_.reset();
-            if (deferrer_ != nullptr) {
-                deferrer_->cancelPendingReceiverConfiguration();
-            }
             compensateUnavailableReceiver(&outcome, batch, current_, persistence_, unavailable, diagnosticSink_,
                 [this] { return operationEpoch_ == epoch_; });
             updateMayClose(&outcome);
@@ -1028,9 +1013,6 @@ SettingsApplyOutcome SettingsApplyCoordinator::executePlan(const SettingsApplyPl
         }
 
         pendingReceiverBatch_.reset();
-        if (deferrer_ != nullptr) {
-            deferrer_->cancelPendingReceiverConfiguration();
-        }
         const ReceiverConfigurationBatchResult result = invokeBackend(batch);
         if (operationEpoch_ != epoch_) return outcome;
         if (result.status == ReceiverConfigurationBatchStatus::Applied) {

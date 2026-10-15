@@ -21,7 +21,7 @@
 
 class MdnsPublishing;
 class UxPlayDiscovery;
-class VideoFrameBridge;
+class UxPlayVideoLifecycle;
 
 struct UxPlayReceiverConfig {
     QString serverName = "AirPlay Receiver";
@@ -144,15 +144,8 @@ private:
     void endRecordingSession(bool canFinalize, bool waitForIdle);
     void handleBackendError(QString error, BackendErrorSafety safety, QString diagnosticStage);
     void observeRendererCall(const QString &call) const;
-    void observeVideoRendererBoundary(const char *boundary, int callResult = 0, bool hasReturn = false) const;
-    void installVideoSampleTap();
     void installAudioSampleTap();
-    void clearVideoSampleTap();
     void clearAudioSampleTap();
-    int chooseVideoRendererCodec(bool videoIsJpeg, bool videoIsH265) const;
-    void applyVideoFitModeToRenderer();
-    void resetVideoFrameBridge();
-    void attachVideoFrameBridgeToCurrentPipeline();
 #endif
 
     UxPlayReceiverConfig m_config;
@@ -162,13 +155,10 @@ private:
     QString m_error;
     std::atomic<double> m_volume = 1.0;
     std::atomic_bool m_videoFitMode = false;
-    AirPlayReceiver::FrameCallback m_frameCallback;
-    VideoFrameBridge *m_videoFrameBridge = nullptr;
 #if AIRPLAY_WITH_UXPLAY
     void *m_raop = nullptr;
     void *m_logger = nullptr;
     std::atomic_bool m_renderersStarted = false;
-    std::atomic_bool m_videoRendererStopped = false;
     std::atomic_bool m_audioRendererStarted = false;
     std::atomic_bool m_connectionResetReported = false;
     std::atomic_bool m_acceptingCallbacks = false;
@@ -182,12 +172,9 @@ private:
     std::unique_ptr<CallbackContext> m_videoTapContext;
     std::unique_ptr<CallbackContext> m_audioTapContext;
     std::unique_ptr<RecordingController> m_recordingController;
-    bool m_videoTapRegistered = false;
+    std::unique_ptr<UxPlayVideoLifecycle> m_video;
     bool m_audioTapRegistered = false;
-    bool m_videoRendererInitialized = false;
     bool m_audioRendererInitialized = false;
-    bool m_videoIsH265 = false;
-    void *m_observedBridgePipeline = nullptr;
     UxPlayDiscovery *m_discovery = nullptr;
 #endif
 };

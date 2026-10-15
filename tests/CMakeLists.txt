@@ -49,10 +49,6 @@ add_executable(ThirdPartyDiagnosticTranslatorTest diagnostics/ThirdPartyDiagnost
 target_link_libraries(ThirdPartyDiagnosticTranslatorTest PRIVATE airplay_test_support Qt6::Test)
 add_test(NAME ThirdPartyDiagnosticTranslatorTest COMMAND ThirdPartyDiagnosticTranslatorTest)
 
-add_executable(SettingsChangeDeferrerTest app/SettingsChangeDeferrerTest.cpp)
-target_link_libraries(SettingsChangeDeferrerTest PRIVATE airplay_app_lib Qt6::Test)
-add_test(NAME SettingsChangeDeferrerTest COMMAND SettingsChangeDeferrerTest)
-
 add_executable(UiMessageTest app/UiMessageTest.cpp)
 target_link_libraries(UiMessageTest PRIVATE airplay_app_lib Qt6::Test)
 add_test(NAME UiMessageTest COMMAND UiMessageTest)
@@ -590,7 +586,6 @@ set(AIRPLAY_QT_TESTS
     DiagnosticSanitizerTest
     DiagnosticSessionTest
     ThirdPartyDiagnosticTranslatorTest
-    SettingsChangeDeferrerTest
     SettingsApplyTypesTest
     SettingsApplyCoordinatorTest
     DeferredSettingsLifecycleTest

@@ -75,8 +75,6 @@ add_library(airplay_app_lib
     src/app/MainWindow.h
     src/app/RecordingStartupCleanup.cpp
     src/app/RecordingStartupCleanup.h
-    src/app/SettingsChangeDeferrer.cpp
-    src/app/SettingsChangeDeferrer.h
     src/app/SettingsDialog.cpp
     src/app/SettingsDialog.h
     src/app/ShortcutAction.h
@@ -170,6 +168,8 @@ qt_add_translations(airplay_app_lib
 )
 if(AIRPLAY_WITH_UXPLAY)
     target_sources(airplay_app_lib PRIVATE
+        src/backend/UxPlayVideoLifecycle.cpp
+        src/backend/UxPlayVideoLifecycle.h
         src/app/GStreamerStartupPresentation.h
         src/app/GStreamerStartupPresentation.cpp
         src/platform/GStreamerStartupCache.h

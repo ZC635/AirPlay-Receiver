@@ -2,7 +2,6 @@
 
 #include "app/AppSettingsStore.h"
 #include "app/SettingsApplyCoordinator.h"
-#include "app/SettingsChangeDeferrer.h"
 #include "app/UiMessage.h"
 #include "backend/FakeAirPlayReceiver.h"
 #include "platform/FakeHotkeyService.h"
