@@ -18,7 +18,7 @@ AirPlay Receiver 是一个 Windows 桌面接收器，用于原生 iPhone AirPlay
 
 ## 快速开始
 
-从[最新发布版](https://github.com/ZC635/AirPlay-Receiver/releases/latest)下载最新 Windows 便携构建。解压存档，运行 `airplay_receiver.exe`，然后在 iPhone 上打开控制中心，选择“屏幕镜像”，再选择已广播的接收器名称。请保持 iPhone 与 Windows PC 位于同一网络；如出现提示，请允许接收器通过 Windows 防火墙。
+从[Releases 页面](https://github.com/ZC635/AirPlay-Receiver/releases)下载最新 Windows 便携构建（包括预发布版本）。解压存档，运行 `airplay_receiver.exe`，然后在 iPhone 上打开控制中心，选择“屏幕镜像”，再选择已广播的接收器名称。请保持 iPhone 与 Windows PC 位于同一网络；如出现提示，请允许接收器通过 Windows 防火墙。
 
 接收器启动后即可使用默认全局快捷键：`Ctrl+Alt+T` 切换窗口置顶，`Ctrl+Alt+Up` 和 `Ctrl+Alt+Down` 调整音量，`Ctrl+Alt+B` 切换工具栏可见性，`Ctrl+Alt+A` 切换宽高比锁定，`Ctrl+Alt+F` 切换视频适应，`Ctrl+Alt+R` 开始或停止录制。打开工具栏的设置按钮可自定义快捷键绑定，或将它们恢复为默认值。
 
