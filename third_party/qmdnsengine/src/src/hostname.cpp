@@ -150,14 +150,14 @@ void HostnamePrivate::onMessageReceived(const Message &message)
 void HostnamePrivate::onInterfacesChanged()
 {
     if (hostnameRegistered) {
-        updateAddressRecords(false);
+        updateAddressRecords();
     }
 }
 
 void HostnamePrivate::onRegistrationTimeout()
 {
     hostnameRegistered = true;
-    updateAddressRecords(true);
+    updateAddressRecords();
     if (hostname != hostnamePrev) {
         emit q->hostnameChanged(hostname);
     }
@@ -173,7 +173,7 @@ HostnamePrivate::~HostnamePrivate()
     }
 }
 
-void HostnamePrivate::updateAddressRecords(bool announceAll)
+void HostnamePrivate::updateAddressRecords()
 {
     QMap<uint, QList<Record>> current;
     for (const auto &iface : QNetworkInterface::allInterfaces()) {
@@ -183,8 +183,7 @@ void HostnamePrivate::updateAddressRecords(bool announceAll)
     }
 
     // Withdraw only what is no longer true on a link that still exists; a
-    // link that disappeared cannot carry a goodbye, and unchanged records
-    // keep their place in client caches.
+    // link that disappeared cannot carry a goodbye.
     for (auto it = announcedRecords.cbegin(); it != announcedRecords.cend(); ++it) {
         if (!current.contains(it.key())) continue;
         QList<Record> stale;
@@ -193,12 +192,13 @@ void HostnamePrivate::updateAddressRecords(bool announceAll)
         }
         if (!stale.isEmpty()) sendRecords(it.key(), stale, true);
     }
+    // Announce every current record, like the providers do. This enumeration
+    // is independent of the server's memberships: a link the server could not
+    // join yet drops the send, and only a repeat on the next change reaches it.
+    // Re-announcing an unchanged cache-flush record only refreshes client
+    // caches (RFC 6762 section 10.2), so nothing is lost by repeating.
     for (auto it = current.cbegin(); it != current.cend(); ++it) {
-        QList<Record> fresh;
-        for (const auto &record : it.value()) {
-            if (announceAll || !announcedRecords.value(it.key()).contains(record)) fresh.append(record);
-        }
-        if (!fresh.isEmpty()) sendRecords(it.key(), fresh, false);
+        sendRecords(it.key(), it.value(), false);
     }
     announcedRecords = current;
 }

@@ -51,8 +51,8 @@ public:
 
     void assertHostname();
     // Reconcile announced address records with the current interfaces:
-    // withdraw records that changed, announce new ones (all when announceAll).
-    void updateAddressRecords(bool announceAll);
+    // withdraw records that changed, then announce all current records.
+    void updateAddressRecords();
     void sendRecords(uint interfaceIndex, const QList<Record> &records, bool goodbye);
     QMap<uint, QList<Record>> announcedRecords;
 

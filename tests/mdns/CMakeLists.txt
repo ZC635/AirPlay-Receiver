@@ -31,7 +31,8 @@ target_compile_definitions(MdnsNetworkTest PRIVATE AIRPLAY_WITH_UXPLAY=1)
 target_include_directories(MdnsNetworkTest PRIVATE "${MDNS_ROOT}/src")
 target_link_libraries(MdnsNetworkTest PRIVATE qmdnsengine_sim Qt6::Core Qt6::Network)
 foreach(scenario lan_only dual_wifi_default dual_lan_default campus_client hot_switch legacy_unicast
-        ipv6 overlap metadata_single metadata_dual ineligible address_change stale_reply join_retry send_failure)
+        ipv6 overlap metadata_single metadata_dual ineligible address_change stale_reply join_retry send_failure
+        loopback)
     add_test(NAME MdnsNetwork_${scenario} COMMAND MdnsNetworkTest ${scenario})
     set_tests_properties(MdnsNetwork_${scenario} PROPERTIES TIMEOUT 30)
 endforeach()

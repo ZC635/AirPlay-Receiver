@@ -63,6 +63,18 @@ qint64 SimUdpSocket::writeDatagram(const QNetworkDatagram &datagram) {
         : (dest.isMulticast() ? multicastHopLimit : unicastHopLimit);
     SimNetwork::sent.append({datagram.data(), dest, quint16(datagram.destinationPort()), egress,
                             datagram.senderAddress(), hop});
+    if (SimNetwork::loopback && dest.isMulticast()) {
+        // Asynchronous like the kernel: the sender's own readyRead fires later.
+        const auto bytes = datagram.data();
+        const auto source = datagram.senderAddress();
+        for (auto *socket : SimNetwork::sockets) {
+            if (socket->family != dest.protocol() || !socket->members.contains(egress)) continue;
+            QPointer<SimUdpSocket> target(socket);
+            QTimer::singleShot(0, socket, [target, bytes, source, egress] {
+                if (target) target->inject(bytes, source, 5353, egress);
+            });
+        }
+    }
     return datagram.data().size();
 }
 qint64 SimUdpSocket::pendingDatagramSize() const { return incoming.isEmpty() ? -1 : incoming.head().data().size(); }

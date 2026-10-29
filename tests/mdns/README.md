@@ -20,14 +20,18 @@ Missing interface metadata is accepted only when one eligible joined interface
 exists for the packet's address family. Ambiguous packets are diagnosed and
 dropped rather than guessed from the default route or overlapping subnets.
 
-Interfaces and addresses are checked every two seconds. Changes reconcile
-multicast membership, invalidate reply contexts of the changed link only, and
-re-announce on the affected links: changed addresses are withdrawn, new ones
-announced, unchanged records left in place. Services are not reprobed or
-withdrawn on other links. Existing AirPlay transport sessions are not restarted.
-Membership failures are diagnosed once and retried; one failing interface does
-not prevent service on another. Rapid changes wholly between polls are not
-guaranteed to be observed.
+On Windows, interface and address change notifications trigger reconciliation
+within a fraction of a second, with a 30-second poll as a safety net; elsewhere
+interfaces are polled every two seconds. Changes reconcile multicast membership,
+invalidate reply contexts of the changed link only, and re-announce on the
+affected links: changed addresses are withdrawn, then all current host records
+and services are announced again. Services are not reprobed or withdrawn on
+other links. Existing AirPlay transport sessions are not restarted. Membership
+failures are diagnosed once and retried; one failing interface does not prevent
+service on another. Rapid changes wholly between polls are not guaranteed to be
+observed when notifications are unavailable. Multicast the receiver sends is
+looped back by the OS; datagrams from the host's own addresses are ignored so
+the receiver never answers or conflicts with itself.
 
 ## Automated regression suite
 
@@ -50,7 +54,9 @@ uses socket-level IPv4 TTL while retaining explicit packet source and interface;
 IPv6 retains its per-datagram hop limit. Both paths require an effective TTL of 255.
 It covers both services, both default-outlet choices, IPv6 and scope, overlapping
 subnets, legacy unicast replies, interface metadata loss, ineligible adapters,
-hotplug, address replacement, stale replies, failed membership and failed sends.
+hotplug, address replacement, stale replies, failed membership, failed sends,
+the synchronous startup hostname probe, host-record announcement after a join
+retry, and looped-back own multicast (`loopback`).
 Stopping publication must withdraw records and stop future network activity.
 Address replacement checks both withdrawal of the old address and cache-flush
 on the new address. Legacy unicast replies must repeat the question/ID, omit
@@ -60,9 +66,9 @@ Before the patch, the single-LAN control passed and five initial discovery tests
 failed. The original lab is not a release test: its passing cases included
 expected failures. The committed suite requires successful discovery.
 
-`MdnsRuntimeDeploymentTest` checks that the deployment helper replaces stale DLLs
-with the build output and fails if that output is absent. The build script excludes
-the MSYS2 DLL from bulk copying and verifies the final library's SHA256.
+The `qmdns_runtime` CMake target copies the built DLL beside the executables. The
+build script excludes the MSYS2 DLL from bulk copying and then verifies that the
+shipped library's SHA256 matches the build output, failing the build otherwise.
 
 ## Diagnostic interpretation and real-device acceptance
 

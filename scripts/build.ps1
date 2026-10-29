@@ -461,8 +461,22 @@ function Invoke-Build {
             } | Copy-Item -Destination $VariantBuildDir -Force
         }
 
-        # Do this after dependency copying, which must not replace our patched library.
-        & (Join-Path $PSScriptRoot 'deploy-qmdns-runtime.ps1') -BuildDirectory $VariantBuildDir
+        # The qmdns_runtime CMake target places the patched QMdnsEngine DLL beside
+        # the executable. Verify after dependency copying that nothing replaced it.
+        Write-Host "  Verifying bundled libqmdnsengine.dll..." -ForegroundColor Gray
+        $builtMdns = Join-Path $VariantBuildDir 'third_party/qmdnsengine/libqmdnsengine.dll'
+        $shippedMdns = Join-Path $VariantBuildDir 'libqmdnsengine.dll'
+        if (-not (Test-Path -LiteralPath $builtMdns -PathType Leaf)) {
+            throw "Built QMdnsEngine library is missing: $builtMdns. The system DLL is not a substitute."
+        }
+        if (-not (Test-Path -LiteralPath $shippedMdns -PathType Leaf)) {
+            throw "libqmdnsengine.dll was not deployed beside the executable (qmdns_runtime target did not run)."
+        }
+        $builtHash = (Get-FileHash -LiteralPath $builtMdns -Algorithm SHA256).Hash
+        $shippedHash = (Get-FileHash -LiteralPath $shippedMdns -Algorithm SHA256).Hash
+        if ($builtHash -ne $shippedHash) {
+            throw "libqmdnsengine.dll beside the executable does not match the build output (SHA256 $shippedHash vs $builtHash)."
+        }
 
         Write-Host "  Copying GStreamer plugins..." -ForegroundColor Gray
         $PluginOutDir = Join-Path $VariantBuildDir "gstreamer-plugins"

@@ -6,6 +6,7 @@
 #include <qmdnsengine/query.h>
 #include <qmdnsengine/record.h>
 #include <qmdnsengine/server.h>
+#include <QHostInfo>
 #include <cstdio>
 #include <functional>
 
@@ -70,8 +71,8 @@ static void query(int iface, const QByteArray &name, quint16 type, quint16 port 
         (iface == SimNetwork::Lan || SimNetwork::overlap ? "172.16.177.10" : "172.17.153.10"));
     require(SimNetwork::inject(iface, packet, phone, port), "query must reach joined receiving socket");
 }
-static void discover(int iface, Sink &sink, quint16 port = 5353, bool v6 = false,
-                     const QByteArray &serviceType = "_airplay._tcp.local.") {
+static QByteArray discover(int iface, Sink &sink, quint16 port = 5353, bool v6 = false,
+                           const QByteArray &serviceType = "_airplay._tcp.local.") {
     SimNetwork::sent.clear();
     const int before = sink.searches;
     query(iface, serviceType, QMdnsEngine::PTR, port, v6);
@@ -114,6 +115,18 @@ static void discover(int iface, Sink &sink, quint16 port = 5353, bool v6 = false
         auto source = packet.source; source.setScopeId({});
         require(source == expected, "UDP source must belong to reply interface");
     }
+    return hostname;
+}
+static bool sentHostnameProbe(int iface) {
+    for (const auto &packet : SimNetwork::sent) {
+        if (packet.egress != iface) continue;
+        QMdnsEngine::Message message;
+        require(QMdnsEngine::fromPacket(packet.bytes, message), "outgoing DNS packet must decode");
+        if (message.isResponse()) continue;
+        for (const auto &query : message.queries())
+            if (query.type() == QMdnsEngine::A && query.name().endsWith(".local.")) return true;
+    }
+    return false;
 }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
@@ -126,12 +139,16 @@ int main(int argc, char **argv) {
     SimNetwork::overlap = scenario == "overlap";
     SimNetwork::ineligibleCampus = scenario == "ineligible";
     SimNetwork::missingMetadata = scenario.startsWith("metadata_");
+    SimNetwork::loopback = scenario == "loopback";
     if (scenario == "join_retry") SimNetwork::failJoin = SimNetwork::Campus;
     Sink sink;
     MdnsPublisher publisher(&sink, {});
     const unsigned char txt[] = {9, 't', 'x', 't', 'v', 'e', 'r', 's', '=', '1'};
     require(publisher.publish("Issue11-Lab", QByteArray::fromHex("020000000001"), 51537,
         reinterpret_cast<const char *>(txt), sizeof(txt), reinterpret_cast<const char *>(txt), sizeof(txt)), "publisher starts");
+    // The hostname probes synchronously in its constructor; the server must
+    // already have joined the links or the probe is lost and conflicts missed.
+    require(sentHostnameProbe(SimNetwork::Lan), "startup hostname probe must reach the LAN");
     require(waitFor([] { return servicesReady(SimNetwork::Lan); }),
         "LAN must receive announcement regardless of default route");
     const bool campusEligible = SimNetwork::campusUp && !SimNetwork::ineligibleCampus && !SimNetwork::failJoin;
@@ -187,6 +204,28 @@ int main(int argc, char **argv) {
         require(sink.saw("multicast_join", "result", "failed"), "failed membership is diagnosed");
         SimNetwork::failJoin = 0; SimNetwork::sent.clear();
         require(waitFor([] { return servicesReady(SimNetwork::Campus); }), "membership retry must lead to announcement");
+        require(containsType(recordsOn(SimNetwork::Campus), QMdnsEngine::A),
+                "host address must be announced on a link once its join succeeds");
+        discover(SimNetwork::Campus, sink);
+    }
+    if (scenario == "loopback") {
+        // Own multicast is looped back by the OS. Nothing we send may be
+        // answered or treated as a conflict by ourselves.
+        const QByteArray expectedHostname =
+            QHostInfo::localHostName().toUtf8().replace('.', '-') + ".local.";
+        settle(300);
+        const QByteArray hostname = discover(SimNetwork::Lan, sink);
+        require(hostname == expectedHostname, "looped-back traffic must not rename the host");
+        SimNetwork::sent.clear();
+        const int searches = sink.searches;
+        QMdnsEngine::Query question; question.setName(hostname); question.setType(QMdnsEngine::A);
+        QMdnsEngine::Message probe; probe.addQuery(question);
+        QByteArray packet; QMdnsEngine::toPacket(probe, packet);
+        require(SimNetwork::inject(SimNetwork::Lan, packet, QHostAddress(SimNetwork::lanAddress), 5353),
+                "own probe reaches own socket");
+        settle(100);
+        require(sink.searches == searches && SimNetwork::sent.isEmpty(),
+                "a query from one of our own addresses must be ignored, not answered");
         discover(SimNetwork::Campus, sink);
     }
     if (scenario == "send_failure") {

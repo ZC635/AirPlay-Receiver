@@ -32,6 +32,9 @@ struct SimNetwork {
     static constexpr int Lan = 12, Campus = 5;
     inline static bool campusUp = true, ipv6 = false, overlap = false, missingMetadata = false;
     inline static bool ineligibleCampus = false;
+    // Deliver multicast back to every local member socket, including the
+    // sender, as IP_MULTICAST_LOOP does by default.
+    inline static bool loopback = false;
     inline static QString lanAddress = "172.16.176.254";
     inline static int defaultMulticastEgress = Campus;
     inline static int failJoin = 0, failSend = 0;

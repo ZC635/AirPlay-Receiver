@@ -819,10 +819,6 @@ if(AIRPLAY_WITH_UXPLAY)
 endif()
 
 if(AIRPLAY_WITH_UXPLAY AND AIRPLAY_POWERSHELL)
-    add_test(NAME MdnsRuntimeDeploymentTest
-        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
-            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/MdnsRuntimeDeploymentTest.ps1"
-            -ProjectRoot "${PROJECT_SOURCE_DIR}")
     add_test(NAME PeDependencyIsolationTest
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/PeDependencyIsolationTest.ps1"

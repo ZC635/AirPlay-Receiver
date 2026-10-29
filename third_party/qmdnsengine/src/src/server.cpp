@@ -26,6 +26,11 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif
+#if defined(_WIN32) && !defined(SIMULATE_QMDNS_NETWORK)
+#define QMDNSENGINE_IP_NOTIFICATIONS 1
+#include <iphlpapi.h>
+#include <netioapi.h>
+#endif
 #include <QNetworkDatagram>
 #include <QStringList>
 #include <iterator>
@@ -46,17 +51,72 @@ QString membershipKey(uint index, const QHostAddress &address) {
 QString familyName(const QHostAddress &address) {
     return address.protocol() == QAbstractSocket::IPv4Protocol ? "ipv4" : "ipv6";
 }
+// True when the datagram came from one of this host's own addresses on the
+// receiving link: our multicast is looped back to our own socket by default.
+bool ownAddress(QHostAddress sender, const QNetworkInterface &iface) {
+    sender.setScopeId({});
+    for (const auto &entry : iface.addressEntries()) {
+        auto local = entry.ip();
+        local.setScopeId({});
+        if (local == sender) return true;
+    }
+    return false;
+}
+#ifdef QMDNSENGINE_IP_NOTIFICATIONS
+// Called by the system on a worker thread; only hop back to the Qt thread.
+void WINAPI onInterfaceChange(PVOID context, PMIB_IPINTERFACE_ROW, MIB_NOTIFICATION_TYPE) {
+    QMetaObject::invokeMethod(static_cast<ServerPrivate *>(context), &ServerPrivate::scheduleRefresh, Qt::QueuedConnection);
+}
+void WINAPI onAddressChange(PVOID context, PMIB_UNICASTIPADDRESS_ROW, MIB_NOTIFICATION_TYPE) {
+    QMetaObject::invokeMethod(static_cast<ServerPrivate *>(context), &ServerPrivate::scheduleRefresh, Qt::QueuedConnection);
+}
+#endif
 }
 
 ServerPrivate::ServerPrivate(Server *server) : QObject(server), q(server)
 {
     connect(&timer, &QTimer::timeout, this, &ServerPrivate::onTimeout);
+    connect(&changeTimer, &QTimer::timeout, this, &ServerPrivate::onTimeout);
     connect(&ipv4Socket, &QUdpSocket::readyRead, this, &ServerPrivate::onReadyRead);
     connect(&ipv6Socket, &QUdpSocket::readyRead, this, &ServerPrivate::onReadyRead);
-    timer.setInterval(2000);
+    // Bursts of change notifications (one per address) collapse into one refresh.
+    changeTimer.setSingleShot(true);
+    changeTimer.setInterval(250);
+#ifdef QMDNSENGINE_IP_NOTIFICATIONS
+    if (NotifyIpInterfaceChange(AF_UNSPEC, &onInterfaceChange, this, FALSE, &interfaceNotification) != NO_ERROR)
+        interfaceNotification = nullptr;
+    if (NotifyUnicastIpAddressChange(AF_UNSPEC, &onAddressChange, this, FALSE, &addressNotification) != NO_ERROR)
+        addressNotification = nullptr;
+#endif
+    // With change notifications the poll is only a safety net; without them it
+    // is the only way to observe hotplug and address changes.
+    const bool notified = interfaceNotification && addressNotification;
+    timer.setInterval(notified ? 30000 : 2000);
     timer.start();
-    // Let the publisher attach its diagnostic observers before initialization.
+    // Membership is established lazily (first send or first poll) so that the
+    // publisher can attach its diagnostic observers before the initial joins
+    // and the hostname's first probe still reaches every link.
     QTimer::singleShot(0, this, &ServerPrivate::onTimeout);
+}
+
+ServerPrivate::~ServerPrivate()
+{
+#ifdef QMDNSENGINE_IP_NOTIFICATIONS
+    // Blocks until in-flight callbacks return; queued invocations they posted
+    // are discarded with this object.
+    if (interfaceNotification) CancelMibChangeNotify2(interfaceNotification);
+    if (addressNotification) CancelMibChangeNotify2(addressNotification);
+#endif
+}
+
+void ServerPrivate::ensureInitialized()
+{
+    if (!initialized) refreshInterfaces();
+}
+
+void ServerPrivate::scheduleRefresh()
+{
+    changeTimer.start();
 }
 
 bool ServerPrivate::bindSocket(QUdpSocket &socket, const QHostAddress &address)
@@ -187,6 +247,9 @@ void ServerPrivate::onReadyRead()
             emit q->transportEvent("receive_dropped", {{"reason", "unknown_interface"}});
             continue;
         }
+        // Our own probes, announcements and replies are looped back to this
+        // socket; answering or treating them as conflicts would rename us.
+        if (ownAddress(datagram.senderAddress(), members.value(key).iface)) continue;
         Message message;
         if (!fromPacket(datagram.data(), message)) continue;
         message.setAddress(datagram.senderAddress());
@@ -245,6 +308,7 @@ Server::Server(QObject *parent) : AbstractServer(parent), d(new ServerPrivate(th
 
 void Server::sendMessage(const Message &message)
 {
+    d->ensureInitialized();
     const auto key = membershipKey(message.interfaceIndex(), message.address());
     if (message.interfaceGeneration() && d->members.contains(key)
         && d->members.value(key).generation != message.interfaceGeneration()) {
@@ -261,6 +325,7 @@ void Server::sendMessage(const Message &message)
 
 void Server::sendMessageToAll(const Message &message)
 {
+    d->ensureInitialized();
     QByteArray packet;
     toPacket(message, packet);
     const auto members = d->members;
