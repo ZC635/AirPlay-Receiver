@@ -85,8 +85,7 @@ $RequiredPackageSuffixes = @(
     "gst-plugins-bad",
     "json-glib",
     "gst-libav",
-    "openh264",
-    "qmdnsengine"
+    "openh264"
 )
 
 function Resolve-MSys2Root {
@@ -441,18 +440,11 @@ function Invoke-Build {
             exit $windeployqtExit
         }
 
-        Write-Host "  Bundling libqmdnsengine.dll..." -ForegroundColor Gray
-        $qmdnsSource = Join-Path $MSys2Bin "libqmdnsengine.dll"
-        if (Test-Path $qmdnsSource) {
-            Copy-Item $qmdnsSource $VariantBuildDir -Force
-            Write-Host "    Copied libqmdnsengine.dll from $qmdnsSource" -ForegroundColor Gray
-        } else {
-            throw "libqmdnsengine.dll was not found. Install qmdnsengine MSYS2 package before building."
-        }
-
         if ($IsPortable) {
             Write-Host "  Copying ALL runtime DLLs (portable mode)..." -ForegroundColor Gray
-            Get-ChildItem $MSys2Bin -Filter "*.dll" | Copy-Item -Destination $VariantBuildDir -Force
+            Get-ChildItem $MSys2Bin -Filter "*.dll" | Where-Object {
+                $_.Name -ine 'libqmdnsengine.dll'
+            } | Copy-Item -Destination $VariantBuildDir -Force
         } else {
             Write-Host "  Copying filtered runtime DLLs..." -ForegroundColor Gray
             $exclude = @("gcc", "g++", "cpp", "cc1", "cc1plus", "collect2", "ld", "ar", "as", "nm",
@@ -462,11 +454,28 @@ function Invoke-Build {
             $exePatterns = ($exclude | ForEach-Object { "$_.exe" })
             Get-ChildItem $MSys2Bin -Filter "*.dll" | Where-Object {
                 $n = $_.Name.ToLower()
-                $exePatterns -notcontains $n -and
+                $n -ne 'libqmdnsengine.dll' -and $exePatterns -notcontains $n -and
                 ($n -like "lib*" -or $n -like "av*" -or $n -like "sw*" -or
                  $n -like "zlib*" -or $n -like "xvid*" -or $n -like "sdl*" -or
                  $n -like "D3D*" -or $n -like "Qt*" -or $n -like "dx*")
             } | Copy-Item -Destination $VariantBuildDir -Force
+        }
+
+        # The qmdns_runtime CMake target places the patched QMdnsEngine DLL beside
+        # the executable. Verify after dependency copying that nothing replaced it.
+        Write-Host "  Verifying bundled libqmdnsengine.dll..." -ForegroundColor Gray
+        $builtMdns = Join-Path $VariantBuildDir 'third_party/qmdnsengine/libqmdnsengine.dll'
+        $shippedMdns = Join-Path $VariantBuildDir 'libqmdnsengine.dll'
+        if (-not (Test-Path -LiteralPath $builtMdns -PathType Leaf)) {
+            throw "Built QMdnsEngine library is missing: $builtMdns. The system DLL is not a substitute."
+        }
+        if (-not (Test-Path -LiteralPath $shippedMdns -PathType Leaf)) {
+            throw "libqmdnsengine.dll was not deployed beside the executable (qmdns_runtime target did not run)."
+        }
+        $builtHash = (Get-FileHash -LiteralPath $builtMdns -Algorithm SHA256).Hash
+        $shippedHash = (Get-FileHash -LiteralPath $shippedMdns -Algorithm SHA256).Hash
+        if ($builtHash -ne $shippedHash) {
+            throw "libqmdnsengine.dll beside the executable does not match the build output (SHA256 $shippedHash vs $builtHash)."
         }
 
         Write-Host "  Copying GStreamer plugins..." -ForegroundColor Gray

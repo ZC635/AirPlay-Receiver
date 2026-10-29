@@ -35,7 +35,7 @@ The toolbar hides when a mirroring connection becomes active. `Ctrl+Alt+B` toggl
 ### Prerequisites
 
 - Windows 10 or 11
-- MSYS2 installed; the build script prefers the UCRT64 prefix and can install missing MSYS2 packages, including Qt 6, GStreamer, libplist, OpenSSL, and QMdnsEngine, after confirmation
+- MSYS2 installed; the build script prefers the UCRT64 prefix and can install missing MSYS2 packages, including Qt 6, GStreamer, libplist, and OpenSSL, after confirmation
 
 
 ### Clone
@@ -59,7 +59,7 @@ Install MSYS2 first. The default location `C:\msys64` works out of the box; if y
 winget install MSYS2.MSYS2
 ```
 
-The build script installs QMdnsEngine for in-process mDNS discovery. No Bonjour Print Services, iTunes, or Bonjour SDK is required. iPhones discover the receiver over mDNS directly.
+The build compiles the bundled QMdnsEngine source with multi-interface fixes for in-process mDNS discovery. No Bonjour Print Services, iTunes, or Bonjour SDK is required. iPhones discover the receiver over mDNS directly. See [multi-interface discovery](tests/mdns/README.md) for behavior and verification.
 
 ### Build And Test
 

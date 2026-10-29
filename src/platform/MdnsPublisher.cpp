@@ -154,6 +154,9 @@ bool MdnsPublisher::publish(const QString &receiverName, const QByteArray &hardw
                                         QStringLiteral("server_created")));
 
     d->adapter = new MdnsServerAdapter(d->server, d->sink, this);
+
+    // Interface changes are handled inside the library: the hostname and
+    // providers re-announce on the affected links without being recreated.
     d->hostname = new QMdnsEngine::Hostname(d->adapter, this);
     connect(d->hostname, &QMdnsEngine::Hostname::hostnameChanged, this,
             [this](const QByteArray &) {
@@ -191,9 +194,6 @@ bool MdnsPublisher::publish(const QString &receiverName, const QByteArray &hardw
                                         QStringLiteral("service_configured"),
                                         {{QStringLiteral("type"), QStringLiteral("_airplay._tcp")},
                                          {QStringLiteral("port"), QString::number(airplayDef.port)}}));
-#endif
-
-#if AIRPLAY_WITH_UXPLAY
     return true;
 #else
     return false;

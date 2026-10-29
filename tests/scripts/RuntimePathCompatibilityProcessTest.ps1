@@ -33,6 +33,11 @@ try {
     New-Item -ItemType Directory -Path $tempPath -ErrorAction Stop | Out-Null
     $copiedExecutable = Join-Path $tempPath "airplay_receiver.exe"
     Copy-Item -LiteralPath $Executable -Destination $copiedExecutable -ErrorAction Stop
+    # The executable imports the patched project API, not the system QMdnsEngine.
+    $mdnsLibrary = Join-Path (Split-Path -Parent $Executable) 'libqmdnsengine.dll'
+    if (Test-Path -LiteralPath $mdnsLibrary -PathType Leaf) {
+        Copy-Item -LiteralPath $mdnsLibrary -Destination $tempPath -ErrorAction Stop
+    }
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $copiedExecutable

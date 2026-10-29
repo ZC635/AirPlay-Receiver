@@ -86,6 +86,10 @@ private slots:
         QList<QPointer<QObject>> resources;
         for (QObject *child : publisher->findChildren<QObject *>()) resources.append(child);
         QTRY_COMPARE_WITH_TIMEOUT(countEvents(sink, "hostname_registered"), 1, 10000);
+        if (countEvents(sink, "error")) {
+            for (const auto &event : sink.events)
+                qWarning() << event.name << event.fields;
+        }
         QCOMPARE(countEvents(sink, "error"), 0);
 
         // Observe actual multicast replies received by the production UDP server.

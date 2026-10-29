@@ -19,11 +19,13 @@ class FakeAbstractServer final : public QMdnsEngine::AbstractServer {
 public:
     void sendMessage(const QMdnsEngine::Message &) override { ++sendMessageCalls; }
     void sendMessageToAll(const QMdnsEngine::Message &) override { ++sendToAllCalls; }
+    bool isJoined(uint, const QHostAddress &) const override { return joined; }
     void deliver(const QMdnsEngine::Message &message) { emit messageReceived(message); }
     void fail(const QString &message) { emit error(message); }
 
     int sendMessageCalls = 0;
     int sendToAllCalls = 0;
+    bool joined = true;
 };
 #endif
 
@@ -172,12 +174,15 @@ private slots:
         MdnsServerAdapter adapter(&delegate, &sink);
         QMdnsEngine::Message message;
         message.setAddress(QMdnsEngine::MdnsIpv4Address);
+        message.setInterfaceIndex(12);
 
         adapter.sendMessage(message);
         adapter.sendMessageToAll(message);
 
         QCOMPARE(delegate.sendMessageCalls, 1);
         QCOMPARE(delegate.sendToAllCalls, 1);
+        QCOMPARE(sink.events.first().fields.value("scope"), QString("multicast"));
+        QCOMPARE(sink.events.first().fields.value("interface"), QString("12"));
         QCOMPARE(countEvents(sink, "send_requested"), 2);
         for (const DiagnosticEvent &event : sink.events)
             QVERIFY(event.name != "send_succeeded");
@@ -199,18 +204,31 @@ private slots:
 
         const QMap<QString, QString> ipv4Fields = {
             {QStringLiteral("scope"), QStringLiteral("unicast")},
+            {QStringLiteral("interface"), QStringLiteral("0")},
             {QStringLiteral("address_family"), QStringLiteral("ipv4")}};
         const QMap<QString, QString> ipv6Fields = {
             {QStringLiteral("scope"), QStringLiteral("multicast_all")},
             {QStringLiteral("address_family"), QStringLiteral("ipv6")}};
         const QMap<QString, QString> unknownFields = {
             {QStringLiteral("scope"), QStringLiteral("unicast")},
+            {QStringLiteral("interface"), QStringLiteral("0")},
             {QStringLiteral("address_family"), QStringLiteral("unknown")}};
         QCOMPARE(sink.events.at(0).fields, ipv4Fields);
         QCOMPARE(sink.events.at(1).fields, ipv6Fields);
         QCOMPARE(sink.events.at(2).fields, unknownFields);
         for (const DiagnosticEvent &event : sink.events)
             QVERIFY(event.name != "send_succeeded");
+    }
+
+    void joinedStateIsForwardedFromDelegate() {
+        FakeAbstractServer delegate;
+        CollectingSink sink;
+        MdnsServerAdapter adapter(&delegate, &sink);
+        QVERIFY(adapter.isJoined(3, QMdnsEngine::MdnsIpv4Address));
+        delegate.joined = false;
+        QVERIFY(!adapter.isJoined(3, QMdnsEngine::MdnsIpv4Address));
+        MdnsServerAdapter orphan(nullptr, &sink);
+        QVERIFY(!orphan.isJoined(3, QMdnsEngine::MdnsIpv4Address));
     }
 
     void delegateErrorIsSanitizedAndFlushedImmediately() {
