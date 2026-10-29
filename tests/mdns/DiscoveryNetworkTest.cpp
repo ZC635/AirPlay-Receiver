@@ -23,11 +23,16 @@ public:
             if (event.name == name && event.fields.value(key) == value) return true;
         return false;
     }
+    int count(const QString &name) const {
+        int n = 0;
+        for (const auto &event : events) if (event.name == name) ++n;
+        return n;
+    }
 };
 static void require(bool value, const char *reason) {
     if (!value) { std::fprintf(stderr, "FAIL: %s\n", reason); std::exit(1); }
 }
-static bool waitFor(const std::function<bool()> &predicate, int timeout = 8500) {
+static bool waitFor(const std::function<bool()> &predicate, int timeout = 12000) {
     QElapsedTimer clock; clock.start();
     while (!predicate() && clock.elapsed() < timeout) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
@@ -61,6 +66,37 @@ static bool servicesReady(int iface) {
         raop |= record.name() == "_raop._tcp.local.";
     }
     return airplay && raop;
+}
+// Services announced and the host address record announced: a client on the
+// link can both browse and resolve. Re-announcements after a change are
+// throttled per publisher, so tests wait for both before querying.
+static bool linkReady(int iface) {
+    return servicesReady(iface) && containsType(recordsOn(iface), QMdnsEngine::A);
+}
+// A response from another host, injected on a link, as a conflicting responder
+// or a departing one would send it.
+static void injectResponse(int iface, const QMdnsEngine::Record &record, const QHostAddress &source) {
+    QMdnsEngine::Message message;
+    message.setResponse(true);
+    message.addRecord(record);
+    QByteArray packet; QMdnsEngine::toPacket(message, packet);
+    require(SimNetwork::inject(iface, packet, source, 5353), "injected response must reach joined socket");
+}
+static QMdnsEngine::Record addressRecord(const QByteArray &name, const QHostAddress &address, quint32 ttl) {
+    QMdnsEngine::Record record;
+    record.setName(name); record.setType(QMdnsEngine::A); record.setAddress(address); record.setTtl(ttl);
+    return record;
+}
+static QMdnsEngine::Record srvRecord(const QByteArray &name, const QByteArray &target, quint32 ttl) {
+    QMdnsEngine::Record record;
+    record.setName(name); record.setType(QMdnsEngine::SRV); record.setTarget(target);
+    record.setPort(7000); record.setTtl(ttl);
+    return record;
+}
+static QByteArray ptrTarget(int iface, const QByteArray &type) {
+    for (const auto &record : recordsOn(iface))
+        if (record.type() == QMdnsEngine::PTR && record.ttl() && record.name() == type) return record.target();
+    return {};
 }
 static void query(int iface, const QByteArray &name, quint16 type, quint16 port = 5353, bool v6 = false) {
     QMdnsEngine::Query question; question.setName(name); question.setType(type);
@@ -149,8 +185,38 @@ int main(int argc, char **argv) {
     // The hostname probes synchronously in its constructor; the server must
     // already have joined the links or the probe is lost and conflicts missed.
     require(sentHostnameProbe(SimNetwork::Lan), "startup hostname probe must reach the LAN");
-    require(waitFor([] { return servicesReady(SimNetwork::Lan); }),
+    const QByteArray baseHostname = QHostInfo::localHostName().toUtf8().replace('.', '-');
+    const QByteArray expectedHostname = baseHostname + ".local.";
+    const QHostAddress foreign("172.16.177.99");
+    if (scenario == "loopback") {
+        // The probe window is open. Our own looped-back announcement (an A
+        // record carrying one of our addresses) and a goodbye from a host that
+        // is leaving are not claims on the name.
+        injectResponse(SimNetwork::Lan, addressRecord(expectedHostname, QHostAddress(SimNetwork::lanAddress), 120),
+                       QHostAddress(SimNetwork::lanAddress));
+        injectResponse(SimNetwork::Lan, addressRecord(expectedHostname, QHostAddress("172.16.177.77"), 0), foreign);
+    }
+    if (scenario == "conflict") {
+        // Another host already holds the name with a different address.
+        injectResponse(SimNetwork::Lan, addressRecord(expectedHostname, QHostAddress("172.16.177.77"), 120), foreign);
+    }
+    if (scenario == "loopback" || scenario == "conflict") {
+        // Once the hostname is registered the providers probe their names.
+        require(waitFor([&] { return sink.count("hostname_registered") > 0; }), "hostname registers");
+        const QByteArray serviceName = "Issue11-Lab._airplay._tcp.local.";
+        const bool claim = scenario == "conflict";
+        injectResponse(SimNetwork::Lan, srvRecord(serviceName, "other.local.", claim ? 120 : 0), foreign);
+    }
+    require(waitFor([] { return linkReady(SimNetwork::Lan); }),
         "LAN must receive announcement regardless of default route");
+    if (scenario == "loopback") {
+        require(ptrTarget(SimNetwork::Lan, "_airplay._tcp.local.") == "Issue11-Lab._airplay._tcp.local.",
+                "a goodbye for the service name must not rename the service");
+    }
+    if (scenario == "conflict") {
+        require(ptrTarget(SimNetwork::Lan, "_airplay._tcp.local.") == "Issue11-Lab-2._airplay._tcp.local.",
+                "a live claim on the service name must rename the service");
+    }
     const bool campusEligible = SimNetwork::campusUp && !SimNetwork::ineligibleCampus && !SimNetwork::failJoin;
     require(servicesReady(SimNetwork::Campus) == campusEligible,
         "announcements cover exactly the joined eligible links");
@@ -171,10 +237,10 @@ int main(int argc, char **argv) {
     if (scenario == "hot_switch") {
         SimNetwork::campusUp = false; SimNetwork::sent.clear();
         require(waitFor([&] { return sink.saw("multicast_leave", "interface", "5"); }), "removed interface must leave group without queries");
-        require(waitFor([] { return servicesReady(SimNetwork::Lan); }), "remaining link must recover");
+        require(waitFor([] { return linkReady(SimNetwork::Lan); }), "remaining link must recover");
         discover(SimNetwork::Lan, sink);
         SimNetwork::campusUp = true; SimNetwork::sent.clear();
-        require(waitFor([] { return servicesReady(SimNetwork::Campus); }), "new interface must autonomously announce");
+        require(waitFor([] { return linkReady(SimNetwork::Campus); }), "new interface must autonomously announce");
         discover(SimNetwork::Campus, sink); discover(SimNetwork::Lan, sink);
     }
     if (scenario == "address_change" || scenario == "stale_reply") {
@@ -189,13 +255,16 @@ int main(int argc, char **argv) {
         SimNetwork::lanAddress = "172.16.176.252"; SimNetwork::sent.clear();
         require(waitFor([] { return servicesReady(SimNetwork::Lan); }), "address change must reannounce");
         bool withdrewOld = false, replacedCache = false;
-        for (const auto &record : recordsOn(SimNetwork::Lan)) {
-            if (record.type() != QMdnsEngine::A) continue;
-            withdrewOld |= record.address() == oldAddress && record.ttl() == 0;
-            replacedCache |= record.address() == QHostAddress("172.16.176.252")
-                && record.ttl() > 0 && record.flushCache();
-        }
-        require(withdrewOld && replacedCache, "address change must withdraw old A and proactively replace cached address");
+        const auto hostRecordsUpdated = [&] {
+            for (const auto &record : recordsOn(SimNetwork::Lan)) {
+                if (record.type() != QMdnsEngine::A) continue;
+                withdrewOld |= record.address() == oldAddress && record.ttl() == 0;
+                replacedCache |= record.address() == QHostAddress("172.16.176.252")
+                    && record.ttl() > 0 && record.flushCache();
+            }
+            return withdrewOld && replacedCache;
+        };
+        require(waitFor(hostRecordsUpdated), "address change must withdraw old A and proactively replace cached address");
         SimNetwork::sent.clear(); server->sendMessage(saved);
         require(SimNetwork::sent.isEmpty(), "reply from previous interface generation must not be sent");
         discover(SimNetwork::Lan, sink);
@@ -204,29 +273,34 @@ int main(int argc, char **argv) {
         require(sink.saw("multicast_join", "result", "failed"), "failed membership is diagnosed");
         SimNetwork::failJoin = 0; SimNetwork::sent.clear();
         require(waitFor([] { return servicesReady(SimNetwork::Campus); }), "membership retry must lead to announcement");
-        require(containsType(recordsOn(SimNetwork::Campus), QMdnsEngine::A),
+        require(waitFor([] { return containsType(recordsOn(SimNetwork::Campus), QMdnsEngine::A); }),
                 "host address must be announced on a link once its join succeeds");
+        require(!sink.saw("send_dropped", "reason", "inactive_interface"),
+                "the hostname must not address a link the server has not joined");
         discover(SimNetwork::Campus, sink);
     }
     if (scenario == "loopback") {
         // Own multicast is looped back by the OS. Nothing we send may be
-        // answered or treated as a conflict by ourselves.
-        const QByteArray expectedHostname =
-            QHostInfo::localHostName().toUtf8().replace('.', '-') + ".local.";
+        // treated as a conflict by ourselves, yet a client on this host (a
+        // browser tool, the acceptance probe) must still be answered.
         settle(300);
         const QByteArray hostname = discover(SimNetwork::Lan, sink);
         require(hostname == expectedHostname, "looped-back traffic must not rename the host");
         SimNetwork::sent.clear();
         const int searches = sink.searches;
-        QMdnsEngine::Query question; question.setName(hostname); question.setType(QMdnsEngine::A);
-        QMdnsEngine::Message probe; probe.addQuery(question);
-        QByteArray packet; QMdnsEngine::toPacket(probe, packet);
+        QMdnsEngine::Query question; question.setName("_airplay._tcp.local."); question.setType(QMdnsEngine::PTR);
+        QMdnsEngine::Message browse; browse.addQuery(question);
+        QByteArray packet; QMdnsEngine::toPacket(browse, packet);
         require(SimNetwork::inject(SimNetwork::Lan, packet, QHostAddress(SimNetwork::lanAddress), 5353),
-                "own probe reaches own socket");
+                "own query reaches own socket");
         settle(100);
-        require(sink.searches == searches && SimNetwork::sent.isEmpty(),
-                "a query from one of our own addresses must be ignored, not answered");
+        require(sink.searches == searches + 1 && containsType(recordsOn(SimNetwork::Lan), QMdnsEngine::PTR),
+                "a query from one of our own addresses must be answered like any other");
         discover(SimNetwork::Campus, sink);
+    }
+    if (scenario == "conflict") {
+        require(discover(SimNetwork::Lan, sink) == baseHostname + "-2.local.",
+                "a claim with a foreign address must rename the host");
     }
     if (scenario == "send_failure") {
         SimNetwork::failSend = SimNetwork::Lan; SimNetwork::sent.clear();

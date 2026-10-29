@@ -19,11 +19,13 @@ class FakeAbstractServer final : public QMdnsEngine::AbstractServer {
 public:
     void sendMessage(const QMdnsEngine::Message &) override { ++sendMessageCalls; }
     void sendMessageToAll(const QMdnsEngine::Message &) override { ++sendToAllCalls; }
+    bool isJoined(uint, const QHostAddress &) const override { return joined; }
     void deliver(const QMdnsEngine::Message &message) { emit messageReceived(message); }
     void fail(const QString &message) { emit error(message); }
 
     int sendMessageCalls = 0;
     int sendToAllCalls = 0;
+    bool joined = true;
 };
 #endif
 
@@ -216,6 +218,17 @@ private slots:
         QCOMPARE(sink.events.at(2).fields, unknownFields);
         for (const DiagnosticEvent &event : sink.events)
             QVERIFY(event.name != "send_succeeded");
+    }
+
+    void joinedStateIsForwardedFromDelegate() {
+        FakeAbstractServer delegate;
+        CollectingSink sink;
+        MdnsServerAdapter adapter(&delegate, &sink);
+        QVERIFY(adapter.isJoined(3, QMdnsEngine::MdnsIpv4Address));
+        delegate.joined = false;
+        QVERIFY(!adapter.isJoined(3, QMdnsEngine::MdnsIpv4Address));
+        MdnsServerAdapter orphan(nullptr, &sink);
+        QVERIFY(!orphan.isJoined(3, QMdnsEngine::MdnsIpv4Address));
     }
 
     void delegateErrorIsSanitizedAndFlushedImmediately() {

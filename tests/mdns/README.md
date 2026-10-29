@@ -30,8 +30,11 @@ other links. Existing AirPlay transport sessions are not restarted. Membership
 failures are diagnosed once and retried; one failing interface does not prevent
 service on another. Rapid changes wholly between polls are not guaranteed to be
 observed when notifications are unavailable. Multicast the receiver sends is
-looped back by the OS; datagrams from the host's own addresses are ignored so
-the receiver never answers or conflicts with itself.
+looped back by the OS and is delivered like any other datagram, so a client on
+the same host can discover the receiver; an answer carrying one of the host's
+own addresses is not a hostname conflict (RFC 6762 sections 8.1 and 9), a
+goodbye is not a claim, and the prober ignores the host's own echo, so the
+receiver never renames itself because of its own traffic.
 
 ## Automated regression suite
 
@@ -56,7 +59,8 @@ It covers both services, both default-outlet choices, IPv6 and scope, overlappin
 subnets, legacy unicast replies, interface metadata loss, ineligible adapters,
 hotplug, address replacement, stale replies, failed membership, failed sends,
 the synchronous startup hostname probe, host-record announcement after a join
-retry, and looped-back own multicast (`loopback`).
+retry, looped-back own multicast (`loopback`, which must be answered and must
+not rename anything) and a genuine hostname conflict (`conflict`, which must).
 Stopping publication must withdraw records and stop future network activity.
 Address replacement checks both withdrawal of the old address and cache-flush
 on the new address. Legacy unicast replies must repeat the question/ID, omit
@@ -77,7 +81,9 @@ shipped library's SHA256 matches the build output, failing the build otherwise.
 - `send_result result=accepted`: UDP write accepted, with `interface`, address
   family, scope and byte count. This is not proof of reception by an iPhone.
 - `multicast_join` / `multicast_leave`: membership operations and their results.
-- `interfaces_reconfigured`: the service publishers are being reprobed.
+- `interfaces_reconfigured`: memberships were reconciled; the hostname and
+  services re-announce on the joined links (at most once per second). Nothing
+  is reprobed or renamed.
 - `receive_dropped` / `send_dropped`: missing, inactive or stale interface context.
 
 Use the existing diagnostic restart option when collecting evidence. For a real

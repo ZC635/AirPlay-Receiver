@@ -25,6 +25,7 @@
 #ifndef QMDNSENGINE_ABSTRACTSERVER_H
 #define QMDNSENGINE_ABSTRACTSERVER_H
 
+#include <QHostAddress>
 #include <QObject>
 
 #include "qmdnsengine_export.h"
@@ -67,6 +68,14 @@ public:
      * The message should be sent over both IPv4 and IPv6 on all interfaces.
      */
     virtual void sendMessageToAll(const Message &message) = 0;
+
+    /**
+     * @brief Determine whether a multicast group is joined on an interface
+     *
+     * Publishers that address a specific link skip links the server has not
+     * joined. The default assumes every link is reachable.
+     */
+    virtual bool isJoined(uint interfaceIndex, const QHostAddress &group) const;
 
 Q_SIGNALS:
 

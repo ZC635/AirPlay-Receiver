@@ -25,6 +25,7 @@
 #ifndef QMDNSENGINE_HOSTNAME_P_H
 #define QMDNSENGINE_HOSTNAME_P_H
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
 #include <QMap>
@@ -65,6 +66,10 @@ public:
 
     QTimer registrationTimer;
     QTimer rebroadcastTimer;
+    // Minimum spacing between re-announcements on interface changes.
+    static constexpr qint64 AnnounceInterval = 1000;
+    QTimer refreshTimer;
+    QElapsedTimer lastUpdate;
 
 private Q_SLOTS:
 

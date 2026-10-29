@@ -53,6 +53,8 @@ QString familyName(const QHostAddress &address) {
 }
 // True when the datagram came from one of this host's own addresses on the
 // receiving link: our multicast is looped back to our own socket by default.
+// Such datagrams are still delivered (a client on this host must be able to
+// discover us); the hostname and prober use the flag to ignore their own echo.
 bool ownAddress(QHostAddress sender, const QNetworkInterface &iface) {
     sender.setScopeId({});
     for (const auto &entry : iface.addressEntries()) {
@@ -221,7 +223,6 @@ void ServerPrivate::onReadyRead()
 {
     auto *socket = qobject_cast<QUdpSocket *>(sender());
     if (!socket) return;
-    bool refreshed = false;
     while (socket->hasPendingDatagrams()) {
         const auto datagram = socket->receiveDatagram();
         if (!datagram.isValid()) {
@@ -238,30 +239,66 @@ void ServerPrivate::onReadyRead()
             if (candidates.size() == 1) index = candidates.first();
         }
         const auto key = membershipKey(index, datagram.senderAddress());
-        if (index && !members.contains(key) && !refreshed) {
-            // A link that came up since the last poll; reconcile once per batch.
-            refreshed = true;
-            refreshInterfaces();
-        }
         if (!index || !members.contains(key)) {
+            // A link that came up since the last poll, or one we never joined:
+            // reconcile through the debounced path so a stream of such packets
+            // cannot enumerate the interfaces on every batch.
+            if (index) scheduleRefresh();
             emit q->transportEvent("receive_dropped", {{"reason", "unknown_interface"}});
             continue;
         }
-        // Our own probes, announcements and replies are looped back to this
-        // socket; answering or treating them as conflicts would rename us.
-        if (ownAddress(datagram.senderAddress(), members.value(key).iface)) continue;
         Message message;
         if (!fromPacket(datagram.data(), message)) continue;
         message.setAddress(datagram.senderAddress());
         message.setPort(datagram.senderPort());
         message.setInterfaceIndex(index);
         message.setInterfaceGeneration(members.value(key).generation);
+        message.setSenderIsLocal(ownAddress(datagram.senderAddress(), members.value(key).iface));
         emit q->messageReceived(message);
     }
 }
 
+uint ServerPrivate::routeInterface(const QHostAddress &destination) const
+{
+    // No interface was given (a message composed by the caller rather than
+    // by reply()): pick the joined link whose subnet contains the destination,
+    // as the routing table would.
+    for (const auto &member : members) {
+        if (member.group.protocol() != destination.protocol()) continue;
+        for (const auto &entry : member.iface.addressEntries()) {
+            if (entry.ip().protocol() == destination.protocol()
+                && destination.isInSubnet(entry.ip(), entry.prefixLength()))
+                return member.iface.index();
+        }
+    }
+    return 0;
+}
+
 void ServerPrivate::send(const QByteArray &packet, const QHostAddress &destination, quint16 port, uint index)
 {
+    if (!index) {
+        if (destination.isMulticast()) {
+            // Multicast without a link means every joined link of that family.
+            const auto current = members;
+            for (const auto &member : current)
+                if (member.group.protocol() == destination.protocol())
+                    send(packet, destination, port, member.iface.index());
+            return;
+        }
+        index = routeInterface(destination);
+        if (!index) {
+            // Nothing we joined reaches it directly; let the OS route it.
+            auto &socket = destination.protocol() == QAbstractSocket::IPv4Protocol ? ipv4Socket : ipv6Socket;
+            const qint64 written = socket.state() == QAbstractSocket::BoundState
+                ? socket.writeDatagram(packet, destination, port) : -1;
+            QMap<QString, QString> fields{{"interface", "0"}, {"address_family", familyName(destination)},
+                {"scope", "unicast"}, {"bytes", QString::number(written)},
+                {"result", written == packet.size() ? "accepted" : "failed"}};
+            if (written != packet.size()) fields.insert("message", socket.errorString());
+            emit q->transportEvent("send_result", fields);
+            return;
+        }
+    }
     const auto key = membershipKey(index, destination);
     if (!members.contains(key)) {
         emit q->transportEvent("send_dropped", {{"interface", QString::number(index)}, {"reason", "inactive_interface"}});
@@ -321,6 +358,11 @@ void Server::sendMessage(const Message &message)
     QByteArray packet;
     toPacket(message, packet);
     d->send(packet, message.address(), message.port(), message.interfaceIndex());
+}
+
+bool Server::isJoined(uint interfaceIndex, const QHostAddress &group) const
+{
+    return d->members.contains(membershipKey(interfaceIndex, group));
 }
 
 void Server::sendMessageToAll(const Message &message)

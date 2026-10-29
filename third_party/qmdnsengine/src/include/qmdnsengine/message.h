@@ -186,6 +186,10 @@ public:
     void setInterfaceIndex(uint index);
     quint64 interfaceGeneration() const;
     void setInterfaceGeneration(quint64 generation);
+    // True when a received datagram came from one of this host's own
+    // addresses: the OS loops our own multicast back to us.
+    bool senderIsLocal() const;
+    void setSenderIsLocal(bool local);
 
 private:
 

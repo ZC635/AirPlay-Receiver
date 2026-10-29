@@ -82,14 +82,18 @@ void ProberPrivate::onMessageReceived(const Message &message)
     // If the response matches the proposed record, increment the suffix and
     // try with the new name
 
-    if (confirmed || !message.isResponse()) {
+    // A goodbye (TTL 0) releases the name rather than claiming it, and our
+    // own looped-back traffic (the existing provider answering the probe for
+    // its new target) is not another host's claim.
+    if (confirmed || !message.isResponse() || message.senderIsLocal()) {
         return;
     }
     const auto records = message.records();
     for (const Record &record : records) {
-        if (record.name() == proposedRecord.name() && record.type() == proposedRecord.type()) {
+        if (record.ttl() > 0 && record.name() == proposedRecord.name() && record.type() == proposedRecord.type()) {
             ++suffix;
             assertRecord();
+            break;
         }
     }
 }

@@ -25,7 +25,9 @@
 #ifndef QMDNSENGINE_PROVIDER_P_H
 #define QMDNSENGINE_PROVIDER_P_H
 
+#include <QElapsedTimer>
 #include <QObject>
+#include <QTimer>
 
 #include <qmdnsengine/record.h>
 #include <qmdnsengine/service.h>
@@ -59,6 +61,11 @@ public:
     Service service;
     bool initialized;
     bool confirmed;
+
+    // Minimum spacing between re-announcements on interface changes.
+    static constexpr qint64 AnnounceInterval = 1000;
+    QTimer announceTimer;
+    QElapsedTimer lastAnnounce;
 
     Record browsePtrRecord;
     Record ptrRecord;

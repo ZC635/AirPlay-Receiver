@@ -49,9 +49,12 @@ HostnamePrivate::HostnamePrivate(Hostname *hostname, AbstractServer *server)
     connect(server, &AbstractServer::interfacesChanged, this, &HostnamePrivate::onInterfacesChanged);
     connect(&registrationTimer, &QTimer::timeout, this, &HostnamePrivate::onRegistrationTimeout);
     connect(&rebroadcastTimer, &QTimer::timeout, this, &HostnamePrivate::onRebroadcastTimeout);
+    connect(&refreshTimer, &QTimer::timeout, this, &HostnamePrivate::onInterfacesChanged);
 
     registrationTimer.setInterval(2 * 1000);
     registrationTimer.setSingleShot(true);
+
+    refreshTimer.setSingleShot(true);
 
     rebroadcastTimer.setInterval(30 * 60 * 1000);
     rebroadcastTimer.setSingleShot(true);
@@ -91,6 +94,22 @@ void HostnamePrivate::assertHostname()
 
 namespace {
 
+// RFC 6762 sections 8.1 and 9: an answer whose rdata is one of our own
+// addresses is not a conflict. This covers our own looped-back announcements
+// and another responder on this host (the OS resolver) serving the same name.
+bool ownsAddress(QHostAddress address)
+{
+    address.setScopeId({});
+    for (const auto &iface : QNetworkInterface::allInterfaces()) {
+        for (const auto &entry : iface.addressEntries()) {
+            auto local = entry.ip();
+            local.setScopeId({});
+            if (local == address) return true;
+        }
+    }
+    return false;
+}
+
 QList<Record> addressRecords(const QByteArray &hostname, const QNetworkInterface &iface)
 {
     QList<Record> records;
@@ -118,9 +137,11 @@ void HostnamePrivate::onMessageReceived(const Message &message)
         }
         const auto records = message.records();
         for (const Record &record : records) {
-            if (record.ttl() > 0 && (record.type() == A || record.type() == AAAA) && record.name() == hostname) {
+            if (record.ttl() > 0 && (record.type() == A || record.type() == AAAA) && record.name() == hostname
+                && !ownsAddress(record.address())) {
                 ++hostnameSuffix;
                 assertHostname();
+                break;
             }
         }
     } else {
@@ -149,9 +170,17 @@ void HostnamePrivate::onMessageReceived(const Message &message)
 
 void HostnamePrivate::onInterfacesChanged()
 {
-    if (hostnameRegistered) {
-        updateAddressRecords();
+    if (!hostnameRegistered || refreshTimer.isActive()) {
+        return;
     }
+    // RFC 6762 section 6: a record is multicast on a link at most once per
+    // second. Change bursts (flapping adapters) coalesce into one refresh.
+    const qint64 elapsed = lastUpdate.isValid() ? lastUpdate.elapsed() : AnnounceInterval;
+    if (elapsed < AnnounceInterval) {
+        refreshTimer.start(int(AnnounceInterval - elapsed));
+        return;
+    }
+    updateAddressRecords();
 }
 
 void HostnamePrivate::onRegistrationTimeout()
@@ -192,15 +221,16 @@ void HostnamePrivate::updateAddressRecords()
         }
         if (!stale.isEmpty()) sendRecords(it.key(), stale, true);
     }
-    // Announce every current record, like the providers do. This enumeration
-    // is independent of the server's memberships: a link the server could not
-    // join yet drops the send, and only a repeat on the next change reaches it.
-    // Re-announcing an unchanged cache-flush record only refreshes client
-    // caches (RFC 6762 section 10.2), so nothing is lost by repeating.
+    // Announce every current record, like the providers do. A link the server
+    // has not joined is skipped (sendRecords); the server reports the join
+    // through interfacesChanged and the repeat then reaches it. Re-announcing
+    // an unchanged cache-flush record only refreshes client caches (RFC 6762
+    // section 10.2), so nothing is lost by repeating.
     for (auto it = current.cbegin(); it != current.cend(); ++it) {
         sendRecords(it.key(), it.value(), false);
     }
     announcedRecords = current;
+    lastUpdate.start();
 }
 
 void HostnamePrivate::sendRecords(uint interfaceIndex, const QList<Record> &records, bool goodbye)
@@ -212,6 +242,7 @@ void HostnamePrivate::sendRecords(uint interfaceIndex, const QList<Record> &reco
     }
     for (const auto &group : {MdnsIpv4Address, MdnsIpv6Address}) {
         if (group.protocol() == QAbstractSocket::IPv4Protocol ? !ipv4 : !ipv6) continue;
+        if (!server->isJoined(interfaceIndex, group)) continue;
         Message message;
         message.setResponse(true);
         message.setInterfaceIndex(interfaceIndex);

@@ -156,8 +156,9 @@ target_include_directories(MdnsPublisherTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
 
 if(AIRPLAY_WITH_UXPLAY)
-    add_executable(MdnsServerAdapterTest platform/MdnsServerAdapterTest.cpp)
     add_subdirectory(mdns)
+
+    add_executable(MdnsServerAdapterTest platform/MdnsServerAdapterTest.cpp)
     target_link_libraries(MdnsServerAdapterTest PRIVATE airplay_app_lib Qt6::Test)
     target_include_directories(MdnsServerAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     get_target_property(_qmdns_test_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)

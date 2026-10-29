@@ -27,6 +27,7 @@
 
 #include <qmdnsengine/bitmap.h>
 #include <qmdnsengine/dns.h>
+#include <qmdnsengine/mdns.h>
 #include <qmdnsengine/message.h>
 #include <qmdnsengine/query.h>
 #include <qmdnsengine/record.h>
@@ -353,8 +354,16 @@ void toPacket(const Message &message, QByteArray &packet)
         writeInteger<quint16>(packet, offset, query.type());
         writeInteger<quint16>(packet, offset, query.unicastResponse() ? 0x8001 : 1);
     }
+    // A response to a legacy unicast resolver (RFC 6762 section 6.7) must not
+    // set cache-flush and must cap the TTL at 10 seconds, whatever order the
+    // records were added in.
+    const bool legacyUnicast = message.isResponse() && message.port() != MdnsPort;
     const auto records = message.records();
     for (Record record : records) {
+        if (legacyUnicast) {
+            record.setFlushCache(false);
+            record.setTtl(qMin(record.ttl(), quint32(10)));
+        }
         writeRecord(packet, offset, record, nameMap);
     }
 }

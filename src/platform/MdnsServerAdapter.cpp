@@ -96,6 +96,10 @@ void MdnsServerAdapter::sendMessageToAll(const QMdnsEngine::Message &message) {
         delegate_->sendMessageToAll(message);
 }
 
+bool MdnsServerAdapter::isJoined(uint interfaceIndex, const QHostAddress &group) const {
+    return delegate_ ? delegate_->isJoined(interfaceIndex, group) : false;
+}
+
 void MdnsServerAdapter::onMessageReceived(const QMdnsEngine::Message &message) {
     if (sink_) {
         const int prefix = message.address().protocol() == QAbstractSocket::IPv6Protocol ? 64 : 24;

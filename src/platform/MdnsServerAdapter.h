@@ -17,6 +17,7 @@ public:
 
     void sendMessage(const QMdnsEngine::Message &message) override;
     void sendMessageToAll(const QMdnsEngine::Message &message) override;
+    bool isJoined(uint interfaceIndex, const QHostAddress &group) const override;
 
 private slots:
     void onMessageReceived(const QMdnsEngine::Message &message);

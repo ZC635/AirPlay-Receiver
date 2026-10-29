@@ -56,6 +56,7 @@ public:
     // Debounced refresh requested by a system interface/address notification.
     void scheduleRefresh();
     void send(const QByteArray &packet, const QHostAddress &destination, quint16 port, uint index);
+    uint routeInterface(const QHostAddress &destination) const;
     struct Membership {
         QNetworkInterface iface;
         QHostAddress group;

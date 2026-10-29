@@ -26,6 +26,7 @@
 #define QMDNSENGINE_SERVER_H
 
 #include <qmdnsengine/abstractserver.h>
+#include <QHostAddress>
 #include <QMap>
 
 #include "qmdnsengine_export.h"
@@ -68,6 +69,11 @@ public:
      * @brief Implementation of AbstractServer::sendMessageToAll()
      */
     virtual void sendMessageToAll(const Message &message);
+
+    /**
+     * @brief Implementation of AbstractServer::isJoined()
+     */
+    bool isJoined(uint interfaceIndex, const QHostAddress &group) const override;
 
 Q_SIGNALS:
     // AbstractServer::interfacesChanged() is emitted after memberships are

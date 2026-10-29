@@ -47,7 +47,7 @@ public:
     quint16 transactionId;
     bool isResponse;
     bool isTruncated;
-    bool legacyUnicastResponse = false;
+    bool senderIsLocal = false;
     QList<Query> queries;
     QList<Record> records;
 };

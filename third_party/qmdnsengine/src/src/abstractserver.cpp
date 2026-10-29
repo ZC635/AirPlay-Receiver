@@ -30,3 +30,8 @@ AbstractServer::AbstractServer(QObject *parent)
     : QObject(parent)
 {
 }
+
+bool AbstractServer::isJoined(uint, const QHostAddress &) const
+{
+    return true;
+}
