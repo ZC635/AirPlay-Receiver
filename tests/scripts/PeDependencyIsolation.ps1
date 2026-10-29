@@ -43,12 +43,26 @@ function Get-PeDependencies([string[]]$Roots, [string[]]$SearchDirectories, [str
     return ,$resolved
 }
 
+function Get-PeFileHash([string]$Path) {
+    # Some isolation tests intentionally remove PowerShell's module search path.
+    $stream = [IO.File]::OpenRead($Path)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return [Convert]::ToBase64String($sha.ComputeHash($stream)) }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
+
 function Copy-PeDependencies($Resolved, [string]$Directory, [string[]]$ExcludedFiles = @()) {
     $copiedNames = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($file in $Resolved.Values) {
         if ([IO.Path]::GetExtension($file) -ine '.dll' -or $ExcludedFiles -contains $file) { continue }
         $name = Split-Path -Leaf $file
-        if ($copiedNames.ContainsKey($name) -and $copiedNames[$name] -ne $file) { throw "Conflicting isolated DLL paths for $name" }
+        if ($copiedNames.ContainsKey($name)) {
+            if ($copiedNames[$name] -ne $file -and
+                (Get-PeFileHash $copiedNames[$name]) -ne (Get-PeFileHash $file)) {
+                throw "Conflicting isolated DLL contents for $name"
+            }
+            continue
+        }
         $copiedNames[$name] = $file
         Copy-Item -LiteralPath $file -Destination (Join-Path $Directory $name)
     }

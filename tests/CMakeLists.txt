@@ -157,6 +157,7 @@ add_test(NAME MdnsPublisherTest COMMAND MdnsPublisherTest)
 
 if(AIRPLAY_WITH_UXPLAY)
     add_executable(MdnsServerAdapterTest platform/MdnsServerAdapterTest.cpp)
+    add_subdirectory(mdns)
     target_link_libraries(MdnsServerAdapterTest PRIVATE airplay_app_lib Qt6::Test)
     target_include_directories(MdnsServerAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     get_target_property(_qmdns_test_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
@@ -815,4 +816,15 @@ if(AIRPLAY_WITH_UXPLAY)
     add_test(NAME UpstreamProtocolRegressionTest COMMAND UpstreamProtocolRegressionTest)
     set_tests_properties(UpstreamProtocolRegressionTest PROPERTIES TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}")
+endif()
+
+if(AIRPLAY_WITH_UXPLAY)
+    add_test(NAME MdnsRuntimeDeploymentTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/MdnsRuntimeDeploymentTest.ps1"
+            -ProjectRoot "${PROJECT_SOURCE_DIR}")
+    add_test(NAME PeDependencyIsolationTest
+        COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/PeDependencyIsolationTest.ps1"
+            -ProjectRoot "${PROJECT_SOURCE_DIR}")
 endif()

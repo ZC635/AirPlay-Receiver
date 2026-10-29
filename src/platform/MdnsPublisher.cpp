@@ -3,6 +3,7 @@
 #include <QByteArray>
 
 #if AIRPLAY_WITH_UXPLAY
+#include <QPointer>
 #include <qmdnsengine/hostname.h>
 #include <qmdnsengine/provider.h>
 #include <qmdnsengine/server.h>
@@ -22,6 +23,7 @@ struct MdnsPublisher::Private {
     DiagnosticLogSink *sink = nullptr;
 #if AIRPLAY_WITH_UXPLAY
     MdnsPublisher::ServerFactory serverFactory;
+    QList<ServiceDefinition> definitions;
     QMdnsEngine::AbstractServer *server = nullptr;
     MdnsServerAdapter *adapter = nullptr;
     QMdnsEngine::Hostname *hostname = nullptr;
@@ -154,6 +156,28 @@ bool MdnsPublisher::publish(const QString &receiverName, const QByteArray &hardw
                                         QStringLiteral("server_created")));
 
     d->adapter = new MdnsServerAdapter(d->server, d->sink, this);
+    d->definitions = defs;
+    if (auto *server = qobject_cast<QMdnsEngine::Server *>(d->server)) {
+        const QPointer<QMdnsEngine::Server> guard(server);
+        connect(server, &QMdnsEngine::Server::interfacesChanged, this, [this, guard] {
+            // Queued: never delete providers while they are sending a response.
+            if (!guard || d->server != guard.data()) return;
+            d->sink->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("discovery"),
+                QStringLiteral("interfaces_reconfigured")));
+            rebuildServices();
+        }, Qt::QueuedConnection);
+    }
+    rebuildServices();
+    return true;
+#else
+    return false;
+#endif
+}
+
+#if AIRPLAY_WITH_UXPLAY
+void MdnsPublisher::rebuildServices() {
+    clearServices();
+    const auto &defs = d->definitions;
     d->hostname = new QMdnsEngine::Hostname(d->adapter, this);
     connect(d->hostname, &QMdnsEngine::Hostname::hostnameChanged, this,
             [this](const QByteArray &) {
@@ -191,23 +215,22 @@ bool MdnsPublisher::publish(const QString &receiverName, const QByteArray &hardw
                                         QStringLiteral("service_configured"),
                                         {{QStringLiteral("type"), QStringLiteral("_airplay._tcp")},
                                          {QStringLiteral("port"), QString::number(airplayDef.port)}}));
-#endif
-
-#if AIRPLAY_WITH_UXPLAY
-    return true;
-#else
-    return false;
-#endif
 }
 
-void MdnsPublisher::stop() {
-#if AIRPLAY_WITH_UXPLAY
+void MdnsPublisher::clearServices() {
     delete d->raopProvider;
     d->raopProvider = nullptr;
     delete d->airplayProvider;
     d->airplayProvider = nullptr;
     delete d->hostname;
     d->hostname = nullptr;
+}
+#endif
+
+void MdnsPublisher::stop() {
+#if AIRPLAY_WITH_UXPLAY
+    clearServices();
+    d->definitions.clear();
     delete d->adapter;
     d->adapter = nullptr;
     delete d->server;

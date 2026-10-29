@@ -50,6 +50,10 @@ public:
         bool *ok = nullptr);
 
 private:
+#if AIRPLAY_WITH_UXPLAY
+    void clearServices();
+    void rebuildServices();
+#endif
     struct Private;
     QScopedPointer<Private> d;
 };

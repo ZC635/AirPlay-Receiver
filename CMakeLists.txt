@@ -193,6 +193,7 @@ if(AIRPLAY_WITH_UXPLAY)
         src/backend/GstSampleQueue.h
     )
     target_link_libraries(airplay_app_lib PUBLIC uxplay_dependency)
+    add_dependencies(airplay_app_lib qmdns_runtime)
     if(TARGET qmdnsengine)
         get_target_property(_qmdns_inc qmdnsengine INTERFACE_INCLUDE_DIRECTORIES)
         if(_qmdns_inc)

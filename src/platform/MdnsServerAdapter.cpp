@@ -7,6 +7,7 @@
 #include <qmdnsengine/dns.h>
 #include <qmdnsengine/message.h>
 #include <qmdnsengine/query.h>
+#include <qmdnsengine/server.h>
 
 #include "diagnostics/DiagnosticEvent.h"
 #include "diagnostics/DiagnosticLogSink.h"
@@ -52,13 +53,25 @@ MdnsServerAdapter::MdnsServerAdapter(QMdnsEngine::AbstractServer *delegate,
     connect(delegate_, &QMdnsEngine::AbstractServer::messageReceived,
             this, &MdnsServerAdapter::onMessageReceived);
     connect(delegate_, &QMdnsEngine::AbstractServer::error, this, &MdnsServerAdapter::onError);
+    if (auto *server = qobject_cast<QMdnsEngine::Server *>(delegate_)) {
+        connect(server, &QMdnsEngine::Server::transportEvent, this,
+                [this](const QString &name, const QMap<QString, QString> &fields) {
+            if (!sink_) return;
+            const bool failed = fields.value(QStringLiteral("result")) == QStringLiteral("failed")
+                || name.endsWith(QStringLiteral("_dropped"));
+            sink_->record(makeDiagnosticEvent(failed ? DiagnosticSeverity::Warning : DiagnosticSeverity::Info,
+                QStringLiteral("discovery"), name, fields));
+        });
+    }
 }
 
 void MdnsServerAdapter::sendMessage(const QMdnsEngine::Message &message) {
     if (sink_) {
         sink_->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("discovery"),
                                           QStringLiteral("send_requested"),
-                                          {{QStringLiteral("scope"), QStringLiteral("unicast")},
+                                          {{QStringLiteral("scope"), message.address().isMulticast()
+                                               ? QStringLiteral("multicast") : QStringLiteral("unicast")},
+                                           {QStringLiteral("interface"), QString::number(message.interfaceIndex())},
                                            {QStringLiteral("address_family"), addressFamily(message.address())}}));
     }
     if (delegate_)
@@ -86,6 +99,7 @@ void MdnsServerAdapter::onMessageReceived(const QMdnsEngine::Message &message) {
             sink_->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("discovery"),
                                               QStringLiteral("search_received"),
                                               {{QStringLiteral("query"), queryName},
+                                               {QStringLiteral("interface"), QString::number(message.interfaceIndex())},
                                                {QStringLiteral("type"), recordType(query.type())},
                                                {QStringLiteral("source"),
                                                 DiagnosticSanitizer::maskedAddress(message.address(), prefix)}}));

@@ -85,8 +85,7 @@ $RequiredPackageSuffixes = @(
     "gst-plugins-bad",
     "json-glib",
     "gst-libav",
-    "openh264",
-    "qmdnsengine"
+    "openh264"
 )
 
 function Resolve-MSys2Root {
@@ -441,18 +440,11 @@ function Invoke-Build {
             exit $windeployqtExit
         }
 
-        Write-Host "  Bundling libqmdnsengine.dll..." -ForegroundColor Gray
-        $qmdnsSource = Join-Path $MSys2Bin "libqmdnsengine.dll"
-        if (Test-Path $qmdnsSource) {
-            Copy-Item $qmdnsSource $VariantBuildDir -Force
-            Write-Host "    Copied libqmdnsengine.dll from $qmdnsSource" -ForegroundColor Gray
-        } else {
-            throw "libqmdnsengine.dll was not found. Install qmdnsengine MSYS2 package before building."
-        }
-
         if ($IsPortable) {
             Write-Host "  Copying ALL runtime DLLs (portable mode)..." -ForegroundColor Gray
-            Get-ChildItem $MSys2Bin -Filter "*.dll" | Copy-Item -Destination $VariantBuildDir -Force
+            Get-ChildItem $MSys2Bin -Filter "*.dll" | Where-Object {
+                $_.Name -ine 'libqmdnsengine.dll'
+            } | Copy-Item -Destination $VariantBuildDir -Force
         } else {
             Write-Host "  Copying filtered runtime DLLs..." -ForegroundColor Gray
             $exclude = @("gcc", "g++", "cpp", "cc1", "cc1plus", "collect2", "ld", "ar", "as", "nm",
@@ -462,12 +454,15 @@ function Invoke-Build {
             $exePatterns = ($exclude | ForEach-Object { "$_.exe" })
             Get-ChildItem $MSys2Bin -Filter "*.dll" | Where-Object {
                 $n = $_.Name.ToLower()
-                $exePatterns -notcontains $n -and
+                $n -ne 'libqmdnsengine.dll' -and $exePatterns -notcontains $n -and
                 ($n -like "lib*" -or $n -like "av*" -or $n -like "sw*" -or
                  $n -like "zlib*" -or $n -like "xvid*" -or $n -like "sdl*" -or
                  $n -like "D3D*" -or $n -like "Qt*" -or $n -like "dx*")
             } | Copy-Item -Destination $VariantBuildDir -Force
         }
+
+        # Do this after dependency copying, which must not replace our patched library.
+        & (Join-Path $PSScriptRoot 'deploy-qmdns-runtime.ps1') -BuildDirectory $VariantBuildDir
 
         Write-Host "  Copying GStreamer plugins..." -ForegroundColor Gray
         $PluginOutDir = Join-Path $VariantBuildDir "gstreamer-plugins"
