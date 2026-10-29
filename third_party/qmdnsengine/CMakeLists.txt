@@ -11,6 +11,6 @@ target_include_directories(qmdnsengine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/include" "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(qmdnsengine PUBLIC Qt6::Network)
 if(WIN32)
-    # ws2_32: socket-level IPv4 TTL; iphlpapi: interface/address change notifications.
-    target_link_libraries(qmdnsengine PRIVATE ws2_32 iphlpapi)
+    # ws2_32: socket-level IPv4 TTL.
+    target_link_libraries(qmdnsengine PRIVATE ws2_32)
 endif()

@@ -46,17 +46,13 @@ class ServerPrivate : public QObject
 public:
 
     explicit ServerPrivate(Server *server);
-    ~ServerPrivate() override;
 
     bool bindSocket(QUdpSocket &socket, const QHostAddress &address);
     void refreshInterfaces();
     // Joins the current links if the first poll has not run yet, so a message
     // sent right after construction is not silently dropped.
     void ensureInitialized();
-    // Debounced refresh requested by a system interface/address notification.
-    void scheduleRefresh();
     void send(const QByteArray &packet, const QHostAddress &destination, quint16 port, uint index);
-    uint routeInterface(const QHostAddress &destination) const;
     struct Membership {
         QNetworkInterface iface;
         QHostAddress group;
@@ -74,10 +70,6 @@ public:
     bool initialized = false;
 
     QTimer timer;
-    QTimer changeTimer;
-    // NotifyIpInterfaceChange / NotifyUnicastIpAddressChange handles (Windows).
-    void *interfaceNotification = nullptr;
-    void *addressNotification = nullptr;
     QUdpSocket ipv4Socket;
     QUdpSocket ipv6Socket;
 

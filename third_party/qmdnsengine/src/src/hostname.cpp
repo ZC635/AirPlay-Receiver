@@ -49,12 +49,9 @@ HostnamePrivate::HostnamePrivate(Hostname *hostname, AbstractServer *server)
     connect(server, &AbstractServer::interfacesChanged, this, &HostnamePrivate::onInterfacesChanged);
     connect(&registrationTimer, &QTimer::timeout, this, &HostnamePrivate::onRegistrationTimeout);
     connect(&rebroadcastTimer, &QTimer::timeout, this, &HostnamePrivate::onRebroadcastTimeout);
-    connect(&refreshTimer, &QTimer::timeout, this, &HostnamePrivate::onInterfacesChanged);
 
     registrationTimer.setInterval(2 * 1000);
     registrationTimer.setSingleShot(true);
-
-    refreshTimer.setSingleShot(true);
 
     rebroadcastTimer.setInterval(30 * 60 * 1000);
     rebroadcastTimer.setSingleShot(true);
@@ -170,17 +167,9 @@ void HostnamePrivate::onMessageReceived(const Message &message)
 
 void HostnamePrivate::onInterfacesChanged()
 {
-    if (!hostnameRegistered || refreshTimer.isActive()) {
-        return;
+    if (hostnameRegistered) {
+        updateAddressRecords();
     }
-    // RFC 6762 section 6: a record is multicast on a link at most once per
-    // second. Change bursts (flapping adapters) coalesce into one refresh.
-    const qint64 elapsed = lastUpdate.isValid() ? lastUpdate.elapsed() : AnnounceInterval;
-    if (elapsed < AnnounceInterval) {
-        refreshTimer.start(int(AnnounceInterval - elapsed));
-        return;
-    }
-    updateAddressRecords();
 }
 
 void HostnamePrivate::onRegistrationTimeout()
@@ -230,7 +219,6 @@ void HostnamePrivate::updateAddressRecords()
         sendRecords(it.key(), it.value(), false);
     }
     announcedRecords = current;
-    lastUpdate.start();
 }
 
 void HostnamePrivate::sendRecords(uint interfaceIndex, const QList<Record> &records, bool goodbye)

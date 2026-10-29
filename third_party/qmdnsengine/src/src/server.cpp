@@ -26,11 +26,6 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif
-#if defined(_WIN32) && !defined(SIMULATE_QMDNS_NETWORK)
-#define QMDNSENGINE_IP_NOTIFICATIONS 1
-#include <iphlpapi.h>
-#include <netioapi.h>
-#endif
 #include <QNetworkDatagram>
 #include <QStringList>
 #include <iterator>
@@ -51,49 +46,15 @@ QString membershipKey(uint index, const QHostAddress &address) {
 QString familyName(const QHostAddress &address) {
     return address.protocol() == QAbstractSocket::IPv4Protocol ? "ipv4" : "ipv6";
 }
-// True when the datagram came from one of this host's own addresses on the
-// receiving link: our multicast is looped back to our own socket by default.
-// Such datagrams are still delivered (a client on this host must be able to
-// discover us); the hostname and prober use the flag to ignore their own echo.
-bool ownAddress(QHostAddress sender, const QNetworkInterface &iface) {
-    sender.setScopeId({});
-    for (const auto &entry : iface.addressEntries()) {
-        auto local = entry.ip();
-        local.setScopeId({});
-        if (local == sender) return true;
-    }
-    return false;
-}
-#ifdef QMDNSENGINE_IP_NOTIFICATIONS
-// Called by the system on a worker thread; only hop back to the Qt thread.
-void WINAPI onInterfaceChange(PVOID context, PMIB_IPINTERFACE_ROW, MIB_NOTIFICATION_TYPE) {
-    QMetaObject::invokeMethod(static_cast<ServerPrivate *>(context), &ServerPrivate::scheduleRefresh, Qt::QueuedConnection);
-}
-void WINAPI onAddressChange(PVOID context, PMIB_UNICASTIPADDRESS_ROW, MIB_NOTIFICATION_TYPE) {
-    QMetaObject::invokeMethod(static_cast<ServerPrivate *>(context), &ServerPrivate::scheduleRefresh, Qt::QueuedConnection);
-}
-#endif
 }
 
 ServerPrivate::ServerPrivate(Server *server) : QObject(server), q(server)
 {
     connect(&timer, &QTimer::timeout, this, &ServerPrivate::onTimeout);
-    connect(&changeTimer, &QTimer::timeout, this, &ServerPrivate::onTimeout);
     connect(&ipv4Socket, &QUdpSocket::readyRead, this, &ServerPrivate::onReadyRead);
     connect(&ipv6Socket, &QUdpSocket::readyRead, this, &ServerPrivate::onReadyRead);
-    // Bursts of change notifications (one per address) collapse into one refresh.
-    changeTimer.setSingleShot(true);
-    changeTimer.setInterval(250);
-#ifdef QMDNSENGINE_IP_NOTIFICATIONS
-    if (NotifyIpInterfaceChange(AF_UNSPEC, &onInterfaceChange, this, FALSE, &interfaceNotification) != NO_ERROR)
-        interfaceNotification = nullptr;
-    if (NotifyUnicastIpAddressChange(AF_UNSPEC, &onAddressChange, this, FALSE, &addressNotification) != NO_ERROR)
-        addressNotification = nullptr;
-#endif
-    // With change notifications the poll is only a safety net; without them it
-    // is the only way to observe hotplug and address changes.
-    const bool notified = interfaceNotification && addressNotification;
-    timer.setInterval(notified ? 30000 : 2000);
+    // The poll is how hotplug and address changes are observed.
+    timer.setInterval(2000);
     timer.start();
     // Membership is established lazily (first send or first poll) so that the
     // publisher can attach its diagnostic observers before the initial joins
@@ -101,24 +62,9 @@ ServerPrivate::ServerPrivate(Server *server) : QObject(server), q(server)
     QTimer::singleShot(0, this, &ServerPrivate::onTimeout);
 }
 
-ServerPrivate::~ServerPrivate()
-{
-#ifdef QMDNSENGINE_IP_NOTIFICATIONS
-    // Blocks until in-flight callbacks return; queued invocations they posted
-    // are discarded with this object.
-    if (interfaceNotification) CancelMibChangeNotify2(interfaceNotification);
-    if (addressNotification) CancelMibChangeNotify2(addressNotification);
-#endif
-}
-
 void ServerPrivate::ensureInitialized()
 {
     if (!initialized) refreshInterfaces();
-}
-
-void ServerPrivate::scheduleRefresh()
-{
-    changeTimer.start();
 }
 
 bool ServerPrivate::bindSocket(QUdpSocket &socket, const QHostAddress &address)
@@ -240,10 +186,8 @@ void ServerPrivate::onReadyRead()
         }
         const auto key = membershipKey(index, datagram.senderAddress());
         if (!index || !members.contains(key)) {
-            // A link that came up since the last poll, or one we never joined:
-            // reconcile through the debounced path so a stream of such packets
-            // cannot enumerate the interfaces on every batch.
-            if (index) scheduleRefresh();
+            // A link that came up since the last poll, or one we never joined;
+            // the next poll reconciles memberships.
             emit q->transportEvent("receive_dropped", {{"reason", "unknown_interface"}});
             continue;
         }
@@ -253,52 +197,14 @@ void ServerPrivate::onReadyRead()
         message.setPort(datagram.senderPort());
         message.setInterfaceIndex(index);
         message.setInterfaceGeneration(members.value(key).generation);
-        message.setSenderIsLocal(ownAddress(datagram.senderAddress(), members.value(key).iface));
         emit q->messageReceived(message);
     }
 }
 
-uint ServerPrivate::routeInterface(const QHostAddress &destination) const
-{
-    // No interface was given (a message composed by the caller rather than
-    // by reply()): pick the joined link whose subnet contains the destination,
-    // as the routing table would.
-    for (const auto &member : members) {
-        if (member.group.protocol() != destination.protocol()) continue;
-        for (const auto &entry : member.iface.addressEntries()) {
-            if (entry.ip().protocol() == destination.protocol()
-                && destination.isInSubnet(entry.ip(), entry.prefixLength()))
-                return member.iface.index();
-        }
-    }
-    return 0;
-}
-
 void ServerPrivate::send(const QByteArray &packet, const QHostAddress &destination, quint16 port, uint index)
 {
-    if (!index) {
-        if (destination.isMulticast()) {
-            // Multicast without a link means every joined link of that family.
-            const auto current = members;
-            for (const auto &member : current)
-                if (member.group.protocol() == destination.protocol())
-                    send(packet, destination, port, member.iface.index());
-            return;
-        }
-        index = routeInterface(destination);
-        if (!index) {
-            // Nothing we joined reaches it directly; let the OS route it.
-            auto &socket = destination.protocol() == QAbstractSocket::IPv4Protocol ? ipv4Socket : ipv6Socket;
-            const qint64 written = socket.state() == QAbstractSocket::BoundState
-                ? socket.writeDatagram(packet, destination, port) : -1;
-            QMap<QString, QString> fields{{"interface", "0"}, {"address_family", familyName(destination)},
-                {"scope", "unicast"}, {"bytes", QString::number(written)},
-                {"result", written == packet.size() ? "accepted" : "failed"}};
-            if (written != packet.size()) fields.insert("message", socket.errorString());
-            emit q->transportEvent("send_result", fields);
-            return;
-        }
-    }
+    // Every sender in this library names a link; a message without one is
+    // reported rather than guessed.
     const auto key = membershipKey(index, destination);
     if (!members.contains(key)) {
         emit q->transportEvent("send_dropped", {{"interface", QString::number(index)}, {"reason", "inactive_interface"}});

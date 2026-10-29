@@ -68,8 +68,7 @@ static bool servicesReady(int iface) {
     return airplay && raop;
 }
 // Services announced and the host address record announced: a client on the
-// link can both browse and resolve. Re-announcements after a change are
-// throttled per publisher, so tests wait for both before querying.
+// link can both browse and resolve. Tests wait for both before querying.
 static bool linkReady(int iface) {
     return servicesReady(iface) && containsType(recordsOn(iface), QMdnsEngine::A);
 }

@@ -20,21 +20,18 @@ Missing interface metadata is accepted only when one eligible joined interface
 exists for the packet's address family. Ambiguous packets are diagnosed and
 dropped rather than guessed from the default route or overlapping subnets.
 
-On Windows, interface and address change notifications trigger reconciliation
-within a fraction of a second, with a 30-second poll as a safety net; elsewhere
-interfaces are polled every two seconds. Changes reconcile multicast membership,
+Interfaces are polled every two seconds. Changes reconcile multicast membership,
 invalidate reply contexts of the changed link only, and re-announce on the
 affected links: changed addresses are withdrawn, then all current host records
 and services are announced again. Services are not reprobed or withdrawn on
 other links. Existing AirPlay transport sessions are not restarted. Membership
 failures are diagnosed once and retried; one failing interface does not prevent
 service on another. Rapid changes wholly between polls are not guaranteed to be
-observed when notifications are unavailable. Multicast the receiver sends is
-looped back by the OS and is delivered like any other datagram, so a client on
-the same host can discover the receiver; an answer carrying one of the host's
-own addresses is not a hostname conflict (RFC 6762 sections 8.1 and 9), a
-goodbye is not a claim, and the prober ignores the host's own echo, so the
-receiver never renames itself because of its own traffic.
+observed. Multicast the receiver sends is looped back by the OS and is delivered
+like any other datagram, so a client on the same host can discover the receiver;
+an answer carrying one of the host's own addresses is not a hostname conflict
+(RFC 6762 sections 8.1 and 9) and a goodbye is not a claim, so the receiver
+never renames itself because of its own traffic.
 
 ## Automated regression suite
 
@@ -82,8 +79,7 @@ shipped library's SHA256 matches the build output, failing the build otherwise.
   family, scope and byte count. This is not proof of reception by an iPhone.
 - `multicast_join` / `multicast_leave`: membership operations and their results.
 - `interfaces_reconfigured`: memberships were reconciled; the hostname and
-  services re-announce on the joined links (at most once per second). Nothing
-  is reprobed or renamed.
+  services re-announce on the joined links. Nothing is reprobed or renamed.
 - `receive_dropped` / `send_dropped`: missing, inactive or stale interface context.
 
 Use the existing diagnostic restart option when collecting evidence. For a real

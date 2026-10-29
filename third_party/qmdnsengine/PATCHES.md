@@ -18,22 +18,17 @@ AirPlay Issue #11 changes:
 - `Server` reads interface metadata, drains pending datagrams, sends replies on
   the receiving link and sends probes/announcements on each joined link. Source
   addresses, IPv6 scope and hop limit are explicit. Stale replies are discarded.
-  A message without an interface index is routed like upstream did: multicast
-  goes to every joined link of its family, unicast to the joined link whose
-  subnet contains the destination, or else through the OS routing table.
-  Datagrams whose source is one of the receiving link's own addresses are
-  delivered with `Message::senderIsLocal()` set (the OS loops our multicast
+  A message without an interface index is dropped with a `send_dropped` event;
+  every sender in this library sets one. Datagrams whose source is one of the
+  host's own addresses are delivered like any other (the OS loops our multicast
   back), so clients on this host can still discover the receiver.
   `AbstractServer::isJoined()` lets publishers skip links the server has not
   joined instead of producing `send_dropped` noise.
 - Memberships are established on the first send or first poll, whichever comes
   first, so the hostname's synchronous startup probe reaches every link while
   the publisher can still attach its diagnostic observers before the joins.
-  On Windows, `NotifyIpInterfaceChange` and `NotifyUnicastIpAddressChange`
-  trigger a debounced reconciliation and the poll becomes a 30-second safety net;
-  elsewhere, or if registration fails, the poll runs every two seconds. A
-  datagram from a link that is not yet joined requests the same debounced
-  reconciliation rather than enumerating interfaces inline.
+  Interfaces are polled every two seconds. A datagram from a link that is not
+  yet joined is dropped until the next poll joins it.
   Only up/running, multicast-capable, non-loopback interfaces with usable
   addresses participate. A failed join or bind is reported once through
   `transportEvent` and retried silently; it is not a server `error`.
@@ -44,8 +39,7 @@ AirPlay Issue #11 changes:
 - `Hostname` and `Provider` listen to `interfacesChanged`: the hostname withdraws
   address records that are no longer true on a link and then announces all
   current records on the joined links; providers repeat their announcement.
-  Both are throttled to one re-announcement per second (RFC 6762 section 6) so
-  a flapping adapter cannot burst the other links. Repeating an unchanged
+  Re-announcements cannot occur more often than the poll. Repeating an unchanged
   cache-flush record only refreshes caches (RFC 6762 section 10.2), and the
   repeat is what reaches a link whose join succeeded only on retry. Nothing is
   recreated or reprobed. Address replies come from the records announced on the
@@ -54,17 +48,17 @@ AirPlay Issue #11 changes:
 - Self-conflict is handled where it arises, not in the transport: the hostname
   ignores A/AAAA answers whose address is one of this host's own addresses
   (RFC 6762 sections 8.1 and 9, identical rdata is not a conflict), zero-TTL
-  goodbyes are not conflicts for either the hostname or the prober, and the
-  prober ignores the host's own echo (`senderIsLocal`) so an existing provider
-  answering the probe for its new target does not rename the service.
+  goodbyes are not conflicts for either the hostname or the prober. A responder
+  on this host claiming the same service name with different rdata is still a
+  conflict.
 - Host records use cache-flush and a 120-second TTL, are announced on
   registration, and are withdrawn using saved records on replacement/stop.
   Zero-TTL goodbyes are not treated as hostname conflicts during reprobe.
 - Legacy unicast replies repeat the question/ID and cap TTL at 10 seconds without
   cache-flush (RFC 6762 section 6.7), preserving compatibility when host-record
-  cache-flush is enabled for multicast clients. The cap is applied by
-  `toPacket()` from the destination port, independent of the order in which
-  records were added.
+  cache-flush is enabled for multicast clients. `Message::reply()` records the
+  legacy state and `addRecord()` applies the cap to records added afterwards,
+  which is the order every caller uses.
 - Windows IPv4 uses socket-level IP_TTL and IP_MULTICAST_TTL. A native Qt 6.11
   datagram matrix reproduced WSAEINVAL (10022) whenever IPv4 per-packet hop limit
   was provided, independently of interface/source selection; IPv6 accepts it.

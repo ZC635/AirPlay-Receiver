@@ -46,8 +46,6 @@ ProviderPrivate::ProviderPrivate(QObject *parent, AbstractServer *server, Hostna
     connect(server, &AbstractServer::messageReceived, this, &ProviderPrivate::onMessageReceived);
     connect(hostname, &Hostname::hostnameChanged, this, &ProviderPrivate::onHostnameChanged);
     connect(server, &AbstractServer::interfacesChanged, this, &ProviderPrivate::onInterfacesChanged);
-    connect(&announceTimer, &QTimer::timeout, this, &ProviderPrivate::onInterfacesChanged);
-    announceTimer.setSingleShot(true);
 
     browsePtrProposed.setName(MdnsBrowseType);
     browsePtrProposed.setType(PTR);
@@ -73,7 +71,6 @@ void ProviderPrivate::announce()
     message.addRecord(srvRecord);
     message.addRecord(txtRecord);
     server->sendMessageToAll(message);
-    lastAnnounce.start();
 }
 
 void ProviderPrivate::confirm()
@@ -206,17 +203,10 @@ void ProviderPrivate::onInterfacesChanged()
 {
     // A link appeared or changed addresses: repeat the announcement on every
     // joined link so clients on the new one learn the service without
-    // withdrawing it anywhere else. RFC 6762 section 6 allows a record on a
-    // link at most once per second, so change bursts coalesce.
-    if (!confirmed || announceTimer.isActive()) {
-        return;
+    // withdrawing it anywhere else.
+    if (confirmed) {
+        announce();
     }
-    const qint64 elapsed = lastAnnounce.isValid() ? lastAnnounce.elapsed() : AnnounceInterval;
-    if (elapsed < AnnounceInterval) {
-        announceTimer.start(int(AnnounceInterval - elapsed));
-        return;
-    }
-    announce();
 }
 
 Provider::Provider(AbstractServer *server, Hostname *hostname, QObject *parent)

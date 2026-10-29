@@ -128,14 +128,22 @@ QList<Record> Message::records() const
 
 void Message::addRecord(const Record &record)
 {
-    d->records.append(record);
+    // A response to a legacy unicast resolver (RFC 6762 section 6.7) must not
+    // set cache-flush and must cap the TTL at 10 seconds.
+    Record outgoing = record;
+    if (d->legacyUnicastResponse) {
+        outgoing.setFlushCache(false);
+        outgoing.setTtl(qMin(outgoing.ttl(), quint32(10)));
+    }
+    d->records.append(outgoing);
 }
 
 void Message::reply(const Message &other)
 {
-    if (other.port() != MdnsPort) {
+    d->legacyUnicastResponse = other.port() != MdnsPort;
+    if (d->legacyUnicastResponse) {
         // Legacy unicast replies repeat the question (RFC 6762 section 6.7);
-        // the TTL cap and cache-flush suppression are applied by toPacket().
+        // addRecord() caps the TTL and clears cache-flush on what follows.
         d->queries = other.queries();
     }
     setInterfaceIndex(other.interfaceIndex());
@@ -158,5 +166,3 @@ uint Message::interfaceIndex() const { return d->interfaceIndex; }
 void Message::setInterfaceIndex(uint index) { d->interfaceIndex = index; }
 quint64 Message::interfaceGeneration() const { return d->interfaceGeneration; }
 void Message::setInterfaceGeneration(quint64 generation) { d->interfaceGeneration = generation; }
-bool Message::senderIsLocal() const { return d->senderIsLocal; }
-void Message::setSenderIsLocal(bool local) { d->senderIsLocal = local; }
