@@ -74,6 +74,7 @@ private Q_SLOTS:
 
     void onMessageReceived(const Message &message);
     void onHostnameChanged(const QByteArray &hostname);
+    void onInterfacesChanged();
 };
 
 }

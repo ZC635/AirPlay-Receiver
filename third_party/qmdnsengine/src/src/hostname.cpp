@@ -46,6 +46,7 @@ HostnamePrivate::HostnamePrivate(Hostname *hostname, AbstractServer *server)
       q(hostname)
 {
     connect(server, &AbstractServer::messageReceived, this, &HostnamePrivate::onMessageReceived);
+    connect(server, &AbstractServer::interfacesChanged, this, &HostnamePrivate::onInterfacesChanged);
     connect(&registrationTimer, &QTimer::timeout, this, &HostnamePrivate::onRegistrationTimeout);
     connect(&rebroadcastTimer, &QTimer::timeout, this, &HostnamePrivate::onRebroadcastTimeout);
 
@@ -88,27 +89,25 @@ void HostnamePrivate::assertHostname()
     registrationTimer.start();
 }
 
-QList<Record> HostnamePrivate::generateRecords(uint interfaceIndex, quint16 type)
+namespace {
+
+QList<Record> addressRecords(const QByteArray &hostname, const QNetworkInterface &iface)
 {
     QList<Record> records;
-    for (const auto &iface : QNetworkInterface::allInterfaces()) {
-        if (uint(iface.index()) != interfaceIndex || !usableInterface(iface)) continue;
-        for (const auto &entry : iface.addressEntries()) {
-            auto address = entry.ip();
-            if (!usableAddress(address)) continue;
-            if ((type == A && address.protocol() == QAbstractSocket::IPv4Protocol) ||
-                (type == AAAA && address.protocol() == QAbstractSocket::IPv6Protocol)) {
-                Record record;
-                record.setName(hostname);
-                record.setType(type);
-                record.setAddress(address);
-                record.setFlushCache(true);
-                record.setTtl(120);
-                records.append(record);
-            }
-        }
+    for (const auto &entry : iface.addressEntries()) {
+        const auto address = entry.ip();
+        if (!usableAddress(address)) continue;
+        Record record;
+        record.setName(hostname);
+        record.setType(address.protocol() == QAbstractSocket::IPv4Protocol ? A : AAAA);
+        record.setAddress(address);
+        record.setFlushCache(true);
+        record.setTtl(120);
+        records.append(record);
     }
     return records;
+}
+
 }
 
 void HostnamePrivate::onMessageReceived(const Message &message)
@@ -125,15 +124,20 @@ void HostnamePrivate::onMessageReceived(const Message &message)
             }
         }
     } else {
-        if (!hostnameRegistered) {
+        // Answer from the records announced on the receiving link. They stay
+        // valid while a periodic reprobe is in flight, and they are already
+        // scoped to that link, so no interface enumeration is needed here.
+        const auto records = announcedRecords.value(message.interfaceIndex());
+        if (records.isEmpty()) {
             return;
         }
         Message reply;
         reply.reply(message);
         const auto queries = message.queries();
         for (const Query &query : queries) {
-            if ((query.type() == A || query.type() == AAAA) && query.name() == hostname) {
-                for (const auto &record : generateRecords(message.interfaceIndex(), query.type()))
+            if (query.type() != A && query.type() != AAAA) continue;
+            for (const auto &record : records) {
+                if (record.type() == query.type() && record.name() == query.name())
                     reply.addRecord(record);
             }
         }
@@ -143,18 +147,17 @@ void HostnamePrivate::onMessageReceived(const Message &message)
     }
 }
 
+void HostnamePrivate::onInterfacesChanged()
+{
+    if (hostnameRegistered) {
+        updateAddressRecords(false);
+    }
+}
+
 void HostnamePrivate::onRegistrationTimeout()
 {
     hostnameRegistered = true;
-    sendAddressRecords(true);
-    announcedRecords.clear();
-    for (const auto &iface : QNetworkInterface::allInterfaces()) {
-        if (!usableInterface(iface)) continue;
-        auto records = generateRecords(iface.index(), A);
-        records.append(generateRecords(iface.index(), AAAA));
-        if (!records.isEmpty()) announcedRecords.insert(iface.index(), records);
-    }
-    sendAddressRecords(false);
+    updateAddressRecords(true);
     if (hostname != hostnamePrev) {
         emit q->hostnameChanged(hostname);
     }
@@ -163,29 +166,62 @@ void HostnamePrivate::onRegistrationTimeout()
     rebroadcastTimer.start();
 }
 
-HostnamePrivate::~HostnamePrivate() { sendAddressRecords(true); }
-
-void HostnamePrivate::sendAddressRecords(bool goodbye)
+HostnamePrivate::~HostnamePrivate()
 {
     for (auto it = announcedRecords.cbegin(); it != announcedRecords.cend(); ++it) {
-        bool ipv4 = false, ipv6 = false;
+        sendRecords(it.key(), it.value(), true);
+    }
+}
+
+void HostnamePrivate::updateAddressRecords(bool announceAll)
+{
+    QMap<uint, QList<Record>> current;
+    for (const auto &iface : QNetworkInterface::allInterfaces()) {
+        if (!usableInterface(iface)) continue;
+        const auto records = addressRecords(hostname, iface);
+        if (!records.isEmpty()) current.insert(iface.index(), records);
+    }
+
+    // Withdraw only what is no longer true on a link that still exists; a
+    // link that disappeared cannot carry a goodbye, and unchanged records
+    // keep their place in client caches.
+    for (auto it = announcedRecords.cbegin(); it != announcedRecords.cend(); ++it) {
+        if (!current.contains(it.key())) continue;
+        QList<Record> stale;
         for (const auto &record : it.value()) {
-            ipv4 |= record.type() == A;
-            ipv6 |= record.type() == AAAA;
+            if (!current.value(it.key()).contains(record)) stale.append(record);
         }
-        for (const auto &group : {MdnsIpv4Address, MdnsIpv6Address}) {
-            if (group.protocol() == QAbstractSocket::IPv4Protocol ? !ipv4 : !ipv6) continue;
-            Message message;
-            message.setResponse(true);
-            message.setInterfaceIndex(it.key());
-            message.setAddress(group);
-            message.setPort(MdnsPort);
-            for (auto record : it.value()) {
-                if (goodbye) record.setTtl(0);
-                message.addRecord(record);
-            }
-            server->sendMessage(message);
+        if (!stale.isEmpty()) sendRecords(it.key(), stale, true);
+    }
+    for (auto it = current.cbegin(); it != current.cend(); ++it) {
+        QList<Record> fresh;
+        for (const auto &record : it.value()) {
+            if (announceAll || !announcedRecords.value(it.key()).contains(record)) fresh.append(record);
         }
+        if (!fresh.isEmpty()) sendRecords(it.key(), fresh, false);
+    }
+    announcedRecords = current;
+}
+
+void HostnamePrivate::sendRecords(uint interfaceIndex, const QList<Record> &records, bool goodbye)
+{
+    bool ipv4 = false, ipv6 = false;
+    for (const auto &record : records) {
+        ipv4 |= record.type() == A;
+        ipv6 |= record.type() == AAAA;
+    }
+    for (const auto &group : {MdnsIpv4Address, MdnsIpv6Address}) {
+        if (group.protocol() == QAbstractSocket::IPv4Protocol ? !ipv4 : !ipv6) continue;
+        Message message;
+        message.setResponse(true);
+        message.setInterfaceIndex(interfaceIndex);
+        message.setAddress(group);
+        message.setPort(MdnsPort);
+        for (auto record : records) {
+            if (goodbye) record.setTtl(0);
+            message.addRecord(record);
+        }
+        server->sendMessage(message);
     }
 }
 

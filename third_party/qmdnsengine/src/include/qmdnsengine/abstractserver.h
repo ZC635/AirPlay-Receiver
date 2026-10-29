@@ -77,6 +77,14 @@ Q_SIGNALS:
     void messageReceived(const Message &message);
 
     /**
+     * @brief Indicate that the set of usable interfaces or addresses changed
+     *
+     * Hostnames and providers re-announce their records on the affected links
+     * in response; nothing is withdrawn unless an address actually changed.
+     */
+    void interfacesChanged();
+
+    /**
      * @brief Indicate that an error has occurred
      * @param message brief description of the error
      */

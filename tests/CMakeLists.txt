@@ -818,7 +818,7 @@ if(AIRPLAY_WITH_UXPLAY)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}")
 endif()
 
-if(AIRPLAY_WITH_UXPLAY)
+if(AIRPLAY_WITH_UXPLAY AND AIRPLAY_POWERSHELL)
     add_test(NAME MdnsRuntimeDeploymentTest
         COMMAND ${AIRPLAY_POWERSHELL} -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/MdnsRuntimeDeploymentTest.ps1"

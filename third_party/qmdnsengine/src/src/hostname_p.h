@@ -50,8 +50,10 @@ public:
     ~HostnamePrivate() override;
 
     void assertHostname();
-    QList<Record> generateRecords(uint interfaceIndex, quint16 type);
-    void sendAddressRecords(bool goodbye);
+    // Reconcile announced address records with the current interfaces:
+    // withdraw records that changed, announce new ones (all when announceAll).
+    void updateAddressRecords(bool announceAll);
+    void sendRecords(uint interfaceIndex, const QList<Record> &records, bool goodbye);
     QMap<uint, QList<Record>> announcedRecords;
 
     AbstractServer *server;
@@ -67,6 +69,7 @@ public:
 private Q_SLOTS:
 
     void onMessageReceived(const Message &message);
+    void onInterfacesChanged();
     void onRegistrationTimeout();
     void onRebroadcastTimeout();
 

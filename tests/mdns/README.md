@@ -21,11 +21,13 @@ exists for the packet's address family. Ambiguous packets are diagnosed and
 dropped rather than guessed from the default route or overlapping subnets.
 
 Interfaces and addresses are checked every two seconds. Changes reconcile
-multicast membership, invalidate old reply contexts, and queue a hostname/provider
-restart. The normal probing timers run before fresh announcements. Existing
-AirPlay transport sessions are not restarted. Membership failures are retried;
-one failing interface does not prevent service on another. Rapid changes wholly
-between polls are not guaranteed to be observed.
+multicast membership, invalidate reply contexts of the changed link only, and
+re-announce on the affected links: changed addresses are withdrawn, new ones
+announced, unchanged records left in place. Services are not reprobed or
+withdrawn on other links. Existing AirPlay transport sessions are not restarted.
+Membership failures are diagnosed once and retried; one failing interface does
+not prevent service on another. Rapid changes wholly between polls are not
+guaranteed to be observed.
 
 ## Automated regression suite
 

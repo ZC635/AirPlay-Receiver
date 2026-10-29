@@ -30,6 +30,7 @@
 #include <QUdpSocket>
 #include <QMap>
 #include <QNetworkInterface>
+#include <QSet>
 
 class QHostAddress;
 
@@ -53,10 +54,16 @@ public:
         QNetworkInterface iface;
         QHostAddress group;
         QString addresses;
+        // Identifies this particular join; replies carrying an older value
+        // for the same link were composed before its addresses changed.
+        quint64 generation = 0;
     };
     QMap<QString, Membership> members;
     QMap<QString, QString> snapshot;
-    quint64 generation = 1;
+    // Keys whose join failure has already been reported; retried silently.
+    QSet<QString> failedJoins;
+    QSet<const QUdpSocket *> failedBinds;
+    quint64 generation = 0;
     bool initialized = false;
 
     QTimer timer;

@@ -28,6 +28,7 @@
 #endif
 #include <QNetworkDatagram>
 #include <QStringList>
+#include <iterator>
 #include <QVariant>
 #include <qmdnsengine/dns.h>
 #include <qmdnsengine/mdns.h>
@@ -71,17 +72,26 @@ bool ServerPrivate::bindSocket(QUdpSocket &socket, const QHostAddress &address)
             if (::setsockopt(static_cast<SOCKET>(socket.socketDescriptor()), IPPROTO_IP, IP_TTL,
                              reinterpret_cast<const char *>(&ttl), sizeof(ttl)) != 0) {
                 socket.close();
-                emit q->transportEvent("socket_configure", {{"address_family", "ipv4"},
-                    {"reason", "hop_limit"}, {"result", "failed"}});
-                emit q->error("Unable to configure IPv4 TTL");
+                if (!failedBinds.contains(&socket)) {
+                    emit q->transportEvent("socket_configure", {{"address_family", "ipv4"},
+                        {"reason", "hop_limit"}, {"result", "failed"}});
+                    emit q->error("Unable to configure IPv4 TTL");
+                }
+                failedBinds.insert(&socket);
                 return false;
             }
         }
 #endif
+        failedBinds.remove(&socket);
         return true;
     }
-    emit q->transportEvent("socket_bind", {{"address_family", familyName(address)}, {"result", "failed"}});
-    emit q->error(socket.errorString());
+    // A socket that cannot bind is retried every poll; report it once.
+    if (!failedBinds.contains(&socket)) {
+        emit q->transportEvent("socket_bind", {{"address_family", familyName(address)}, {"result", "failed"},
+            {"message", socket.errorString()}});
+        emit q->error(socket.errorString());
+    }
+    failedBinds.insert(&socket);
     return false;
 }
 
@@ -115,25 +125,34 @@ void ServerPrivate::refreshInterfaces()
             it = members.erase(it);
         } else ++it;
     }
+    for (auto it = failedJoins.begin(); it != failedJoins.end();)
+        it = desired.contains(*it) ? std::next(it) : failedJoins.erase(it);
     for (auto it = desired.cbegin(); it != desired.cend(); ++it) {
         if (members.contains(it.key())) continue;
         auto &socket = it->group.protocol() == QAbstractSocket::IPv4Protocol ? ipv4Socket : ipv6Socket;
         const auto any = it->group.protocol() == QAbstractSocket::IPv4Protocol ? QHostAddress::AnyIPv4 : QHostAddress::AnyIPv6;
         const bool joined = bindSocket(socket, any) && socket.joinMulticastGroup(it->group, it->iface);
-        emit q->transportEvent("multicast_join", {{"interface", QString::number(it->iface.index())},
-            {"address_family", familyName(it->group)}, {"result", joined ? "accepted" : "failed"}});
         if (joined) {
-            members.insert(it.key(), it.value());
+            Membership member = it.value();
+            member.generation = ++generation;
+            members.insert(it.key(), member);
+            failedJoins.remove(it.key());
             changed = true;
-        } else emit q->error(socket.errorString());
+            emit q->transportEvent("multicast_join", {{"interface", QString::number(it->iface.index())},
+                {"address_family", familyName(it->group)}, {"result", "accepted"}});
+        } else if (!failedJoins.contains(it.key())) {
+            // One link that cannot be joined (virtual adapters, VPN tunnels) is
+            // not an error for the server: it is diagnosed once and retried.
+            failedJoins.insert(it.key());
+            emit q->transportEvent("multicast_join", {{"interface", QString::number(it->iface.index())},
+                {"address_family", familyName(it->group)}, {"result", "failed"},
+                {"message", socket.errorString()}});
+        }
     }
     snapshot = current;
     const bool notify = initialized && changed;
     initialized = true;
-    if (notify) {
-        ++generation;
-        emit q->interfacesChanged();
-    }
+    if (notify) emit q->interfacesChanged();
 }
 
 void ServerPrivate::onTimeout() { refreshInterfaces(); }
@@ -142,7 +161,7 @@ void ServerPrivate::onReadyRead()
 {
     auto *socket = qobject_cast<QUdpSocket *>(sender());
     if (!socket) return;
-    refreshInterfaces();
+    bool refreshed = false;
     while (socket->hasPendingDatagrams()) {
         const auto datagram = socket->receiveDatagram();
         if (!datagram.isValid()) {
@@ -158,7 +177,13 @@ void ServerPrivate::onReadyRead()
                     candidates.append(member.iface.index());
             if (candidates.size() == 1) index = candidates.first();
         }
-        if (!index || !members.contains(membershipKey(index, datagram.senderAddress()))) {
+        const auto key = membershipKey(index, datagram.senderAddress());
+        if (index && !members.contains(key) && !refreshed) {
+            // A link that came up since the last poll; reconcile once per batch.
+            refreshed = true;
+            refreshInterfaces();
+        }
+        if (!index || !members.contains(key)) {
             emit q->transportEvent("receive_dropped", {{"reason", "unknown_interface"}});
             continue;
         }
@@ -167,7 +192,7 @@ void ServerPrivate::onReadyRead()
         message.setAddress(datagram.senderAddress());
         message.setPort(datagram.senderPort());
         message.setInterfaceIndex(index);
-        message.setInterfaceGeneration(generation);
+        message.setInterfaceGeneration(members.value(key).generation);
         emit q->messageReceived(message);
     }
 }
@@ -207,19 +232,26 @@ void ServerPrivate::send(const QByteArray &packet, const QHostAddress &destinati
     // Explicit multicast selection also covers Qt backends that omit ancillary interface data.
     if (target.isMulticast()) socket.setMulticastInterface(member.iface);
     const qint64 written = socket.writeDatagram(datagram);
-    emit q->transportEvent("send_result", {{"interface", QString::number(index)},
+    // A failed write is reported through the transport event; a link that went
+    // away between polls must not surface as a server error.
+    QMap<QString, QString> fields{{"interface", QString::number(index)},
         {"address_family", familyName(target)}, {"scope", target.isMulticast() ? "multicast" : "unicast"},
-        {"bytes", QString::number(written)}, {"result", written == packet.size() ? "accepted" : "failed"}});
-    if (written != packet.size()) emit q->error(socket.errorString());
+        {"bytes", QString::number(written)}, {"result", written == packet.size() ? "accepted" : "failed"}};
+    if (written != packet.size()) fields.insert("message", socket.errorString());
+    emit q->transportEvent("send_result", fields);
 }
 
 Server::Server(QObject *parent) : AbstractServer(parent), d(new ServerPrivate(this)) {}
 
 void Server::sendMessage(const Message &message)
 {
-    d->refreshInterfaces();
-    if (message.interfaceGeneration() && message.interfaceGeneration() != d->generation) {
-        emit transportEvent("send_dropped", {{"reason", "stale_interface"}});
+    const auto key = membershipKey(message.interfaceIndex(), message.address());
+    if (message.interfaceGeneration() && d->members.contains(key)
+        && d->members.value(key).generation != message.interfaceGeneration()) {
+        // The receiving link was re-joined with different addresses after
+        // this reply was composed; other links are unaffected.
+        emit transportEvent("send_dropped", {{"interface", QString::number(message.interfaceIndex())},
+            {"reason", "stale_interface"}});
         return;
     }
     QByteArray packet;
@@ -229,7 +261,6 @@ void Server::sendMessage(const Message &message)
 
 void Server::sendMessageToAll(const Message &message)
 {
-    d->refreshInterfaces();
     QByteArray packet;
     toPacket(message, packet);
     const auto members = d->members;

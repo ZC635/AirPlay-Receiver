@@ -45,6 +45,7 @@ ProviderPrivate::ProviderPrivate(QObject *parent, AbstractServer *server, Hostna
 {
     connect(server, &AbstractServer::messageReceived, this, &ProviderPrivate::onMessageReceived);
     connect(hostname, &Hostname::hostnameChanged, this, &ProviderPrivate::onHostnameChanged);
+    connect(server, &AbstractServer::interfacesChanged, this, &ProviderPrivate::onInterfacesChanged);
 
     browsePtrProposed.setName(MdnsBrowseType);
     browsePtrProposed.setType(PTR);
@@ -195,6 +196,15 @@ void ProviderPrivate::onHostnameChanged(const QByteArray &newHostname)
     // If initialized, confirm the record
     if (initialized) {
         confirm();
+    }
+}
+
+void ProviderPrivate::onInterfacesChanged()
+{
+    // A link appeared or changed addresses: repeat the announcement so clients
+    // on it learn the service without withdrawing it anywhere else.
+    if (confirmed) {
+        announce();
     }
 }
 

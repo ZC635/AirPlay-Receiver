@@ -53,6 +53,13 @@ MdnsServerAdapter::MdnsServerAdapter(QMdnsEngine::AbstractServer *delegate,
     connect(delegate_, &QMdnsEngine::AbstractServer::messageReceived,
             this, &MdnsServerAdapter::onMessageReceived);
     connect(delegate_, &QMdnsEngine::AbstractServer::error, this, &MdnsServerAdapter::onError);
+    connect(delegate_, &QMdnsEngine::AbstractServer::interfacesChanged, this, [this] {
+        if (sink_) {
+            sink_->record(makeDiagnosticEvent(DiagnosticSeverity::Info, QStringLiteral("discovery"),
+                                              QStringLiteral("interfaces_reconfigured")));
+        }
+        emit interfacesChanged();
+    });
     if (auto *server = qobject_cast<QMdnsEngine::Server *>(delegate_)) {
         connect(server, &QMdnsEngine::Server::transportEvent, this,
                 [this](const QString &name, const QMap<QString, QString> &fields) {

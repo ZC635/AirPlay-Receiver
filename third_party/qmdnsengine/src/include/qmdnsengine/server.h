@@ -70,8 +70,8 @@ public:
     virtual void sendMessageToAll(const Message &message);
 
 Q_SIGNALS:
-    // Emitted after memberships are updated, including recovery from join failure.
-    void interfacesChanged();
+    // AbstractServer::interfacesChanged() is emitted after memberships are
+    // updated, including recovery from a join failure.
     void transportEvent(const QString &name, const QMap<QString, QString> &fields);
 
 private:
