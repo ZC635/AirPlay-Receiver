@@ -43,7 +43,8 @@ add_test(NAME DiagnosticSanitizerTest COMMAND DiagnosticSanitizerTest)
 
 add_executable(DiagnosticSessionTest diagnostics/DiagnosticSessionTest.cpp)
 target_link_libraries(DiagnosticSessionTest PRIVATE airplay_test_support Qt6::Test)
-add_test(NAME DiagnosticSessionTest COMMAND DiagnosticSessionTest)
+add_test(NAME DiagnosticSessionTest COMMAND DiagnosticSessionTest
+    -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/DiagnosticSessionTest.txt,txt")
 
 add_executable(ThirdPartyDiagnosticTranslatorTest diagnostics/ThirdPartyDiagnosticTranslatorTest.cpp)
 target_link_libraries(ThirdPartyDiagnosticTranslatorTest PRIVATE airplay_test_support Qt6::Test)
@@ -190,7 +191,8 @@ target_link_libraries(RecordingFileTransactionTest PRIVATE airplay_app_lib Qt6::
 if(WIN32)
     target_link_libraries(RecordingFileTransactionTest PRIVATE advapi32)
 endif()
-add_test(NAME RecordingFileTransactionTest COMMAND RecordingFileTransactionTest)
+add_test(NAME RecordingFileTransactionTest COMMAND RecordingFileTransactionTest
+    -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/RecordingFileTransactionTest.txt,txt")
 
 add_executable(RecordingTimelineTest backend/RecordingTimelineTest.cpp)
 target_link_libraries(RecordingTimelineTest PRIVATE airplay_app_lib Qt6::Test)
@@ -255,7 +257,8 @@ if(AIRPLAY_WITH_UXPLAY)
         renderers
         PkgConfig::GST_PBUTILS
     )
-    add_test(NAME GstRecordingPipelineTest COMMAND GstRecordingPipelineTest)
+    add_test(NAME GstRecordingPipelineTest COMMAND GstRecordingPipelineTest
+        -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/GstRecordingPipelineTest.txt,txt")
 
     add_executable(RecordingControllerTest backend/RecordingControllerTest.cpp)
     target_link_libraries(RecordingControllerTest PRIVATE
@@ -267,7 +270,8 @@ if(AIRPLAY_WITH_UXPLAY)
     # Keep CMake as the launcher: this has been the stable Windows boundary
     # across loader and antivirus timing variations while preserving CTest env.
     add_test(NAME RecordingControllerTest
-        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingControllerTest>)
+        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingControllerTest>
+            -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/RecordingControllerTest.txt,txt")
 
     add_executable(RecordingSyntheticMp4Test backend/RecordingSyntheticMp4Test.cpp)
     target_link_libraries(RecordingSyntheticMp4Test PRIVATE
