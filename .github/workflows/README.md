@@ -106,3 +106,11 @@ Qt6 6.11.0 和 GStreamer 1.28.2。验证输出保存在仓库忽略的 `out/ci-u
   `out/ci-ucrt64/cache-storage-unrestricted.txt`。
 - 干净机器的自动安装、GitHub 托管 Windows job、真实桌面/组播/iPhone 验收未执行。
   本地已有依赖的检查与构建不能代替这些验证，也不构成远程 CI 已通过的证据。
+
+## PR 远程验证
+
+[PR #13 的首次运行](https://github.com/ZC635/AirPlay-Receiver/actions/runs/43326737659)
+在安装依赖后暴露了固定 OpenH264 DLL ABI 的问题：MSYS2 已安装 OpenH264 2.7.0，
+旧脚本仍要求 `libopenh264-7.dll`。开发依赖检测改为识别实际存在的版本化 DLL，
+并在现有 `RunScriptTest` 中验证新 ABI、旧 ABI 和缺少运行时的情况。
+后续完整托管构建和测试结果请查看 PR 当前提交对应的 **Windows UCRT64** 检查。

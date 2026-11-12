@@ -195,8 +195,7 @@ function Get-MSys2MissingRequirements {
         @{ Name = "GStreamer Matroska plugin"; Path = (Join-Path $PluginPath "libgstmatroska.dll") },
         @{ Name = "GStreamer Media Foundation plugin"; Path = (Join-Path $PluginPath "libgstmediafoundation.dll") },
         @{ Name = "GStreamer OpenH264 plugin"; Path = (Join-Path $PluginPath "libgstopenh264.dll") },
-        @{ Name = "GStreamer plugin scanner"; Path = (Join-Path (Split-Path $LibPath -Parent) "libexec\gstreamer-1.0\gst-plugin-scanner.exe") },
-        @{ Name = "OpenH264 runtime"; Path = (Join-Path $BinPath "libopenh264-7.dll") }
+        @{ Name = "GStreamer plugin scanner"; Path = (Join-Path (Split-Path $LibPath -Parent) "libexec\gstreamer-1.0\gst-plugin-scanner.exe") }
     )
 
     $missing = @()
@@ -204,6 +203,13 @@ function Get-MSys2MissingRequirements {
         if (-not (Test-Path $check.Path)) {
             $missing += "$($check.Name): $($check.Path)"
         }
+    }
+
+    # The development prefix follows MSYS2's current OpenH264 DLL ABI.
+    $openH264Runtime = Get-ChildItem -LiteralPath $BinPath -Filter 'libopenh264-*.dll' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^libopenh264-\d+\.dll$' } | Select-Object -First 1
+    if (-not $openH264Runtime) {
+        $missing += "OpenH264 runtime: $(Join-Path $BinPath 'libopenh264-*.dll')"
     }
 
     $pkgConfigPath = Join-Path $BinPath "pkg-config.exe"
