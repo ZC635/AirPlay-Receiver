@@ -348,7 +348,7 @@ if(AIRPLAY_POWERSHELL AND NOT AIRPLAY_WITH_UXPLAY)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/OffBuildDependencyTest.ps1"
             -Executable $<TARGET_FILE:airplay_receiver>
             -SmokeTestExecutable $<TARGET_FILE:VideoFrameBridgeTest>
-            -Objdump "C:/msys64/ucrt64/bin/objdump.exe"
+            -Objdump "${AIRPLAY_QT_BIN_DIR}/objdump.exe"
             -DependencyBinDirectory "${AIRPLAY_QT_BIN_DIR}"
             -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
             -ReportDirectory "${PROJECT_BINARY_DIR}/off-dependency-report"
@@ -730,7 +730,7 @@ if(WIN32 AND AIRPLAY_WITH_UXPLAY)
                 -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/DnssdRuntimeAcceptanceTest.ps1"
                 -Executable $<TARGET_FILE:airplay_receiver>
                 -ProbeExecutable $<TARGET_FILE:DnssdRuntimeProbe>
-                -Objdump "C:/msys64/ucrt64/bin/objdump.exe"
+                -Objdump "${AIRPLAY_QT_BIN_DIR}/objdump.exe"
                 -DependencyBinDirectory "${AIRPLAY_QT_BIN_DIR}"
                 -FixtureExecutable "$<IF:$<STREQUAL:${_mode},TransitiveImport>,$<TARGET_FILE:DnssdTransitiveImportFixture>,$<TARGET_FILE:DnssdDirectImportFixture>>"
                 -FixtureDll $<TARGET_FILE:DnssdExternalRuntimeFixture>
@@ -740,6 +740,11 @@ if(WIN32 AND AIRPLAY_WITH_UXPLAY)
         set_tests_properties(DnssdRuntime${_mode}Test PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
             TIMEOUT 120 RUN_SERIAL TRUE)
+        if(_mode STREQUAL "Acceptance")
+            # The positive probe needs real UDP multicast. Import/load rejection
+            # controls fail before publication and remain in the headless suite.
+            set_property(TEST DnssdRuntime${_mode}Test APPEND PROPERTY LABELS network)
+        endif()
     endforeach()
 endif()
 
@@ -825,3 +830,13 @@ if(AIRPLAY_WITH_UXPLAY AND AIRPLAY_POWERSHELL)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/PeDependencyIsolationTest.ps1"
             -ProjectRoot "${PROJECT_SOURCE_DIR}")
 endif()
+
+# Derive desktop labels from the existing QPA definitions, without maintaining
+# another list of native-window tests in the workflow.
+get_property(_airplay_tests DIRECTORY PROPERTY TESTS)
+foreach(_airplay_test IN LISTS _airplay_tests)
+    get_test_property(${_airplay_test} ENVIRONMENT _airplay_test_environment)
+    if("QT_QPA_PLATFORM=windows" IN_LIST _airplay_test_environment)
+        set_property(TEST ${_airplay_test} APPEND PROPERTY LABELS windows-desktop)
+    endif()
+endforeach()

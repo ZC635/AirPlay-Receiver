@@ -15,6 +15,14 @@ if(AIRPLAY_WITH_UXPLAY)
         DEPENDS qmdnsengine VERBATIM)
     set(UXPLAY_EXTERNAL_MDNS_PUBLISHER ON)
     add_subdirectory("${PROJECT_SOURCE_DIR}/third_party/uxplay" "${CMAKE_CURRENT_BINARY_DIR}/third_party/uxplay" EXCLUDE_FROM_ALL)
+    if(BUILD_TESTING)
+        # UxPlay is excluded from ALL, but every registered upstream test must
+        # be built before CTest. Discover its targets instead of duplicating a list.
+        get_property(_uxplay_test_targets DIRECTORY
+            "${PROJECT_SOURCE_DIR}/third_party/uxplay/tests" PROPERTY BUILDSYSTEM_TARGETS)
+        add_custom_target(airplay_ctest_prerequisites ALL)
+        add_dependencies(airplay_ctest_prerequisites ${_uxplay_test_targets})
+    endif()
     add_library(uxplay_dependency INTERFACE)
     target_include_directories(uxplay_dependency INTERFACE
         "${PROJECT_SOURCE_DIR}/third_party/uxplay")

@@ -7,6 +7,7 @@ param(
     [string]$MSys2Root,
     [switch]$AssumeYes,
     [switch]$SkipInstall,
+    [switch]$InstallOnly,
     [switch]$Portable,
     [switch]$All,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -41,6 +42,7 @@ if ($NormalizedArgs.Count -gt 0) {
         elseif ($arg -ieq "--Deploy") { $Deploy = $true }
         elseif ($arg -ieq "--AssumeYes") { $AssumeYes = $true }
         elseif ($arg -ieq "--SkipInstall") { $SkipInstall = $true }
+        elseif ($arg -ieq "--InstallOnly") { $InstallOnly = $true }
         elseif ($arg -ieq "--Portable") { $Portable = $true }
         elseif ($arg -ieq "--All") { $All = $true }
         elseif ($arg -match "(?i)^--MSys2Root=(.*)$") { $MSys2Root = $Matches[1] }
@@ -66,6 +68,9 @@ if ($All -and ($Deploy -or $Portable)) {
 }
 if ($Portable -and $Deploy) {
     throw "-Portable and -Deploy are mutually exclusive. -Portable already implies deployment."
+}
+if ($InstallOnly -and ($Clean -or $Test -or $Run -or $Deploy -or $Portable -or $All)) {
+    throw "-InstallOnly cannot be combined with build, test, deploy, or run switches."
 }
 
 $RequiredPackageSuffixes = @(
@@ -556,6 +561,7 @@ $PluginDir = Join-Path $MSys2Lib "gstreamer-1.0"
 $env:PATH = "$MSys2Bin;$env:PATH"
 
 Ensure-MSys2Requirements $MSys2Root $MSys2Bin $MSys2Lib $PluginDir -AssumeYes:$AssumeYes -SkipInstall:$SkipInstall
+if ($InstallOnly) { return }
 
 if ($All) {
     $deployResult = Invoke-Build -VariantBuildDir (Join-Path $ProjectRoot "build-uxplay") -IsPortable:$false -ShouldDeploy:$true
