@@ -126,20 +126,26 @@ QString reservationLockPath(const RecordingFileReservation &reservation) {
     return {};
 }
 
-QString hideReservationLock(const QString &path) {
+unsigned long hideFile(const QString &path) {
 #ifdef Q_OS_WIN
     const std::wstring nativePath = FileSystemPath::forIo(path).toStdWString();
     const DWORD attributes = GetFileAttributesW(nativePath.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES ||
         !SetFileAttributesW(nativePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)) {
-        return QStringLiteral("Could not hide recording transaction lock \"%1\" (Windows error %2)")
-            .arg(path)
-            .arg(GetLastError());
+        return GetLastError();
     }
 #else
     Q_UNUSED(path);
 #endif
-    return {};
+    return 0;
+}
+
+QString hideReservationLock(const QString &path) {
+    const auto error = hideFile(path);
+    if (!error) return {};
+    return QStringLiteral("Could not hide recording transaction lock \"%1\" (Windows error %2)")
+        .arg(path)
+        .arg(error);
 }
 
 struct TemporaryFileCreationResult {
@@ -148,7 +154,8 @@ struct TemporaryFileCreationResult {
     QString error;
 };
 
-TemporaryFileCreationResult createTemporaryFile(const QString &path) {
+TemporaryFileCreationResult createTemporaryFile(
+    const QString &path, const std::function<unsigned long(const QString &)> &hide) {
     QFile file(FileSystemPath::forIo(path));
     if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
         return {false, false,
@@ -157,19 +164,13 @@ TemporaryFileCreationResult createTemporaryFile(const QString &path) {
     }
     file.close();
 
-#ifdef Q_OS_WIN
-    const std::wstring nativePath = FileSystemPath::forIo(path).toStdWString();
-    const DWORD attributes = GetFileAttributesW(nativePath.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES ||
-        !SetFileAttributesW(nativePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)) {
-        const DWORD error = GetLastError();
+    if (const auto error = hide(path)) {
         const bool removed = QFile::remove(FileSystemPath::forIo(path));
         return {!removed, true,
                 QStringLiteral("Could not hide temporary recording file \"%1\" (Windows error %2)")
                     .arg(path)
                     .arg(error)};
     }
-#endif
     return {true, false, {}};
 }
 
@@ -193,6 +194,11 @@ QString finalRecordingPath(const QDir &directory, const QDateTime &localNow) {
 
 RecordingFileReservationResult RecordingFileTransaction::reserve(
     const QString &directory, const QDateTime &localNow, const QUuid &uuid) {
+    return reserveWithFileHider(directory, localNow, uuid, hideFile);
+}
+
+RecordingFileReservationResult RecordingFileTransaction::reserveWithFileHider(
+    const QString &directory, const QDateTime &localNow, const QUuid &uuid, const FileHider &hide) {
     if (directory.trimmed().isEmpty()) {
         return {{}, QStringLiteral("Recording output directory is empty")};
     }
@@ -231,7 +237,7 @@ RecordingFileReservationResult RecordingFileTransaction::reserve(
 
     QStringList created;
     for (const QString &path : {reservation.videoSpoolPath, reservation.temporaryMp4Path}) {
-        const TemporaryFileCreationResult creation = createTemporaryFile(path);
+        const TemporaryFileCreationResult creation = createTemporaryFile(path, hide);
         if (!creation.error.isEmpty()) {
             if (creation.ownedFileRemains) created.append(path);
             QStringList cleanupFailures;
@@ -301,7 +307,7 @@ QString RecordingFileTransaction::claimOptionalAudioSpool(const QString &audioSp
             .arg(logicalAudioPath);
     }
 
-    const TemporaryFileCreationResult creation = createTemporaryFile(logicalAudioPath);
+    const TemporaryFileCreationResult creation = createTemporaryFile(logicalAudioPath, hideFile);
     if (!creation.error.isEmpty()) {
         QString error = creation.error;
         if (creation.ownedFileRemains) {

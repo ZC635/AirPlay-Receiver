@@ -9,11 +9,11 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTextStream>
 
 #include <string>
-#include <vector>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -66,9 +66,7 @@ RecordingFileReservation reserveOrFail(const QString &directory, const QUuid &uu
 #ifdef Q_OS_WIN
 class DirectoryAccessDeny {
 public:
-    enum class Scope { Directory, Files };
-
-    DirectoryAccessDeny(const QString &path, DWORD permissions, Scope scope)
+    DirectoryAccessDeny(const QString &path, DWORD permissions, DWORD inheritance)
         : m_path(QDir::toNativeSeparators(path).toStdWString()) {
         const DWORD query = GetNamedSecurityInfoW(
             m_path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
@@ -85,42 +83,28 @@ public:
         }
         m_wasProtected = (control & SE_DACL_PROTECTED) != 0;
 
-        HANDLE token = nullptr;
-        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-            m_error = QStringLiteral("OpenProcessToken failed: %1").arg(GetLastError());
+        SID_IDENTIFIER_AUTHORITY worldAuthority = SECURITY_WORLD_SID_AUTHORITY;
+        if (!AllocateAndInitializeSid(&worldAuthority, 1, SECURITY_WORLD_RID,
+                                     0, 0, 0, 0, 0, 0, 0, &m_worldSid)) {
+            m_error = QStringLiteral("AllocateAndInitializeSid failed: %1").arg(GetLastError());
             return;
         }
-        DWORD tokenSize = 0;
-        GetTokenInformation(token, TokenUser, nullptr, 0, &tokenSize);
-        std::vector<BYTE> tokenStorage(tokenSize);
-        const bool readToken = GetTokenInformation(token, TokenUser, tokenStorage.data(),
-                                                    tokenSize, &tokenSize);
-        const DWORD tokenError = GetLastError();
-        CloseHandle(token);
-        if (!readToken) {
-            m_error = QStringLiteral("GetTokenInformation failed: %1").arg(tokenError);
-            return;
-        }
-        PSID user = reinterpret_cast<const TOKEN_USER *>(tokenStorage.data())->User.Sid;
-
-        // The empty test directory and its files get separate grants. Using only
-        // the current user's SID makes the denied right independent of parent ACLs.
-        const DWORD directoryAccess = scope == Scope::Directory ? FILE_ALL_ACCESS & ~permissions : FILE_ALL_ACCESS;
-        const DWORD fileAccess = scope == Scope::Files ? FILE_ALL_ACCESS & ~permissions : FILE_ALL_ACCESS;
-        const DWORD aclSize = sizeof(ACL) + 2 * (sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(user));
-        std::vector<BYTE> aclStorage(aclSize);
-        auto *acl = reinterpret_cast<PACL>(aclStorage.data());
-        if (!InitializeAcl(acl, aclSize, ACL_REVISION) ||
-            !AddAccessAllowedAceEx(acl, ACL_REVISION, 0, directoryAccess, user) ||
-            !AddAccessAllowedAceEx(acl, ACL_REVISION, OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE,
-                                   fileAccess, user)) {
-            m_error = QStringLiteral("Could not build test DACL: %1").arg(GetLastError());
+        EXPLICIT_ACCESSW deny{};
+        deny.grfAccessPermissions = permissions;
+        deny.grfAccessMode = DENY_ACCESS;
+        deny.grfInheritance = inheritance;
+        deny.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        deny.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+        deny.Trustee.ptstrName = static_cast<LPWSTR>(m_worldSid);
+        const DWORD aclResult = SetEntriesInAclW(1, &deny, m_originalDacl, &m_deniedDacl);
+        if (aclResult != ERROR_SUCCESS) {
+            m_error = QStringLiteral("SetEntriesInAclW failed: %1").arg(aclResult);
             return;
         }
         const DWORD setResult = SetNamedSecurityInfoW(
             m_path.data(), SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            nullptr, nullptr, acl, nullptr);
+            nullptr, nullptr, m_deniedDacl, nullptr);
         if (setResult != ERROR_SUCCESS) {
             m_error = QStringLiteral("SetNamedSecurityInfoW deny failed: %1").arg(setResult);
             return;
@@ -130,6 +114,8 @@ public:
 
     ~DirectoryAccessDeny() {
         restore();
+        if (m_deniedDacl) LocalFree(m_deniedDacl);
+        if (m_worldSid) FreeSid(m_worldSid);
         if (m_descriptor) LocalFree(m_descriptor);
     }
 
@@ -150,6 +136,8 @@ private:
     std::wstring m_path;
     PSECURITY_DESCRIPTOR m_descriptor = nullptr;
     PACL m_originalDacl = nullptr;
+    PACL m_deniedDacl = nullptr;
+    PSID m_worldSid = nullptr;
     bool m_wasProtected = false;
     bool m_active = false;
     QString m_error;
@@ -492,7 +480,7 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 #ifdef Q_OS_WIN
-        DirectoryAccessDeny deny(directory.path(), FILE_ADD_FILE, DirectoryAccessDeny::Scope::Directory);
+        DirectoryAccessDeny deny(directory.path(), FILE_ADD_FILE, NO_INHERITANCE);
         QVERIFY2(deny.active(), qPrintable(deny.error()));
         const RecordingFileReservationResult result =
             RecordingFileTransaction::reserve(directory.path(), kLocalNow, kUuid);
@@ -512,48 +500,75 @@ private slots:
 #endif
     }
 
-    void reserveReportsRealHideFailureAndCleansAllCreatedFiles() {
+#ifdef Q_OS_WIN
+    void reserveReportsHideFailureAndRollsBack_data() {
+        QTest::addColumn<bool>("holdLockOpen");
+        QTest::newRow("release-lock") << false;
+        QTest::newRow("lock-removal-blocked") << true;
+    }
+
+    void reserveReportsHideFailureAndRollsBack() {
+        QFETCH(bool, holdLockOpen);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-#ifdef Q_OS_WIN
-        DirectoryAccessDeny deny(directory.path(), FILE_WRITE_ATTRIBUTES, DirectoryAccessDeny::Scope::Files);
-        QVERIFY2(deny.active(), qPrintable(deny.error()));
-        QFile probe(directory.filePath(QStringLiteral("attributes-probe")));
-        QVERIFY2(probe.open(QIODevice::WriteOnly | QIODevice::NewOnly), qPrintable(probe.errorString()));
-        probe.close();
-        const auto probePath = FileSystemPath::forIo(probe.fileName()).toStdWString();
-        const DWORD attributes = GetFileAttributesW(probePath.c_str());
-        QVERIFY(attributes != INVALID_FILE_ATTRIBUTES);
-        const bool hidden = SetFileAttributesW(probePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN);
-        const DWORD hideError = hidden ? ERROR_SUCCESS : GetLastError();
-        QVERIFY2(probe.remove(), qPrintable(probe.errorString()));
-        QCOMPARE(hideError, DWORD(ERROR_ACCESS_DENIED));
+        const auto paths = temporaryPaths(directory.path(), kId);
+        const QString transactionLock = lockPath(directory.path());
+        const QString neighbor = directory.filePath(QStringLiteral("neighbor.keep"));
+        writeBytes(neighbor, "unrelated file");
 
-        QTest::ignoreMessage(QtWarningMsg,
-                             QRegularExpression(QStringLiteral("Could not remove our own lock file.*")));
+        QStringList hideAttempts;
+        bool firstPartWasHidden = false;
+        bool secondPartAndLockExisted = false;
+        HANDLE lockReader = INVALID_HANDLE_VALUE;
+        const auto hide = [&](const QString &path) -> unsigned long {
+            hideAttempts.append(path);
+            const auto nativePath = FileSystemPath::forIo(path).toStdWString();
+            const DWORD attributes = GetFileAttributesW(nativePath.c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES) return GetLastError();
+            if (path == paths.at(1)) {
+                const auto videoPath = FileSystemPath::forIo(paths.first()).toStdWString();
+                const DWORD videoAttributes = GetFileAttributesW(videoPath.c_str());
+                firstPartWasHidden = videoAttributes != INVALID_FILE_ATTRIBUTES &&
+                                     (videoAttributes & FILE_ATTRIBUTE_HIDDEN);
+                secondPartAndLockExisted = QFileInfo::exists(path) && QFileInfo::exists(transactionLock);
+                if (holdLockOpen) {
+                    const auto nativeLock = FileSystemPath::forIo(transactionLock).toStdWString();
+                    lockReader = CreateFileW(nativeLock.c_str(), GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                }
+                return ERROR_ACCESS_DENIED;
+            }
+            return SetFileAttributesW(nativePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)
+                ? ERROR_SUCCESS : GetLastError();
+        };
 
         const RecordingFileReservationResult result =
-            RecordingFileTransaction::reserve(directory.path(), kLocalNow, kUuid);
-        deny.restore();
-        if (result.reservation) RecordingFileTransaction::discard(*result.reservation);
+            RecordingFileTransaction::reserveWithFileHider(directory.path(), kLocalNow, kUuid, hide);
+        const bool openedLockReader = lockReader != INVALID_HANDLE_VALUE;
+        if (openedLockReader) CloseHandle(lockReader);
+        const auto cleanup = qScopeGuard([&] {
+            if (result.reservation) RecordingFileTransaction::discard(*result.reservation);
+        });
 
+        QCOMPARE(hideAttempts, paths);
+        QVERIFY(firstPartWasHidden);
+        QVERIFY(secondPartAndLockExisted);
         QVERIFY(!result.reservation.has_value());
         QVERIFY2(result.error.contains(QStringLiteral("hide"), Qt::CaseInsensitive),
                  qPrintable(result.error));
         QVERIFY2(result.error.contains(QStringLiteral("cleanup succeeded"), Qt::CaseInsensitive),
                  qPrintable(result.error));
-        QVERIFY2(result.error.contains(
-                     QStringLiteral(".airplay-recording-%1.video.mkv.part").arg(kId)),
-                 qPrintable(result.error));
-        QVERIFY2(result.error.contains(QStringLiteral("lock cleanup failed"), Qt::CaseInsensitive),
-                 qPrintable(result.error));
-        QStringList temporaryFiles = QDir(directory.path()).entryList(
-            {QStringLiteral("*.part")}, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
-        QVERIFY(temporaryFiles.isEmpty());
-        QVERIFY(QFileInfo::exists(lockPath(directory.path())));
-        QVERIFY(QFile::remove(lockPath(directory.path())));
-#endif
+        QVERIFY2(result.error.contains(paths.at(1)), qPrintable(result.error));
+        QVERIFY2(result.error.contains(QStringLiteral("Windows error 5")), qPrintable(result.error));
+        QCOMPARE(openedLockReader, holdLockOpen);
+        QCOMPARE(result.error.contains(QStringLiteral("lock cleanup failed")), holdLockOpen);
+        QCOMPARE(QFileInfo::exists(transactionLock), holdLockOpen);
+        if (holdLockOpen) QVERIFY(QFile::remove(transactionLock));
+        QCOMPARE(QDir(directory.path()).entryList(QDir::Files | QDir::Hidden),
+                 QStringList{QStringLiteral("neighbor.keep")});
+        QCOMPARE(readBytes(neighbor), QByteArray("unrelated file"));
     }
+#endif
 
     void reserveCleansPartialCreationAndPreservesBlockingFile() {
         QTemporaryDir directory;

@@ -117,6 +117,8 @@ Qt6 6.11.0 和 GStreamer 1.28.2。验证输出保存在仓库忽略的 `out/ci-u
 [第二次完整运行](https://github.com/ZC635/AirPlay-Receiver/actions/runs/43327885408)
 完成了依赖安装、配置和构建，119 项测试中有 115 项通过。失败项的 QtTest 文本报告由
 [单独的诊断运行](https://github.com/ZC635/AirPlay-Receiver/actions/runs/43332431193) 保存。
-诊断测试根据本机时区计算文件名，录制测试显式使用 OpenH264 验证编码顺序和 MP4 生成，
-文件事务测试则在专用临时目录内验证 Windows 实际拒绝写入文件属性，再检查清理行为。
-这些改动保留了所有原有 CTest 项。完整结果以 PR 当前提交的 **Windows UCRT64** 检查为准。
+诊断测试根据本机时区计算文件名，录制测试显式使用 OpenH264 验证编码顺序和 MP4 生成。
+[下一次完整运行](https://github.com/ZC635/AirPlay-Receiver/actions/runs/43335301335) 有
+118 项通过，文件事务夹具仍未能在托管 runner 上触发预期的 ACL 拒绝。现在测试直接注入
+文件属性写入错误，并在真实文件和锁上验证回滚，包括锁被占用时的残留报告。
+完整结果以 PR 当前提交的 **Windows UCRT64** 检查为准。
