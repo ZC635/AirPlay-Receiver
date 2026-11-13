@@ -134,3 +134,37 @@ try {
     }
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
+
+# Exercise dependency detection against real files without running the installer.
+$parseTokens = $null; $parseErrors = $null
+$buildAst = [Management.Automation.Language.Parser]::ParseFile($buildScript, [ref]$parseTokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Build script could not be parsed.' }
+$requirementsFunction = $buildAst.Find({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-MSys2MissingRequirements'
+}, $true)
+if (-not $requirementsFunction) { throw 'Build dependency detector was not found.' }
+. ([scriptblock]::Create($requirementsFunction.Extent.Text))
+$dependencyFixture = Join-Path $lockRuntime ('airplay-dependency-test-' + [guid]::NewGuid().ToString('N'))
+Assert-RunScriptRuntimeDirectory $dependencyFixture
+[void][IO.Directory]::CreateDirectory($dependencyFixture)
+try {
+    foreach ($abi in @(8, 7)) {
+        $dll = Join-Path $dependencyFixture "libopenh264-$abi.dll"
+        [IO.File]::WriteAllText($dll, 'existence-check fixture')
+        try {
+            $missing = @(Get-MSys2MissingRequirements $dependencyFixture $dependencyFixture $dependencyFixture)
+            if (@($missing | Where-Object { $_ -like 'OpenH264 runtime:*' }).Count) {
+                throw "Installed OpenH264 ABI $abi must satisfy development dependency detection."
+            }
+        } finally { [IO.File]::Delete($dll) }
+    }
+    $missing = @(Get-MSys2MissingRequirements $dependencyFixture $dependencyFixture $dependencyFixture)
+    if (@($missing | Where-Object { $_ -like 'OpenH264 runtime:*' }).Count -ne 1) {
+        throw 'Missing OpenH264 runtime must still be reported.'
+    }
+    Write-Output 'PASS: OpenH264 dependency detection accepts current/legacy DLL ABIs and rejects a missing runtime.'
+} finally {
+    # Nonrecursive deletion preserves any unexpected entries rather than erasing them.
+    [IO.Directory]::Delete($dependencyFixture)
+}

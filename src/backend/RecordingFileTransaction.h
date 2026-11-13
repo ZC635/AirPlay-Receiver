@@ -5,6 +5,7 @@
 #include <QStringList>
 #include <QUuid>
 
+#include <functional>
 #include <optional>
 
 struct RecordingFileReservation {
@@ -28,4 +29,11 @@ public:
     static QString commit(const RecordingFileReservation &reservation);
     static void discard(const RecordingFileReservation &reservation);
     static QStringList cleanupStaleTemporaryFiles(const QString &directory);
+
+private:
+    friend class RecordingFileTransactionTest;
+    // Return zero on success or the native file-attribute error.
+    using FileHider = std::function<unsigned long(const QString &path)>;
+    static RecordingFileReservationResult reserveWithFileHider(
+        const QString &directory, const QDateTime &localNow, const QUuid &uuid, const FileHider &hide);
 };

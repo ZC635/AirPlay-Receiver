@@ -309,9 +309,11 @@ void DiagnosticSessionTest::usesIncrementingSuffixForCollisions() {
     auto second = DiagnosticSession::create(testOptions(dir.path()));
     auto third = DiagnosticSession::create(testOptions(dir.path()));
     QVERIFY2(first.session && second.session && third.session, "session creation failed");
-    QCOMPARE(QFileInfo(first.session->filePath()).fileName(), QStringLiteral("AirPlay-Diagnostic-2026-08-08-153012.log"));
-    QCOMPARE(QFileInfo(second.session->filePath()).fileName(), QStringLiteral("AirPlay-Diagnostic-2026-08-08-153012-01.log"));
-    QCOMPARE(QFileInfo(third.session->filePath()).fileName(), QStringLiteral("AirPlay-Diagnostic-2026-08-08-153012-02.log"));
+    const QString stem = QStringLiteral("AirPlay-Diagnostic-") +
+        testOptions(dir.path()).now().toLocalTime().toString(QStringLiteral("yyyy-MM-dd-HHmmss"));
+    QCOMPARE(QFileInfo(first.session->filePath()).fileName(), stem + QStringLiteral(".log"));
+    QCOMPARE(QFileInfo(second.session->filePath()).fileName(), stem + QStringLiteral("-01.log"));
+    QCOMPARE(QFileInfo(third.session->filePath()).fileName(), stem + QStringLiteral("-02.log"));
 }
 
 void DiagnosticSessionTest::reportsStorageAndHeaderFailuresWithoutFallback() {

@@ -7,6 +7,7 @@ param(
     [string]$MSys2Root,
     [switch]$AssumeYes,
     [switch]$SkipInstall,
+    [switch]$InstallOnly,
     [switch]$Portable,
     [switch]$All,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -41,6 +42,7 @@ if ($NormalizedArgs.Count -gt 0) {
         elseif ($arg -ieq "--Deploy") { $Deploy = $true }
         elseif ($arg -ieq "--AssumeYes") { $AssumeYes = $true }
         elseif ($arg -ieq "--SkipInstall") { $SkipInstall = $true }
+        elseif ($arg -ieq "--InstallOnly") { $InstallOnly = $true }
         elseif ($arg -ieq "--Portable") { $Portable = $true }
         elseif ($arg -ieq "--All") { $All = $true }
         elseif ($arg -match "(?i)^--MSys2Root=(.*)$") { $MSys2Root = $Matches[1] }
@@ -66,6 +68,9 @@ if ($All -and ($Deploy -or $Portable)) {
 }
 if ($Portable -and $Deploy) {
     throw "-Portable and -Deploy are mutually exclusive. -Portable already implies deployment."
+}
+if ($InstallOnly -and ($Clean -or $Test -or $Run -or $Deploy -or $Portable -or $All)) {
+    throw "-InstallOnly cannot be combined with build, test, deploy, or run switches."
 }
 
 $RequiredPackageSuffixes = @(
@@ -190,8 +195,7 @@ function Get-MSys2MissingRequirements {
         @{ Name = "GStreamer Matroska plugin"; Path = (Join-Path $PluginPath "libgstmatroska.dll") },
         @{ Name = "GStreamer Media Foundation plugin"; Path = (Join-Path $PluginPath "libgstmediafoundation.dll") },
         @{ Name = "GStreamer OpenH264 plugin"; Path = (Join-Path $PluginPath "libgstopenh264.dll") },
-        @{ Name = "GStreamer plugin scanner"; Path = (Join-Path (Split-Path $LibPath -Parent) "libexec\gstreamer-1.0\gst-plugin-scanner.exe") },
-        @{ Name = "OpenH264 runtime"; Path = (Join-Path $BinPath "libopenh264-7.dll") }
+        @{ Name = "GStreamer plugin scanner"; Path = (Join-Path (Split-Path $LibPath -Parent) "libexec\gstreamer-1.0\gst-plugin-scanner.exe") }
     )
 
     $missing = @()
@@ -199,6 +203,13 @@ function Get-MSys2MissingRequirements {
         if (-not (Test-Path $check.Path)) {
             $missing += "$($check.Name): $($check.Path)"
         }
+    }
+
+    # The development prefix follows MSYS2's current OpenH264 DLL ABI.
+    $openH264Runtime = Get-ChildItem -LiteralPath $BinPath -Filter 'libopenh264-*.dll' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^libopenh264-\d+\.dll$' } | Select-Object -First 1
+    if (-not $openH264Runtime) {
+        $missing += "OpenH264 runtime: $(Join-Path $BinPath 'libopenh264-*.dll')"
     }
 
     $pkgConfigPath = Join-Path $BinPath "pkg-config.exe"
@@ -556,6 +567,7 @@ $PluginDir = Join-Path $MSys2Lib "gstreamer-1.0"
 $env:PATH = "$MSys2Bin;$env:PATH"
 
 Ensure-MSys2Requirements $MSys2Root $MSys2Bin $MSys2Lib $PluginDir -AssumeYes:$AssumeYes -SkipInstall:$SkipInstall
+if ($InstallOnly) { return }
 
 if ($All) {
     $deployResult = Invoke-Build -VariantBuildDir (Join-Path $ProjectRoot "build-uxplay") -IsPortable:$false -ShouldDeploy:$true

@@ -43,7 +43,8 @@ add_test(NAME DiagnosticSanitizerTest COMMAND DiagnosticSanitizerTest)
 
 add_executable(DiagnosticSessionTest diagnostics/DiagnosticSessionTest.cpp)
 target_link_libraries(DiagnosticSessionTest PRIVATE airplay_test_support Qt6::Test)
-add_test(NAME DiagnosticSessionTest COMMAND DiagnosticSessionTest)
+add_test(NAME DiagnosticSessionTest COMMAND DiagnosticSessionTest
+    -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/DiagnosticSessionTest.txt,txt")
 
 add_executable(ThirdPartyDiagnosticTranslatorTest diagnostics/ThirdPartyDiagnosticTranslatorTest.cpp)
 target_link_libraries(ThirdPartyDiagnosticTranslatorTest PRIVATE airplay_test_support Qt6::Test)
@@ -190,7 +191,8 @@ target_link_libraries(RecordingFileTransactionTest PRIVATE airplay_app_lib Qt6::
 if(WIN32)
     target_link_libraries(RecordingFileTransactionTest PRIVATE advapi32)
 endif()
-add_test(NAME RecordingFileTransactionTest COMMAND RecordingFileTransactionTest)
+add_test(NAME RecordingFileTransactionTest COMMAND RecordingFileTransactionTest
+    -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/RecordingFileTransactionTest.txt,txt")
 
 add_executable(RecordingTimelineTest backend/RecordingTimelineTest.cpp)
 target_link_libraries(RecordingTimelineTest PRIVATE airplay_app_lib Qt6::Test)
@@ -255,7 +257,8 @@ if(AIRPLAY_WITH_UXPLAY)
         renderers
         PkgConfig::GST_PBUTILS
     )
-    add_test(NAME GstRecordingPipelineTest COMMAND GstRecordingPipelineTest)
+    add_test(NAME GstRecordingPipelineTest COMMAND GstRecordingPipelineTest
+        -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/GstRecordingPipelineTest.txt,txt")
 
     add_executable(RecordingControllerTest backend/RecordingControllerTest.cpp)
     target_link_libraries(RecordingControllerTest PRIVATE
@@ -267,7 +270,8 @@ if(AIRPLAY_WITH_UXPLAY)
     # Keep CMake as the launcher: this has been the stable Windows boundary
     # across loader and antivirus timing variations while preserving CTest env.
     add_test(NAME RecordingControllerTest
-        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingControllerTest>)
+        COMMAND ${CMAKE_COMMAND} -E env $<TARGET_FILE:RecordingControllerTest>
+            -o "${AIRPLAY_STARTUP_GUI_REPORT_DIRECTORY}/RecordingControllerTest.txt,txt")
 
     add_executable(RecordingSyntheticMp4Test backend/RecordingSyntheticMp4Test.cpp)
     target_link_libraries(RecordingSyntheticMp4Test PRIVATE
@@ -348,7 +352,7 @@ if(AIRPLAY_POWERSHELL AND NOT AIRPLAY_WITH_UXPLAY)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/OffBuildDependencyTest.ps1"
             -Executable $<TARGET_FILE:airplay_receiver>
             -SmokeTestExecutable $<TARGET_FILE:VideoFrameBridgeTest>
-            -Objdump "C:/msys64/ucrt64/bin/objdump.exe"
+            -Objdump "${AIRPLAY_QT_BIN_DIR}/objdump.exe"
             -DependencyBinDirectory "${AIRPLAY_QT_BIN_DIR}"
             -QtPluginDirectory "${AIRPLAY_QT_PLUGIN_DIR}"
             -ReportDirectory "${PROJECT_BINARY_DIR}/off-dependency-report"
@@ -730,7 +734,7 @@ if(WIN32 AND AIRPLAY_WITH_UXPLAY)
                 -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/DnssdRuntimeAcceptanceTest.ps1"
                 -Executable $<TARGET_FILE:airplay_receiver>
                 -ProbeExecutable $<TARGET_FILE:DnssdRuntimeProbe>
-                -Objdump "C:/msys64/ucrt64/bin/objdump.exe"
+                -Objdump "${AIRPLAY_QT_BIN_DIR}/objdump.exe"
                 -DependencyBinDirectory "${AIRPLAY_QT_BIN_DIR}"
                 -FixtureExecutable "$<IF:$<STREQUAL:${_mode},TransitiveImport>,$<TARGET_FILE:DnssdTransitiveImportFixture>,$<TARGET_FILE:DnssdDirectImportFixture>>"
                 -FixtureDll $<TARGET_FILE:DnssdExternalRuntimeFixture>
@@ -740,6 +744,11 @@ if(WIN32 AND AIRPLAY_WITH_UXPLAY)
         set_tests_properties(DnssdRuntime${_mode}Test PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${AIRPLAY_QT_BIN_DIR}"
             TIMEOUT 120 RUN_SERIAL TRUE)
+        if(_mode STREQUAL "Acceptance")
+            # The positive probe needs real UDP multicast. Import/load rejection
+            # controls fail before publication and remain in the headless suite.
+            set_property(TEST DnssdRuntime${_mode}Test APPEND PROPERTY LABELS network)
+        endif()
     endforeach()
 endif()
 
@@ -825,3 +834,13 @@ if(AIRPLAY_WITH_UXPLAY AND AIRPLAY_POWERSHELL)
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/PeDependencyIsolationTest.ps1"
             -ProjectRoot "${PROJECT_SOURCE_DIR}")
 endif()
+
+# Derive desktop labels from the existing QPA definitions, without maintaining
+# another list of native-window tests in the workflow.
+get_property(_airplay_tests DIRECTORY PROPERTY TESTS)
+foreach(_airplay_test IN LISTS _airplay_tests)
+    get_test_property(${_airplay_test} ENVIRONMENT _airplay_test_environment)
+    if("QT_QPA_PLATFORM=windows" IN_LIST _airplay_test_environment)
+        set_property(TEST ${_airplay_test} APPEND PROPERTY LABELS windows-desktop)
+    endif()
+endforeach()

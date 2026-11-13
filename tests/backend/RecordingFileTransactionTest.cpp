@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTextStream>
 
@@ -499,37 +500,75 @@ private slots:
 #endif
     }
 
-    void reserveReportsRealHideFailureAndCleansAllCreatedFiles() {
+#ifdef Q_OS_WIN
+    void reserveReportsHideFailureAndRollsBack_data() {
+        QTest::addColumn<bool>("holdLockOpen");
+        QTest::newRow("release-lock") << false;
+        QTest::newRow("lock-removal-blocked") << true;
+    }
+
+    void reserveReportsHideFailureAndRollsBack() {
+        QFETCH(bool, holdLockOpen);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-#ifdef Q_OS_WIN
-        DirectoryAccessDeny deny(directory.path(), FILE_WRITE_ATTRIBUTES,
-                                 SUB_OBJECTS_ONLY_INHERIT);
-        QVERIFY2(deny.active(), qPrintable(deny.error()));
-        QTest::ignoreMessage(QtWarningMsg,
-                             QRegularExpression(QStringLiteral("Could not remove our own lock file.*")));
+        const auto paths = temporaryPaths(directory.path(), kId);
+        const QString transactionLock = lockPath(directory.path());
+        const QString neighbor = directory.filePath(QStringLiteral("neighbor.keep"));
+        writeBytes(neighbor, "unrelated file");
+
+        QStringList hideAttempts;
+        bool firstPartWasHidden = false;
+        bool secondPartAndLockExisted = false;
+        HANDLE lockReader = INVALID_HANDLE_VALUE;
+        const auto hide = [&](const QString &path) -> unsigned long {
+            hideAttempts.append(path);
+            const auto nativePath = FileSystemPath::forIo(path).toStdWString();
+            const DWORD attributes = GetFileAttributesW(nativePath.c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES) return GetLastError();
+            if (path == paths.at(1)) {
+                const auto videoPath = FileSystemPath::forIo(paths.first()).toStdWString();
+                const DWORD videoAttributes = GetFileAttributesW(videoPath.c_str());
+                firstPartWasHidden = videoAttributes != INVALID_FILE_ATTRIBUTES &&
+                                     (videoAttributes & FILE_ATTRIBUTE_HIDDEN);
+                secondPartAndLockExisted = QFileInfo::exists(path) && QFileInfo::exists(transactionLock);
+                if (holdLockOpen) {
+                    const auto nativeLock = FileSystemPath::forIo(transactionLock).toStdWString();
+                    lockReader = CreateFileW(nativeLock.c_str(), GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                }
+                return ERROR_ACCESS_DENIED;
+            }
+            return SetFileAttributesW(nativePath.c_str(), attributes | FILE_ATTRIBUTE_HIDDEN)
+                ? ERROR_SUCCESS : GetLastError();
+        };
 
         const RecordingFileReservationResult result =
-            RecordingFileTransaction::reserve(directory.path(), kLocalNow, kUuid);
-        deny.restore();
+            RecordingFileTransaction::reserveWithFileHider(directory.path(), kLocalNow, kUuid, hide);
+        const bool openedLockReader = lockReader != INVALID_HANDLE_VALUE;
+        if (openedLockReader) CloseHandle(lockReader);
+        const auto cleanup = qScopeGuard([&] {
+            if (result.reservation) RecordingFileTransaction::discard(*result.reservation);
+        });
 
+        QCOMPARE(hideAttempts, paths);
+        QVERIFY(firstPartWasHidden);
+        QVERIFY(secondPartAndLockExisted);
         QVERIFY(!result.reservation.has_value());
         QVERIFY2(result.error.contains(QStringLiteral("hide"), Qt::CaseInsensitive),
                  qPrintable(result.error));
         QVERIFY2(result.error.contains(QStringLiteral("cleanup succeeded"), Qt::CaseInsensitive),
                  qPrintable(result.error));
-        QVERIFY2(result.error.contains(
-                     QStringLiteral(".airplay-recording-%1.video.mkv.part").arg(kId)),
-                 qPrintable(result.error));
-        QVERIFY2(result.error.contains(QStringLiteral("lock cleanup failed"), Qt::CaseInsensitive),
-                 qPrintable(result.error));
-        QStringList temporaryFiles = QDir(directory.path()).entryList(
-            {QStringLiteral("*.part")}, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
-        QVERIFY(temporaryFiles.isEmpty());
-        QVERIFY(QFileInfo::exists(lockPath(directory.path())));
-        QVERIFY(QFile::remove(lockPath(directory.path())));
-#endif
+        QVERIFY2(result.error.contains(paths.at(1)), qPrintable(result.error));
+        QVERIFY2(result.error.contains(QStringLiteral("Windows error 5")), qPrintable(result.error));
+        QCOMPARE(openedLockReader, holdLockOpen);
+        QCOMPARE(result.error.contains(QStringLiteral("lock cleanup failed")), holdLockOpen);
+        QCOMPARE(QFileInfo::exists(transactionLock), holdLockOpen);
+        if (holdLockOpen) QVERIFY(QFile::remove(transactionLock));
+        QCOMPARE(QDir(directory.path()).entryList(QDir::Files | QDir::Hidden),
+                 QStringList{QStringLiteral("neighbor.keep")});
+        QCOMPARE(readBytes(neighbor), QByteArray("unrelated file"));
     }
+#endif
 
     void reserveCleansPartialCreationAndPreservesBlockingFile() {
         QTemporaryDir directory;

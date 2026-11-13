@@ -1,0 +1,117 @@
+name: Windows UCRT64
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Keep checkout line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - name: Checkout with submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          # Bootstrap the prefix; build.ps1 owns the full dependency list.
+          install: mingw-w64-ucrt-x86_64-gcc
+
+      - name: Install project dependencies
+        run: |
+          set -euo pipefail
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 \
+            -MSys2Root "$(cygpath -w "$MINGW_PREFIX")" -AssumeYes -InstallOnly
+
+      - name: Record toolchain and dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p out/ci-ucrt64
+          pacman -Q > out/ci-ucrt64/msys2-packages.txt
+          command -v cmake ninja gcc g++ pkg-config
+          cmake --version
+          gcc --version
+          qmake6 -query QT_VERSION
+          pkg-config --modversion gstreamer-1.0 gstreamer-app-1.0 gstreamer-pbutils-1.0
+
+      - name: Configure Qt6 and GStreamer build
+        run: |
+          set -euo pipefail
+          cmake -S . -B out/ci-ucrt64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(cygpath -m "$MINGW_PREFIX")" \
+            -DPKG_CONFIG_EXECUTABLE="$(cygpath -m "$MINGW_PREFIX/bin/pkg-config.exe")" \
+            -DAIRPLAY_WITH_UXPLAY=ON \
+            -DBUILD_TESTING=ON \
+            -DNO_MARCH_NATIVE=ON \
+            -DAIRPLAY_ENABLE_WINDOWS_QPA_TESTS=OFF
+
+      - name: Build application and tests
+        run: |
+          set -euo pipefail
+          cmake --build out/ci-ucrt64 --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          test -f out/ci-ucrt64/airplay_receiver.exe
+
+      - name: Run headless CTest suite
+        run: |
+          set -euo pipefail
+          # Keep native Qt/.NET temporary files and the GStreamer registry in
+          # writable, isolated locations even when MSYS2 changes TEMP/TMP.
+          mkdir -p out/ci-ucrt64/tmp
+          export TMP="$(cygpath -m "$PWD/out/ci-ucrt64/tmp")"
+          export TEMP="$TMP"
+          export TMPDIR="$TMP"
+          export GST_REGISTRY="$(cygpath -m "$PWD/out/ci-ucrt64/gst-registry.bin")"
+          # Scan plugins before entering the short per-test timeouts upstream.
+          gst-inspect-1.0 appsrc > out/ci-ucrt64/gstreamer-appsrc.txt
+          # Serial execution preserves existing shared startup/runtime fixtures.
+          ctest --test-dir out/ci-ucrt64 --output-on-failure --no-tests=error \
+            --parallel 1 --timeout 300 --label-exclude 'windows-desktop|network' \
+            --output-junit "$(cygpath -m "$PWD/out/ci-ucrt64/ctest-results.xml")"
+
+      - name: Upload test and configure evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-ucrt64-test-evidence
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            out/ci-ucrt64/msys2-packages.txt
+            out/ci-ucrt64/gstreamer-appsrc.txt
+            out/ci-ucrt64/CMakeCache.txt
+            out/ci-ucrt64/CMakeFiles/CMakeConfigureLog.yaml
+            out/ci-ucrt64/ctest-results.xml
+            out/ci-ucrt64/Testing/
+            out/ci-ucrt64/test-reports/**/*.txt
+            out/ci-ucrt64/test-reports/**/*.json
+            out/ci-ucrt64/test-reports/**/*.xml
+            out/ci-ucrt64/test-reports/**/*.log
+            out/ci-ucrt64/test-reports/**/*.png
+            out/ci-ucrt64/tests/*-results.txt
