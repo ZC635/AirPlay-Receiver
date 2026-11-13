@@ -543,6 +543,8 @@ void GstRecordingPipelineTest::startTriesValidPreferredEncoderFirstWithoutDuplic
 {
     ReservedFiles files;
     GstRecordingPipelineHooks hooks = availableHooks();
+    // Keep the logical encoder order while making the fallback runnable without a GPU.
+    hooks.encoderFactoryAlias = [](const QString &) { return QStringLiteral("openh264enc"); };
     QStringList attempts;
     hooks.encoderAttempted = [&attempts](const QString &name) { attempts.append(name); };
     hooks.encoderBuildAllowed = [](const QString &name, QString *error) {

@@ -113,4 +113,10 @@ Qt6 6.11.0 和 GStreamer 1.28.2。验证输出保存在仓库忽略的 `out/ci-u
 在安装依赖后暴露了固定 OpenH264 DLL ABI 的问题：MSYS2 已安装 OpenH264 2.7.0，
 旧脚本仍要求 `libopenh264-7.dll`。开发依赖检测改为识别实际存在的版本化 DLL，
 并在现有 `RunScriptTest` 中验证新 ABI、旧 ABI 和缺少运行时的情况。
-后续完整托管构建和测试结果请查看 PR 当前提交对应的 **Windows UCRT64** 检查。
+
+[第二次完整运行](https://github.com/ZC635/AirPlay-Receiver/actions/runs/43327885408)
+完成了依赖安装、配置和构建，119 项测试中有 115 项通过。失败项的 QtTest 文本报告由
+[单独的诊断运行](https://github.com/ZC635/AirPlay-Receiver/actions/runs/43332431193) 保存。
+诊断测试根据本机时区计算文件名，录制测试显式使用 OpenH264 验证编码顺序和 MP4 生成，
+文件事务测试则在专用临时目录内验证 Windows 实际拒绝写入文件属性，再检查清理行为。
+这些改动保留了所有原有 CTest 项。完整结果以 PR 当前提交的 **Windows UCRT64** 检查为准。

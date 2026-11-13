@@ -1,4 +1,4 @@
-name: Windows UCRT64 diagnostics
+name: Windows UCRT64
 
 on:
   push:
@@ -92,7 +92,6 @@ jobs:
           gst-inspect-1.0 appsrc > out/ci-ucrt64/gstreamer-appsrc.txt
           # Serial execution preserves existing shared startup/runtime fixtures.
           ctest --test-dir out/ci-ucrt64 --output-on-failure --no-tests=error \
-            -R '^(DiagnosticSessionTest|RecordingFileTransactionTest|GstRecordingPipelineTest|RecordingControllerTest)$' \
             --parallel 1 --timeout 300 --label-exclude 'windows-desktop|network' \
             --output-junit "$(cygpath -m "$PWD/out/ci-ucrt64/ctest-results.xml")"
 

@@ -1297,7 +1297,20 @@ private slots:
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        RecordingController controller;
+        RecordingControllerHooks hooks;
+        hooks.probeCapabilities = [] {
+            GstRecordingPipelineHooks probe;
+            // This test exercises real recording with the software encoder on headless runners.
+            probe.factoryExists = [](const QString &name) {
+                if (name == QStringLiteral("mfh264enc")) return false;
+                GstElementFactory *factory = gst_element_factory_find(name.toUtf8().constData());
+                if (!factory) return false;
+                gst_object_unref(factory);
+                return true;
+            };
+            return GstRecordingPipeline::probeCapabilities(probe);
+        };
+        RecordingController controller(30, std::move(hooks));
         GstSample *observed = makeVideoSample(640, 360, 0);
         observeVideo(controller, observed);
         const RecordingStartResult startResult = controller.start(
@@ -1306,6 +1319,10 @@ private slots:
         QSignalSpy finishedSpy(&controller, &RecordingController::finished);
         QSignalSpy failedSpy(&controller, &RecordingController::failed);
 
+        const auto enqueueError = [&failedSpy] {
+            return failedSpy.isEmpty() ? QStringLiteral("Timed out enqueueing a recording sample")
+                                       : failedSpy.constFirst().constFirst().toString();
+        };
         auto enqueueVideo = [&controller](GstSample *sample) {
             QElapsedTimer deadline;
             deadline.start();
@@ -1324,19 +1341,22 @@ private slots:
         };
 
         GstSample *first = makeVideoSample(640, 360, 0);
-        QVERIFY(enqueueVideo(first));
+        const bool acceptedFirst = enqueueVideo(first);
         gst_sample_unref(first);
+        QVERIFY2(acceptedFirst, qPrintable(enqueueError()));
         QTest::qWait(750);
         for (int frame = 1; frame <= 60; ++frame) {
             GstSample *video = makeVideoSample(
                 640, 360, gst_util_uint64_scale(frame, GST_SECOND, 30));
-            QVERIFY(enqueueVideo(video));
+            const bool acceptedVideo = enqueueVideo(video);
             gst_sample_unref(video);
+            QVERIFY2(acceptedVideo, qPrintable(enqueueError()));
             if (frame >= 36) {
                 GstSample *audio = makeAudioSample(
                     gst_util_uint64_scale(frame, GST_SECOND, 30));
-                QVERIFY(enqueueAudio(audio));
+                const bool acceptedAudio = enqueueAudio(audio);
                 gst_sample_unref(audio);
+                QVERIFY2(acceptedAudio, qPrintable(enqueueError()));
             }
         }
         controller.stop();
