@@ -21,7 +21,7 @@ private slots:
     void mirrorRekeyDiscardsPartialBlock();
     void noDataAudioPreservesSequence();
     void fragmentedClientDoesNotBlockOthers();
-    void persistentConnectionRecognizesReverseResponse();
+    void upgradedConnectionRecognizesReverseResponse();
 };
 
 static int currentProcessMdnsSockets() {
@@ -106,20 +106,27 @@ struct TestHttpServer {
     std::atomic<int> requests{0};
     std::atomic<int> reverseResponses{0};
     TestHttpServer() {
-        logger_set_callback(log, [](void *, int, const char *) {}, nullptr);
+        logger_set_level(log, LOGGER_DEBUG);
+        logger_set_callback(log, [](void *opaque, int, const char *message) {
+            if (QByteArrayView(message).startsWith("<<<<<< reverse-HTTP response:")) {
+                ++static_cast<TestHttpServer *>(opaque)->reverseResponses;
+            }
+        }, this);
         httpd_callbacks_t cb{};
         cb.opaque = this;
         cb.conn_init = [](void *opaque, unsigned char *, int, unsigned char *, int, unsigned int) -> void * { return opaque; };
         cb.conn_destroy = [](void *) {};
         cb.conn_request = [](void *opaque, http_request_t *request, http_response_t **response) {
             auto *self = static_cast<TestHttpServer *>(opaque);
-            if (http_request_is_reverse(request)) {
-                ++self->reverseResponses;
-                return;
-            }
             ++self->requests;
             *response = http_response_create();
-            http_response_init(*response, "RTSP/1.0", 200, "OK");
+            if (qstrcmp(http_request_get_url(request), "/reverse") == 0) {
+                http_response_init(*response, "HTTP/1.1", 101, "Switching Protocols");
+                http_response_add_header(*response, "Connection", "Upgrade");
+                http_response_add_header(*response, "Upgrade", "PTTH/1.0");
+            } else {
+                http_response_init(*response, "RTSP/1.0", 200, "OK");
+            }
             http_response_add_header(*response, "Content-Length", "0");
             http_response_finish(*response, nullptr, 0);
         };
@@ -148,19 +155,21 @@ void UpstreamProtocolRegressionTest::fragmentedClientDoesNotBlockOthers() {
     QVERIFY(complete.readAll().contains("200 OK"));
 }
 
-void UpstreamProtocolRegressionTest::persistentConnectionRecognizesReverseResponse() {
+void UpstreamProtocolRegressionTest::upgradedConnectionRecognizesReverseResponse() {
     TestHttpServer server;
     QVERIFY(server.port);
     QTcpSocket client;
     client.connectToHost(QHostAddress::LocalHost, server.port);
     QVERIFY(client.waitForConnected(2000));
-    client.write("OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n");
+    client.write("POST /reverse HTTP/1.1\r\nConnection: Upgrade\r\n"
+                 "Upgrade: PTTH/1.0\r\nContent-Length: 0\r\n\r\n");
     QVERIFY(client.waitForBytesWritten(2000));
     QVERIFY(client.waitForReadyRead(2000));
-    QVERIFY(client.readAll().contains("200 OK"));
+    QVERIFY(client.readAll().contains("101 Switching Protocols"));
     client.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     QVERIFY(client.waitForBytesWritten(2000));
-    QVERIFY2(!client.waitForDisconnected(500), "A reverse HTTP response on an existing connection must not be parsed as an RTSP request");
+    QTRY_COMPARE_WITH_TIMEOUT(server.reverseResponses.load(), 1, 2000);
+    QCOMPARE(client.state(), QAbstractSocket::ConnectedState);
     QCOMPARE(server.requests.load(), 1);
 }
 

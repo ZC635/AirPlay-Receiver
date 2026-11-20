@@ -170,18 +170,16 @@ void audioGetFormat(void *cls, unsigned char *ct, unsigned short *spf, bool *usi
     }
 }
 
-void videoReportSize(void *cls, float *widthSource, float *heightSource, float *width, float *height) {
-    int w = static_cast<int>(*widthSource);
-    int h = static_cast<int>(*heightSource);
-    *widthSource = 1920.0F;
-    *heightSource = 1080.0F;
-    *width = 1920.0F;
-    *height = 1080.0F;
-    if (w > 0 && h > 0) {
-        CallbackScope callback(cls);
-        if (auto *receiver = callback.receiver()) {
-            receiver->reportVideoSizeFromUxPlayCallback(w, h, callback.generation());
-        }
+void videoReportSize(void *cls, float *widthSource, float *heightSource, float *, float *) {
+    if (!(*widthSource >= 1.0F && *widthSource <= 65535.0F &&
+          *heightSource >= 1.0F && *heightSource <= 65535.0F)) {
+        return;
+    }
+    CallbackScope callback(cls);
+    if (auto *receiver = callback.receiver()) {
+        receiver->reportVideoSizeFromUxPlayCallback(static_cast<int>(*widthSource),
+                                                    static_cast<int>(*heightSource),
+                                                    callback.generation());
     }
 }
 
@@ -265,7 +263,8 @@ void audioSetProgress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end)
     }
 }
 
-int videoSetCodec(void *cls, video_codec_t codec) {
+int videoSetCodecAndSize(void *cls, video_codec_t codec, unsigned short, unsigned short,
+                        unsigned short, unsigned short, unsigned short, unsigned short) {
     CallbackScope callback(cls);
     auto *receiver = callback.receiver();
     if (!receiver) return -1;
@@ -538,7 +537,7 @@ void UxPlayReceiver::start() {
     callbacks.audio_get_format = audioGetFormat;
     callbacks.video_report_size = videoReportSize;
     callbacks.report_client_request = UxPlayReceiver::reportClientRequestFromUxPlayCallback;
-    callbacks.video_set_codec = videoSetCodec;
+    callbacks.video_set_codec_and_size = videoSetCodecAndSize;
 
     auto *raop = raop_init(&callbacks);
     if (!raop) {
